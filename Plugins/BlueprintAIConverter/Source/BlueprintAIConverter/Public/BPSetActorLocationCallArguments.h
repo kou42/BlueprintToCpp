@@ -18,6 +18,15 @@ struct FBPSetActorLocationCallArguments
         {
             return false;
         }
+        // 識別子の末尾をGUID由来の16進数字に限定し、C++コードの混入を防ぐ。
+        for (int32 Index = 7; Index < HitVariable.Len(); ++Index)
+        {
+            const TCHAR Character = HitVariable[Index];
+            if (FChar::IsHexDigit(Character) == false)
+            {
+                return false;
+            }
+        }
         // FHitResultはK2_SetActorLocationの参照引数へ値として渡す。
         // SetActorLocationのポインタ引数とは区別する。
         OutArguments = FString::Printf(TEXT("%s, %s, %s, %s"),
