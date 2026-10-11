@@ -134,3 +134,9 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 - **Export Semantic JSON v2**: プロジェクトの `Saved/BlueprintSemanticJson/` に `.semantic.json` ファイルを保存します。
 
 現時点のSemantic LoweringはBeginPlay → PrintStringのMVPに限定されます。未対応Blueprintでも診断を含むJSONが出力されます。出力成功はC++変換成功を意味しません。UE 5.7.4でのコンパイルとAutomation Testは未確認です。
+
+## A1: AI Provider共通インターフェース（Mock）
+
+実験用の `POST /ai/generate` は `{"semantic": <Semantic JSON v2>, "provider": "mock"}` を受け付けます。既存の `POST /generate` とは独立しています。
+
+`mock` は構造検証だけを行い、外部AIへの通信やC++生成はしません。入力が `partial` または `complete` なら `status: "mocked"`、`unsupported` なら `status: "rejected"` を返し、どちらも `files: []` です。未知のProviderや不正JSONはHTTP 422になります。現段階では実AI Provider、APIキー管理、コード生成結果の検証は未実装です。
