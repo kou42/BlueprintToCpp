@@ -34,6 +34,18 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         return false;
     }
 
+    // 出力パラメータに対応するピンの接続先を検証するまでは生成しない。
+    // 引数数と型を事前に確認し、エラーメッセージを明確にする。
+    if (Signature.ParameterNames.Num() != Signature.ParameterTypes.Num() ||
+        Signature.ParameterNames.Num() != Signature.OutputParameters.Num())
+    {
+        FBPSemanticDiagnostic Diagnostic;
+        Diagnostic.NodeId = CallNodeId;
+        Diagnostic.Message = TEXT("Inconsistent function signature");
+        OutDiagnostics.Add(MoveTemp(Diagnostic));
+        return false;
+    }
+
     // 出力パラメータを省略したC++呼び出しは生成しない。
     if (Signature.OutputParameters.Contains(true))
     {
