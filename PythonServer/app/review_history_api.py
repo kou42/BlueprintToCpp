@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .review_api import ReviewRequest, review_recompare
 from .review_store import list_records, load_record, save_record
-from .verification_report_api import summarize_verification
+from .verification_report_api import index_verification_events, summarize_verification
 
 router = APIRouter()
 
@@ -82,6 +82,7 @@ def _summarize(records: list[dict]) -> list[dict]:
     元レコードのpendingは変更しない。
     """
     reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
+    event_index = index_verification_events(records)
     decisions: dict[str, list[dict]] = {}
     for item in records:
         if item.get("type") == "decision" and item.get("source_record_id") in reviews:
@@ -136,7 +137,7 @@ def get_review_records(
             continue
 
         # 検証状態のフィルタは、一覧と個別レポートで同じ判定を使用する。
-        report = summarize_verification(reviews[item["id"]], records)
+        report = summarize_verification(reviews[item["id"]], records, event_index)
         verification = {
             "uht": report["build"]["uht"]["status"],
             "ubt": report["build"]["ubt"]["status"],
