@@ -22,6 +22,18 @@ bool FBPFunctionArgumentEmitter::Emit(const FBPResolvedFunctionSignature& Signat
     {
         const FBPSemanticType& Expected = Signature.ParameterTypes[Index];
         const FBPSemanticExpression& Argument = Arguments[Index];
+        // boolの既定値はLoweringで正規化したtrue/falseだけを受理する。
+        // 任意のLiteralValueをC++コードとして流用しない。
+        if (Signature.OutputParameters[Index] == false &&
+            Expected.Kind == EBPSemanticTypeKind::Bool &&
+            Argument.Type.Kind == EBPSemanticTypeKind::Bool &&
+            Argument.Type.bIsReference == false &&
+            Argument.Kind == EBPSemanticExpressionKind::Literal &&
+            (Argument.LiteralValue == TEXT("true") || Argument.LiteralValue == TEXT("false")))
+        {
+            Parts.Add(Argument.LiteralValue);
+            continue;
+        }
         if (Signature.OutputParameters[Index] ||
             Expected.Kind != EBPSemanticTypeKind::Struct ||
             Expected.TypePath != TEXT("/Script/CoreUObject.Vector") ||
