@@ -12,4 +12,9 @@ public:
     static bool LowerInput(const FBPGraphIR& GraphIR, const FGuid& TargetNodeId,
         const FGuid& TargetPinId, FBPSemanticExpression& OutExpression,
         TArray<FBPSemanticDiagnostic>& OutDiagnostics);
+
+    // 検証済みの入力式をC++式へ変換する。失敗時は出力を空に保つ。
+    static bool EmitInputCpp(const FBPGraphIR& GraphIR, const FGuid& TargetNodeId,
+        const FGuid& TargetPinId, FString& OutCpp,
+        TArray<FBPSemanticDiagnostic>& OutDiagnostics);
 };
