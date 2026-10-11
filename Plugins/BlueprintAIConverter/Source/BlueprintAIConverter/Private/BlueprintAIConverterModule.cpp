@@ -122,7 +122,7 @@ private:
 
                         // 生成内容は読み取り専用の別ウィンドウで表示する。
                         // コピー操作はウィンドウ内の個別ボタンから行える。
-                        FBPGeneratedCodePreview::Show(Files);
+                        FBPGeneratedCodePreview::Show(Files, IR, ClassName);
                         UE_LOG(LogBlueprintAIConverter, Display,
                             TEXT("C++ preview opened for %s: %s, %s"),
                             *Blueprint->GetName(), *Files.HeaderFileName, *Files.SourceFileName);
