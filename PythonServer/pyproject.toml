@@ -11,7 +11,7 @@ dependencies = []
 
 [project.optional-dependencies]
 api = ["fastapi>=0.110", "uvicorn>=0.27"]
-test = ["pytest>=8"]
+test = ["pytest>=8", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
 where = ["."]

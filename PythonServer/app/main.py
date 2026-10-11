@@ -9,12 +9,14 @@ from .ir_builder import build_ir
 
 from .generate_api import router as generate_router
 from .ai_generate_api import router as ai_generate_router
+from .compare_api import router as compare_router
 
 app = FastAPI(title="BlueprintToCpp Analyzer", version="0.2.0")
 
 
 app.include_router(generate_router)
 app.include_router(ai_generate_router)
+app.include_router(compare_router)
 
 
 class AnalyzeRequest(BaseModel):
