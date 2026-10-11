@@ -39,6 +39,7 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     int32 CallMatches = 0;
     const FBPIRNode* CallNode = nullptr;
     FString CallGraphName;
+    const FBPIRGraph* CallGraph = nullptr;
     for (const FBPIRGraph& Graph : GraphIR.Graphs)
     {
         for (const FBPIRNode& Node : Graph.Nodes)
@@ -48,6 +49,7 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
                 ++CallMatches;
                 CallNode = &Node;
                 CallGraphName = Graph.Name;
+                CallGraph = &Graph;
             }
         }
     }
