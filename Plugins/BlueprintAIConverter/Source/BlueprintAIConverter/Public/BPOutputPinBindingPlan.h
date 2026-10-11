@@ -15,6 +15,7 @@ struct FBPOutputPinBinding
     EBPSemanticTypeKind TypeKind = EBPSemanticTypeKind::Unresolved;
     FString TypePath;
     TArray<FGuid> ConsumerPinIds;
+    TArray<FGuid> ConsumerNodeIds;
 };
 
 struct FBPOutputPinBindingPlan
@@ -54,6 +55,7 @@ struct FBPOutputPinBindingPlan
             return false;
         }
         TArray<FGuid> Consumers;
+        TArray<FGuid> ConsumerNodes;
         for (const FBPIRLink& Edge : Graph.DataEdges)
         {
             if (Edge.TargetNode == SourceNodeId && Edge.TargetPin == SourcePinId)
@@ -89,6 +91,7 @@ struct FBPOutputPinBindingPlan
                 return false;
             }
             Consumers.Add(Edge.TargetPin);
+            ConsumerNodes.Add(Edge.TargetNode);
         }
         // 既存のFunctionPinTypeMatcherで型を照合し、型の異なる接続を拒否する。
         OutBinding.SourceNodeId = SourceNodeId;
@@ -97,6 +100,59 @@ struct FBPOutputPinBindingPlan
         OutBinding.TypeKind = Type.Kind;
         OutBinding.TypePath = Type.TypePath;
         OutBinding.ConsumerPinIds = MoveTemp(Consumers);
+        OutBinding.ConsumerNodeIds = MoveTemp(ConsumerNodes);
+        return true;
+    }
+
+    // 出力を参照するノードは、生成元のExec実行後に必ず評価されなければならない。
+    // 現段階では分岐・ループ・合流を安全に証明できないため、
+    // 単一のExec後続チェーンだけを受理する保守的な判定とする。
+    static bool ValidateExecOrder(const FBPIRGraph& Graph,
+        const FBPOutputPinBinding& Binding, FString& OutError)
+    {
+        OutError.Reset();
+        if (Binding.SourceNodeId.IsValid() == false ||
+            Binding.SourcePinId.IsValid() == false ||
+            Binding.ConsumerNodeIds.Num() != Binding.ConsumerPinIds.Num())
+        {
+            OutError = TEXT("Invalid binding for Exec order validation");
+            return false;
+        }
+        for (const FGuid& ConsumerNodeId : Binding.ConsumerNodeIds)
+        {
+            FGuid CurrentNodeId = Binding.SourceNodeId;
+            TArray<FGuid> Visited;
+            bool bReached = false;
+            while (Visited.Contains(CurrentNodeId) == false)
+            {
+                Visited.Add(CurrentNodeId);
+                int32 NextCount = 0;
+                FGuid NextNodeId;
+                for (const FBPIRLink& Edge : Graph.ExecEdges)
+                {
+                    if (Edge.SourceNode == CurrentNodeId)
+                    {
+                        ++NextCount;
+                        NextNodeId = Edge.TargetNode;
+                    }
+                }
+                if (NextCount != 1)
+                {
+                    break;
+                }
+                if (NextNodeId == ConsumerNodeId)
+                {
+                    bReached = true;
+                    break;
+                }
+                CurrentNodeId = NextNodeId;
+            }
+            if (bReached == false)
+            {
+                OutError = TEXT("Output consumer is not on a unique downstream Exec chain");
+                return false;
+            }
+        }
         return true;
     }
 };
