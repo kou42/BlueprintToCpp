@@ -109,15 +109,89 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
     if (TestNotNull(TEXT("SweepHitResult output pin"), OutputPin))
     {
         const FGuid OutputPinId = OutputPin->Id;
-        Diagnostics.Reset();
-        TestFalse(TEXT("Unconnected output rejected"),
-            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
-        if (Diagnostics.IsEmpty() == false)
+        const FString OutputTypePath = OutputPin->SubCategoryObjectPath;
+        // 正常系: GetActorLocationの戻り値をNewLocationへ接続する。
+        // 出力HitResultと戻り値は未接続のままにし、生成文を厳密に検証する。
+        FBPIRNode LocationSource;
+        LocationSource.Id = FGuid::NewGuid();
+        LocationSource.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        LocationSource.FunctionName = TEXT("K2_GetActorLocation");
+        FBPIRPin LocationReturn;
+        LocationReturn.Id = FGuid::NewGuid();
+        LocationReturn.Name = TEXT("ReturnValue");
+        LocationReturn.Direction = EGPD_Output;
+        LocationReturn.Category = UEdGraphSchema_K2::PC_Struct;
+        LocationReturn.SubCategoryObjectPath = TEXT("/Script/CoreUObject.Vector");
+        LocationSource.Pins.Add(LocationReturn);
+        const FBPIRPin* LocationInput = IR.Graphs[0].Nodes[0].Pins.FindByPredicate(
+            [](const FBPIRPin& Pin) { return Pin.Name == TEXT("NewLocation"); });
+        if (TestNotNull(TEXT("NewLocation input pin"), LocationInput) == false)
         {
-            TestTrue(TEXT("Unconnected output diagnostic"),
-                Diagnostics.Last().Message.Contains(TEXT("data edge")) ||
-                Diagnostics.Last().Message.Contains(TEXT("Unsupported")));
+            return false;
         }
+        FBPIRLink LocationLink;
+        LocationLink.SourceNode = LocationSource.Id;
+        LocationLink.SourcePin = LocationReturn.Id;
+        LocationLink.TargetNode = CallId;
+        LocationLink.TargetPin = LocationInput->Id;
+        IR.Graphs[0].Nodes.Add(LocationSource);
+        IR.Graphs[0].DataEdges.Add(LocationLink);
+        for (FBPIRPin& Pin : IR.Graphs[0].Nodes[0].Pins)
+        {
+            if (Pin.Name == TEXT("bSweep"))
+            {
+                Pin.DefaultValue = TEXT("true");
+            }
+            if (Pin.Name == TEXT("bTeleport"))
+            {
+                Pin.DefaultValue = TEXT("false");
+            }
+        }
+        Diagnostics.Reset();
+        Statement = TEXT("stale");
+        TestTrue(TEXT("Unconnected HitResult call emitted"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        TestTrue(TEXT("Storage declaration generated"),
+            Statement.Contains(TEXT("FHitResult BP_Hit_")));
+        TestTrue(TEXT("Call contains correctly ordered arguments"),
+            Statement.Contains(TEXT("K2_SetActorLocation(GetActorLocation(), true, BP_Hit_")));
+        TestTrue(TEXT("Teleport argument preserved"),
+            Statement.Contains(TEXT(", false);")));
+        TestTrue(TEXT("Successful emission has no diagnostics"), Diagnostics.IsEmpty());
+        // 戻り値を利用するグラフは、結果の保持が未実装なので拒否する。
+        FBPIRLink ReturnLink;
+        ReturnLink.SourceNode = CallId;
+        ReturnLink.SourcePin = ReturnPin.Id;
+        ReturnLink.TargetNode = FGuid::NewGuid();
+        ReturnLink.TargetPin = FGuid::NewGuid();
+        IR.Graphs[0].DataEdges.Add(ReturnLink);
+        Diagnostics.Reset();
+        TestFalse(TEXT("Connected return value rejected"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        TestTrue(TEXT("Connected return clears output"), Statement.IsEmpty());
+        IR.Graphs[0].DataEdges.Pop();
+        // bool接続を既定値に置き換えない。
+        const FBPIRPin* SweepPin = IR.Graphs[0].Nodes[0].Pins.FindByPredicate(
+            [](const FBPIRPin& Pin) { return Pin.Name == TEXT("bSweep"); });
+        if (TestNotNull(TEXT("Sweep input pin"), SweepPin) == false)
+        {
+            return false;
+        }
+        FBPIRLink SweepLink;
+        SweepLink.SourceNode = LocationSource.Id;
+        SweepLink.SourcePin = LocationReturn.Id;
+        SweepLink.TargetNode = CallId;
+        SweepLink.TargetPin = SweepPin->Id;
+        IR.Graphs[0].DataEdges.Add(SweepLink);
+        Diagnostics.Reset();
+        TestFalse(TEXT("Connected bool input rejected"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        TestTrue(TEXT("Connected bool clears output"), Statement.IsEmpty());
+        IR.Graphs[0].DataEdges.Pop();
+        Diagnostics.Reset();
+        TestTrue(TEXT("Unconnected output accepted"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        TestTrue(TEXT("Unconnected output emits statement"), Statement.IsEmpty() == false);
 
         FBPIRLink Link;
         Link.SourceNode = CallId;
@@ -142,7 +216,7 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         ConsumerInput.Name = TEXT("Input");
         ConsumerInput.Direction = EGPD_Input;
         ConsumerInput.Category = UEdGraphSchema_K2::PC_Struct;
-        ConsumerInput.SubCategoryObjectPath = OutputPin->SubCategoryObjectPath;
+        ConsumerInput.SubCategoryObjectPath = OutputTypePath;
         Consumer.Pins.Add(ConsumerInput);
         IR.Graphs[0].Nodes.Add(Consumer);
         Diagnostics.Reset();
@@ -163,7 +237,7 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Mismatched struct destination diagnostic"),
                 Diagnostics.Last().Message.Contains(TEXT("Invalid output parameter data edge target or type")));
         }
-        IR.Graphs[0].Nodes.Last().Pins[0].SubCategoryObjectPath = OutputPin->SubCategoryObjectPath;
+        IR.Graphs[0].Nodes.Last().Pins[0].SubCategoryObjectPath = OutputTypePath;
         // Execピンをデータ接続先として使う不正なIRも拒否する。
         IR.Graphs[0].Nodes.Last().Pins[0].Category = UEdGraphSchema_K2::PC_Exec;
         Diagnostics.Reset();
@@ -176,6 +250,7 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         }
         IR.Graphs[0].Nodes.Pop();
         IR.Graphs[0].DataEdges.Reset();
+        IR.Graphs[0].Nodes.Pop();
     }
 
     // 同じGUIDのノードが複数存在する場合も安全に拒否する。
