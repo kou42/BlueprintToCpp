@@ -222,3 +222,12 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 `POST /review/records/{id}/verification` で、`reviewer`、`tool`（`uht` / `ubt`）、`outcome`（`passed` / `failed` / `not_run`）、`evidence_reference`、`summary`、`expected_revised_fingerprint` を送ると、そのレビューに対応する外部検証結果をJSONイベントとして保存します。`GET /review/records/{id}/verification` で各ツールの最新の提出結果と全イベントを取得できます。未提出の場合は `not_recorded` と表示します。
 
 **注意:** APIはUHT/UBTを実行しません。結果は利用者が提出した申告値であり、真正性の検証・ログの読み込み・署名検証・自動承認は行いません。機密コードを扱うため、引き続き信頼できるローカル環境だけで使用してください。
+
+
+## V2: Blueprintと生成C++の動作比較証跡
+
+`POST /review/records/{id}/behavior` に `reviewer`、`expected_revised_fingerprint`、`environment`、`evidence_reference` と `cases` 配列を渡します。各ケースは `case_id`、`description`、`outcome`（`matched` / `mismatched` / `not_run`）、`blueprint_observation`、`cpp_observation` を持ちます。実施済みケースには両方の観測値が必要です。ケースIDの重複は拒否します。
+
+`GET /review/records/{id}/behavior` は最新の提出結果に対するケース別集計と全イベントを返します。未提出は `not_recorded`、不一致があれば `mismatched`、未実施ケースが残れば `not_run`、すべて一致申告なら `matched` です。
+
+**重要:** このAPIはBlueprintやC++を実行せず、値の自動比較も行いません。提出された観測値・判定は外部テストの申告情報です。自動承認・意味的同値性の保証は行いません。
