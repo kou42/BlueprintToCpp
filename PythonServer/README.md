@@ -177,3 +177,8 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 `POST /compare` のレスポンスに `structure` を追加します。生成済みの両側の `.h` / `.hpp` から、単純なクラス名・関数宣言・変数宣言を抽出し、片側だけにある宣言を `differences` に返します。`structure.status` は `different`、`no_detected_difference`、`unavailable` のいずれかです。
 
 この段階では正規表現による**限定的な補助検査**であり、複雑なテンプレート、複数行宣言、マクロ展開、関数本体、実行順、副作用、C++の意味的同値性は解析できません。`no_detected_difference` は合格や同値の証明ではありません。最終採用にはUHT/UBTとBlueprintの動作検証が必要です。
+
+
+## D3: Unreal Reflection差分（試験実装）
+
+`POST /compare` の `reflection` フィールドでは、`.h` / `.hpp` 内の単一行 `UCLASS` / `USTRUCT` / `UFUNCTION` / `UPROPERTY` と、その直後の宣言を対応付け、マクロの欠落やspecifier文字列の違いを検出します。対応できない複数行宣言などがあれば `status: incomplete` と診断を返します。マクロ展開、複雑な引数、C++ AST、関数本体や実行時の意味は検証できません。比較結果だけで自動承認しないでください。
