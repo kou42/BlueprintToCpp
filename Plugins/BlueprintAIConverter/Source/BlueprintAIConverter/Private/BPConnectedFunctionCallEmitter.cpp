@@ -2,6 +2,7 @@
 
 #include "BPConnectedFunctionArguments.h"
 #include "BPFunctionSignatureResolver.h"
+#include "BPFunctionCallValidator.h"
 #include "GameFramework/Actor.h"
 #include "UObject/Class.h"
 
@@ -36,6 +37,8 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
 
     // 呼び出しノードが存在しない場合は署名の詳細より先に構造エラーを報告する。
     int32 CallMatches = 0;
+    const FBPIRNode* CallNode = nullptr;
+    FString CallGraphName;
     for (const FBPIRGraph& Graph : GraphIR.Graphs)
     {
         for (const FBPIRNode& Node : Graph.Nodes)
@@ -43,6 +46,8 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             if (Node.Id == CallNodeId)
             {
                 ++CallMatches;
+                CallNode = &Node;
+                CallGraphName = Graph.Name;
             }
         }
     }
