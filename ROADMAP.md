@@ -1,7 +1,7 @@
 # BlueprintToCpp 開発ロードマップ
 
 対象: Unreal Engine 5.7.4 / BlueprintAIConverter / PythonServer  
-更新日: 2026-10-12（PR #41の進捗、メンバー変数初期値、Actor以外への拡張計画を反映）
+更新日: 2026-10-12（既存進捗に加え、JSON・汎用AI・3モード変換の並行開発計画を反映）
 
 ## 最終目標
 
@@ -38,6 +38,41 @@ C++ Generator（宣言・式・文・関数・クラス）
 比較対象: PythonServer / Python Generator（移行期間中は維持）
 ```
 
+## 追加目標: Direct / AI / Hybrid の3モード変換
+
+既存の **Graph IR → Semantic IR → C++ Generator** をDirectモードの中核として維持しつつ、Blueprintの情報をJSONへ出力して汎用AIでC++へ変換する独立経路を並行開発する。最終的に次の3モードを提供する。
+
+| モード | 入力・変換 | 基本方針 |
+| --- | --- | --- |
+| Direct | Graph IR → Semantic IR → 既存C++ Generator | 決定的な規則で生成。未対応部分は明示診断 |
+| AI | Blueprint Snapshot / Semantic JSON → AI Provider → C++ | OpenAI・Anthropic・Gemini・ローカルLLM等を差し替え可能にし、生成物を検証 |
+| Hybrid | Semantic IRを基準にDirectとAIを組み合わせる | Directで保証できる部分を優先し、未対応部分のみAIに委譲。境界・依存・副作用を検証 |
+
+### JSONとAI変換の設計原則
+
+- 既存の `FBPSnapshotExporter` とPythonServerのSnapshot schema v1は互換性を維持する。AI向けの新しいSemantic JSONは別スキーマ・バージョンとして追加し、既存形式を無断で変更しない。
+- 元ノード・ピンのGUID、グラフパス、Exec/Dataリンク、型、既定値、変数・関数・クラス情報、診断を可能な限り保持し、生成C++との追跡可能性を確保する。
+- Graph IRの生の接続情報と、Semantic IRの構造化された式・文・制御フローを区別する。意味を解決できない情報をAI向けJSONで勝手に補完しない。
+- AI Providerは共通インターフェースとし、プロンプト構築・モデル呼び出し・構造化応答の検証・エラー処理を分離する。APIキーはソース・ログ・Snapshotに含めない。
+- AIが生成したコードを無条件に採用しない。生成結果の構文・型・Unreal API・依存関係・UHT/UBT・実行時の意味一致を段階的に検証する。
+- DirectとAIの出力一致は正しさの証明ではない。異なる結果は診断として残し、検証できない候補は自動採用しない。
+- Hybridではノード単位の文字列貼り合わせを避け、式の評価順、副作用、スコープ、制御フロー、型境界を保持した安全な単位で統合する。
+- 既存のEditor Preview / SaveとPythonServerを維持し、モード選択を段階的に追加する。AI未設定・通信失敗時にもDirectは動作可能にする。
+
+### JSON・AI並行開発マイルストーン
+
+| マイルストーン | 優先度 | 作業・完了条件 |
+| --- | --- | --- |
+| J0: 現状整理とスキーマ設計 | **最優先・並行** | Snapshot v1、Graph IR、Semantic IR、PythonServerの差分を整理。Semantic JSON v2の仕様、互換性、診断・追跡IDを定義 |
+| J1: Semantic JSON出力 | **高・並行** | 既存Exporterを壊さず、Semantic IRからバージョン付きJSONを出力。代表グラフの往復・Snapshot・不正入力テスト |
+| A1: AI完全変換の最小縦断 | **高・J1後** | 共通Provider、モックProvider、構造化応答、BeginPlay→PrintStringの.h/.cpp生成と失敗時診断 |
+| A2: 複数AI対応と比較 | **中・A1後** | Provider切替、モデル設定、タイムアウト・再試行・トークン上限・費用配慮、Direct/AIの差分・診断表示 |
+| H1: Hybridの限定縦断 | **高・A1後** | 安全な部分変換境界を定義し、Direct未対応の限定ケースをAIで補完。未検証候補は拒否 |
+| V1: 3モード共通検証 | **継続・並行** | スキーマ検証、生成C++静的検査、UHT/UBT、Blueprintとの実行結果比較、回帰ケースを整備 |
+| E1: Editor UI統合 | **中・検証後** | Direct / AI / Hybridの選択、JSONプレビュー・保存、生成差分・診断表示、安全な保存を追加 |
+
+**実装順:** J0 → J1 → A1 → A2 / H1 → E1 と進め、V1は全段階で継続する。既存Phase 0〜8のDirect変換開発は止めず、JSON/AI系を並行トラックとして扱う。
+
 ## 現状（2026-10-12時点）
 
 | 領域 | 状況 | 補足 |
@@ -47,7 +82,7 @@ C++ Generator（宣言・式・文・関数・クラス）
 | PrintStringのオプション | **実装済み・UE実機未検証** | TextColorのRGBA解析、Duration、Key、画面/ログ設定 |
 | 標準グラフ・イベントの判定 | **限定的に実装済み** | 空Construction Script、未接続Event Tickの一部を許容 |
 | Editorプレビュー・保存 | **実装済み・実機での全面検証は未完** | Convert to C++ (Preview)、プロジェクトSourceへの保存経路 |
-| Snapshot JSON / PythonServer | **維持** | 比較・デバッグ・回帰検証に活用 |
+| Snapshot JSON / PythonServer | **既存v1を維持** | Snapshot出力・Python解析/生成経路あり。Semantic JSON v2・汎用AI Provider・3モード統合は未実装 |
 | Semantic IR / PrintString変換 | **最小縦断実装済み・実機動作未検証** | 型付きIR、Lowering、C++ Generator、比較テストを追加。汎用UFunction変換は未実装 |
 | Phase 2 UFunction呼び出し基盤 | **限定実装済み・UE実機未検証** | 反射署名・ピン検証、GetActorLocation接続Lowering、bool既定値、未接続HitResultの宣言とK2_SetActorLocation文生成、出力ピンBindingPlanを実装。接続済みHitResultから単一VariableSetへの限定Loweringとテストを追加（UE未検証）。実変換経路への統合は未完了 |
 | Blueprintメンバー変数・初期値 | **未対応** | 現行MVPはBlueprintVariableCount != 0を拒否。変数定義とCDOの値取得、型別C++初期化生成が必要 |
@@ -154,6 +189,6 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 
 ## 次の着手対象
 
-**最優先はM0/M1の実機検証とPhase 2の正常系完成。** まず `docs/SEMANTIC_IR_VERIFICATION.md` に従い、Automation Test・生成ActorのUHT/UBT・Blueprintとの実行結果を確認する。その後、Phase 2のOwnerClass統合と限定Loweringの検証を進め、Variable IR・CDO初期値の最小縦断実装に着手する。Actor以外への対応は共通変数生成を確立したうえで段階的に行う。
+**Direct側の最優先はM0/M1の実機検証とPhase 2の正常系完成。JSON/AI側は並行してJ0（スキーマ設計）から開始する。** まず `docs/SEMANTIC_IR_VERIFICATION.md` に従い、Automation Test・生成ActorのUHT/UBT・Blueprintとの実行結果を確認する。その後、Phase 2のOwnerClass統合と限定Loweringの検証を進め、Variable IR・CDO初期値の最小縦断実装に着手する。Actor以外への対応は共通変数生成を確立したうえで段階的に行う。
 
 Semantic Previewは実験的な経路として維持し、旧Generatorの既定経路は実機検証が完了するまで切り替えない。
