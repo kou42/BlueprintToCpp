@@ -18,6 +18,16 @@ bool FBPConnectedFunctionArguments::Emit(const FBPGraphIR& GraphIR,
         return false;
     }
 
+    // GetActorLocationをthisに変換するため、直接Actor派生のみを受理する。
+    if (GraphIR.ParentClassPath != TEXT("/Script/Engine.Actor"))
+    {
+        FBPSemanticDiagnostic Diagnostic;
+        Diagnostic.NodeId = CallNodeId;
+        Diagnostic.Message = TEXT("Only direct Actor parent is supported");
+        OutDiagnostics.Add(MoveTemp(Diagnostic));
+        return false;
+    }
+
     const FBPIRNode* Call = nullptr;
     FString GraphName;
     for (const FBPIRGraph& Graph : GraphIR.Graphs)
