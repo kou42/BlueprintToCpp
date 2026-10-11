@@ -101,11 +101,18 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             Diagnostic.NodeId = CallNodeId;
             Diagnostic.Message = FString::Printf(TEXT("Unsupported output parameter: %s"),
                 *Signature.ParameterNames[Index].ToString());
+            for (const FBPIRPin& Pin : CallNode->Pins)
+            {
+                if (Pin.Name == Signature.ParameterNames[Index] && Pin.Direction == EGPD_Output)
+                {
+                    Diagnostic.PinId = Pin.Id;
+                    break;
+                }
+            }
             OutDiagnostics.Add(MoveTemp(Diagnostic));
             return false;
         }
     }
-
 
     FString Arguments;
     if (FBPConnectedFunctionArguments::Emit(GraphIR, CallNodeId, Function,
