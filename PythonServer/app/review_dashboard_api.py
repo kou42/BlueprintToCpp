@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 
 from .review_history_api import _summarize
 from .review_store import list_records
-from .verification_report_api import summarize_verification
+from .verification_report_api import index_verification_events, summarize_verification
 
 router = APIRouter()
 
@@ -23,12 +23,13 @@ def get_review_dashboard(limit: int = 10) -> dict:
     records = list_records()
     summaries = _summarize(records)
     reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
+    event_index = index_verification_events(records)
     attention: list[dict] = []
     pending = 0
     blocked = 0
     complete = 0
     for summary in summaries:
-        report = summarize_verification(reviews[summary["id"]], records)
+        report = summarize_verification(reviews[summary["id"]], records, event_index)
         if summary["latest_decision"] == "pending":
             pending += 1
         if report["evidence_complete"]:
