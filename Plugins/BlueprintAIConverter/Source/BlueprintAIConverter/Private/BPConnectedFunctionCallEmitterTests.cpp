@@ -30,7 +30,7 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
     TestTrue(TEXT("Missing call node reports diagnostic"), Diagnostics.IsEmpty() == false);
 
-    // ノードが存在しても出力パラメータを無視した文は生成しない。
+    // ノードが存在しても必要な引数ピンが欠けていれば生成しない。
     FBPIRGraph Graph;
     Graph.Name = TEXT("EventGraph");
     FBPIRNode Call;
@@ -47,8 +47,8 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Unsupported call has diagnostics"), Diagnostics.IsEmpty() == false);
     if (Diagnostics.IsEmpty() == false)
     {
-        TestTrue(TEXT("Output parameter is identified"),
-            Diagnostics[0].Message.Contains(TEXT("SweepHitResult")));
+        TestTrue(TEXT("Missing parameter pin is identified"),
+            Diagnostics[0].Message.Contains(TEXT("parameter pin")));
     }
     // 同じGUIDのノードが複数存在する場合も安全に拒否する。
     IR.Graphs[0].Nodes.Add(Call);
