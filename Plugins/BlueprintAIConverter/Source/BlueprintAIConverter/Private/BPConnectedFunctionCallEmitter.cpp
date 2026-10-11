@@ -226,6 +226,17 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         }
         if (Binding.ConsumerPinIds.IsEmpty() == false)
         {
+            // Exec順序が証明できない出力を、後続の変数参照に渡してはいけない。
+            // 順序が安全でもConsumerの文生成と同一スコープ化は未実装なので拒否する。
+            if (FBPOutputPinBindingPlan::ValidateExecOrder(
+                *CallGraph, Binding, BindingError) == false)
+            {
+                Diagnostic.Message = FString::Printf(
+                    TEXT("Invalid output Exec order: %s (%s)"),
+                    *ParameterName.ToString(), *BindingError);
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
             Diagnostic.Message = FString::Printf(
                 TEXT("Connected output parameter requires data-flow lowering: %s (%d edges)"),
                 *ParameterName.ToString(), ConnectedEdges);
