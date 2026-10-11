@@ -1,6 +1,7 @@
 #include "BPConnectedFunctionCallEmitter.h"
 
 #include "BPConnectedFunctionArguments.h"
+#include "GameFramework/Actor.h"
 #include "UObject/Class.h"
 
 bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
