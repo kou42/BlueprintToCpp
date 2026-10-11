@@ -333,6 +333,22 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
                 IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
                 ValidStatementOrder, ResolvedVariable, BindingError));
         IR.Graphs[0].Nodes.Last().Pins[0].Direction = EGPD_Input;
+        FString ExecResolvedVariable;
+        TestTrue(TEXT("Consumer variable resolved from actual Exec chain"),
+            FBPOutputPinBindingPlan::ResolveConsumerVariableFromExec(
+                IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
+                ExecResolvedVariable, BindingError));
+        TestEqual(TEXT("Exec-derived variable matches binding"),
+            ExecResolvedVariable, Binding.VariableName);
+        IR.Graphs[0].ExecEdges.Pop();
+        ExecResolvedVariable = TEXT("stale");
+        TestFalse(TEXT("Exec-derived resolution rejects missing chain"),
+            FBPOutputPinBindingPlan::ResolveConsumerVariableFromExec(
+                IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
+                ExecResolvedVariable, BindingError));
+        TestTrue(TEXT("Failed Exec-derived resolution clears variable"),
+            ExecResolvedVariable.IsEmpty());
+        IR.Graphs[0].ExecEdges.Add(ExecLink);
         TArray<FGuid> InvalidStatementOrder;
         InvalidStatementOrder.Add(Consumer.Id);
         InvalidStatementOrder.Add(CallId);
