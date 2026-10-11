@@ -9,6 +9,7 @@ from .output_comparison import compare_artifacts, normalize_artifact
 from .cpp_structure_diff import compare_declarations
 from .ue_reflection_diff import compare_reflection
 from .cpp_signature_diff import compare_signatures
+from .cpp_effect_diff import compare_effects
 
 router = APIRouter()
 
@@ -46,4 +47,5 @@ def compare_generated(request: CompareRequest) -> dict:
         "structure": compare_declarations(direct, ai),
         "reflection": compare_reflection(direct, ai),
         "signatures": compare_signatures(direct, ai),
+        "effects": compare_effects(direct, ai),
     }
