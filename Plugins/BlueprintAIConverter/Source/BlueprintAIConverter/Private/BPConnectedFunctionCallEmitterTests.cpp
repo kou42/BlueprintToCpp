@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "BPConnectedFunctionCallEmitter.h"
+#include "BPOutputPinBindingPlan.h"
 #include "GameFramework/Actor.h"
 #include "EdGraphSchema_K2.h"
 #include "UObject/UnrealType.h"
@@ -227,6 +228,32 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Connected output diagnostic"),
                 Diagnostics.Last().Message.Contains(TEXT("Connected output parameter")));
         }
+        // 接続先の実行順序が保証されるか、生成前に独立して検証する。
+        FBPOutputPinBinding Binding;
+        FString BindingError;
+        FBPSemanticType HitType;
+        HitType.Kind = EBPSemanticTypeKind::Struct;
+        HitType.TypePath = OutputTypePath;
+        TestTrue(TEXT("Connected HitResult binding built"),
+            FBPOutputPinBindingPlan::Build(IR.Graphs[0], CallId, OutputPinId,
+                TEXT("BP_Hit_Test"), HitType, Binding, BindingError));
+        TestFalse(TEXT("Consumer without Exec order rejected"),
+            FBPOutputPinBindingPlan::ValidateExecOrder(IR.Graphs[0], Binding, BindingError));
+        FBPIRLink ExecLink;
+        ExecLink.SourceNode = CallId;
+        ExecLink.TargetNode = Consumer.Id;
+        ExecLink.SourcePin = FGuid::NewGuid();
+        ExecLink.TargetPin = FGuid::NewGuid();
+        IR.Graphs[0].ExecEdges.Add(ExecLink);
+        TestTrue(TEXT("Unique downstream Exec chain accepted"),
+            FBPOutputPinBindingPlan::ValidateExecOrder(IR.Graphs[0], Binding, BindingError));
+        FBPIRLink AlternateExec = ExecLink;
+        AlternateExec.SourceNode = LocationSource.Id;
+        IR.Graphs[0].ExecEdges.Add(AlternateExec);
+        TestFalse(TEXT("Merged Exec path rejected"),
+            FBPOutputPinBindingPlan::ValidateExecOrder(IR.Graphs[0], Binding, BindingError));
+        IR.Graphs[0].ExecEdges.Pop();
+        IR.Graphs[0].ExecEdges.Pop();
         // 同じ出力ピンから同一入力ピンへの重複リンクはBindingPlanで拒否する。
         IR.Graphs[0].DataEdges.Add(Link);
         Diagnostics.Reset();
