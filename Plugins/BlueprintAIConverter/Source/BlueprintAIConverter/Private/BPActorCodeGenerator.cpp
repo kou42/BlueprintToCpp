@@ -78,6 +78,17 @@ bool FBPActorCodeGenerator::Generate(const FBPGraphIR& IR, const FString& ClassN
         return false;
     }
 
+    if (IR.BlueprintVariableCount != 0)
+    {
+        OutDiagnostics.Add(TEXT("MVP cannot generate Blueprint member variables"));
+        return false;
+    }
+    if (IR.Graphs.Num() != 1 || IR.Graphs[0].Kind != TEXT("event"))
+    {
+        OutDiagnostics.Add(TEXT("MVP requires exactly one event graph and no function or macro graphs"));
+        return false;
+    }
+
     FBPPrintStringCall Call;
     if (FBPPrintStringAnalyzer::Analyze(IR, Call, OutDiagnostics) == false)
     {
