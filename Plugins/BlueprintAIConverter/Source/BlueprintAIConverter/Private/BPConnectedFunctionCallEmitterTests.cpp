@@ -45,6 +45,11 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
     TestTrue(TEXT("Unsupported call does not leave stale output"), Statement.IsEmpty());
     TestTrue(TEXT("Unsupported call has diagnostics"), Diagnostics.IsEmpty() == false);
+    if (Diagnostics.IsEmpty() == false)
+    {
+        TestTrue(TEXT("Output parameter is identified"),
+            Diagnostics[0].Message.Contains(TEXT("SweepHitResult")));
+    }
     return true;
 }
 #endif
