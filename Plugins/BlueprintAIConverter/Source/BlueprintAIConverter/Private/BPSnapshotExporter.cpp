@@ -4,6 +4,7 @@
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_Event.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -59,6 +60,10 @@ TSharedRef<FJsonObject> NodeToJson(const UEdGraphNode* Node)
     Json->SetStringField(TEXT("title"), Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
     Json->SetNumberField(TEXT("x"), Node->NodePosX);
     Json->SetNumberField(TEXT("y"), Node->NodePosY);
+    if (const auto* Event = Cast<UK2Node_Event>(Node))
+    {
+        Json->SetStringField(TEXT("function_name"), Event->EventReference.GetMemberName().ToString());
+    }
     if (const auto* Call = Cast<UK2Node_CallFunction>(Node))
     {
         Json->SetStringField(TEXT("function_name"), Call->GetFunctionName().ToString());
