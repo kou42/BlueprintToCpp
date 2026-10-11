@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .review_api import ReviewRequest, review_recompare
 from .review_store import list_records, load_record, save_record
+from .verification_report_api import summarize_verification
 
 router = APIRouter()
 
@@ -108,8 +109,21 @@ def get_review_records(limit: int = 50, offset: int = 0) -> dict:
     """レビュー一覧と最新判断を返す。コード本体は一覧に含めない。"""
     if limit < 1 or limit > 200 or offset < 0:
         raise HTTPException(status_code=422, detail="limit must be 1..200 and offset >= 0")
-    summaries = _summarize(list_records())
-    return {"total": len(summaries), "items": summaries[offset:offset + limit]}
+    records = list_records()
+    summaries = _summarize(records)
+    page = summaries[offset:offset + limit]
+    reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
+    # ページ内のレビューだけを集約する。全レコードは一度だけ読み込む。
+    for item in page:
+        report = summarize_verification(reviews[item["id"]], records)
+        item["verification"] = {
+            "uht": report["build"]["uht"]["status"],
+            "ubt": report["build"]["ubt"]["status"],
+            "behavior": report["behavior"]["status"],
+            "evidence_complete": report["evidence_complete"],
+            "blockers": report["blockers"],
+        }
+    return {"total": len(summaries), "items": page}
 
 
 @router.get("/review/records/{record_id}/status")
