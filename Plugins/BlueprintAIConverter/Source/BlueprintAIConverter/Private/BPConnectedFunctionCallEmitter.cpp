@@ -23,6 +23,17 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         return false;
     }
 
+    FBPResolvedFunctionSignature Signature;
+    TArray<FString> Messages;
+    if (FBPFunctionSignatureResolver::Resolve(Function, Signature, Messages) == false)
+    {
+        FBPSemanticDiagnostic Diagnostic;
+        Diagnostic.NodeId = CallNodeId;
+        Diagnostic.Message = FString::Join(Messages, TEXT("; "));
+        OutDiagnostics.Add(MoveTemp(Diagnostic));
+        return false;
+    }
+
     FString Arguments;
     if (FBPConnectedFunctionArguments::Emit(GraphIR, CallNodeId, Function,
         Arguments, OutDiagnostics) == false)
