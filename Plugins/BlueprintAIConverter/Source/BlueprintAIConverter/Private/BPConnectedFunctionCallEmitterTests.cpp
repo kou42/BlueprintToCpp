@@ -254,6 +254,23 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             FBPOutputPinBindingPlan::ValidateExecOrder(IR.Graphs[0], Binding, BindingError));
         IR.Graphs[0].ExecEdges.Pop();
         IR.Graphs[0].ExecEdges.Pop();
+        // 生成C++の同一文ブロックに宣言元と利用先が正しい順序であるか確認する。
+        TArray<FGuid> StatementOrder;
+        StatementOrder.Add(CallId);
+        StatementOrder.Add(Consumer.Id);
+        TestTrue(TEXT("Output variable visible to later statement"),
+            FBPOutputPinBindingPlan::ValidateVariableScope(Binding, StatementOrder, BindingError));
+        StatementOrder.Swap(0, 1);
+        TestFalse(TEXT("Output variable use before declaration rejected"),
+            FBPOutputPinBindingPlan::ValidateVariableScope(Binding, StatementOrder, BindingError));
+        StatementOrder.Reset();
+        StatementOrder.Add(CallId);
+        TestFalse(TEXT("Output variable use outside block rejected"),
+            FBPOutputPinBindingPlan::ValidateVariableScope(Binding, StatementOrder, BindingError));
+        StatementOrder.Add(Consumer.Id);
+        StatementOrder.Add(CallId);
+        TestFalse(TEXT("Repeated output source rejected"),
+            FBPOutputPinBindingPlan::ValidateVariableScope(Binding, StatementOrder, BindingError));
         // 同じ出力ピンから同一入力ピンへの重複リンクはBindingPlanで拒否する。
         IR.Graphs[0].DataEdges.Add(Link);
         Diagnostics.Reset();
