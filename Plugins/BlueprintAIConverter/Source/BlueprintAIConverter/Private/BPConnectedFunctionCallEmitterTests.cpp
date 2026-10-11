@@ -263,6 +263,19 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Connected HitResult binding built"),
             FBPOutputPinBindingPlan::Build(IR.Graphs[0], CallId, OutputPinId,
                 TEXT("BP_Hit_Test"), HitType, Binding, BindingError));
+        // ソースピンが変化した場合はBindingの再構築を拒否する。
+        FBPIRPin* MutableOutputPin = IR.Graphs[0].Nodes[0].Pins.FindByPredicate(
+            [OutputPinId](const FBPIRPin& Pin) { return Pin.Id == OutputPinId; });
+        if (TestNotNull(TEXT("Mutable output pin"), MutableOutputPin) == false)
+        {
+            return false;
+        }
+        MutableOutputPin->SubCategoryObjectPath = TEXT("/Script/CoreUObject.Vector");
+        FBPOutputPinBinding InvalidSourceBinding;
+        TestFalse(TEXT("Mismatched source pin type rejected"),
+            FBPOutputPinBindingPlan::Build(IR.Graphs[0], CallId, OutputPinId,
+                TEXT("BP_Hit_Test"), HitType, InvalidSourceBinding, BindingError));
+        MutableOutputPin->SubCategoryObjectPath = OutputTypePath;
         TestFalse(TEXT("Consumer without Exec order rejected"),
             FBPOutputPinBindingPlan::ValidateExecOrder(IR.Graphs[0], Binding, BindingError));
         FBPIRLink ExecLink;
