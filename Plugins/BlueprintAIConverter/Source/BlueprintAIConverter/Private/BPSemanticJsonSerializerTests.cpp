@@ -37,6 +37,14 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Function.Blocks.Add(Block);
     IR.Functions.Add(Function);
 
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("Health");
+    Variable.Guid = FGuid(10, 11, 12, 13);
+    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+    Variable.PinCategory = TEXT("int");
+    Variable.PropertyFlags = TEXT("0");
+    IR.Variables.Add(Variable);
+
     FString JsonText;
     TestTrue(TEXT("JSON v2を生成"), FBPSemanticJsonSerializer::Serialize(IR, TEXT("5.7.4"), JsonText));
     TSharedPtr<FJsonObject> Root;
@@ -49,6 +57,12 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("スキーマバージョン"), static_cast<int32>(Root->GetNumberField(TEXT("schema_version"))), 2);
     TestEqual(TEXT("未検証範囲をpartialとする"), Root->GetStringField(TEXT("semantic_status")),
         FString(TEXT("partial")));
+
+    const TArray<TSharedPtr<FJsonValue>>& Variables = Root->GetArrayField(TEXT("variables"));
+    TestEqual(TEXT("変数数"), Variables.Num(), 1);
+    TestEqual(TEXT("変数名"), Variables[0]->AsObject()->GetStringField(TEXT("name")), FString(TEXT("Health")));
+    TestFalse(TEXT("CDO初期値は未取得"), Variables[0]->AsObject()->GetBoolField(TEXT("default_value_available")));
+    TestTrue(TEXT("未取得値はnull"), Variables[0]->AsObject()->GetField(TEXT("default_value"))->IsNull());
 
     const TArray<TSharedPtr<FJsonValue>>& Functions = Root->GetArrayField(TEXT("functions"));
     TestEqual(TEXT("関数数"), Functions.Num(), 1);
