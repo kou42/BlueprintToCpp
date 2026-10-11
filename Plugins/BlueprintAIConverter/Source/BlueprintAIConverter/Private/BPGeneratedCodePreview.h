@@ -7,5 +7,6 @@
 class FBPGeneratedCodePreview
 {
 public:
-    static void Show(const FBPGeneratedActorFiles& Files);
+    static void Show(const FBPGeneratedActorFiles& Files,
+        const FBPGraphIR& IR, const FString& ClassName);
 };
