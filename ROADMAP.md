@@ -1,7 +1,7 @@
 # BlueprintToCpp 開発ロードマップ
 
 対象: Unreal Engine 5.7.4 / BlueprintAIConverter / PythonServer  
-更新日: 2026-10-12（Semantic IR Phase 1実装状況を反映）
+更新日: 2026-10-12（Phase 2の接続関数呼び出しEmitter基盤を反映）
 
 ## 最終目標
 
@@ -49,6 +49,7 @@ C++ Generator（宣言・式・文・関数・クラス）
 | Editorプレビュー・保存 | **実装済み・実機での全面検証は未完** | Convert to C++ (Preview)、プロジェクトSourceへの保存経路 |
 | Snapshot JSON / PythonServer | **維持** | 比較・デバッグ・回帰検証に活用 |
 | Semantic IR / PrintString変換 | **最小縦断実装済み・実機動作未検証** | 型付きIR、Lowering、C++ Generator、比較テストを追加。汎用UFunction変換は未実装 |
+| Phase 2 UFunction呼び出し基盤 | **限定実装済み・UE実機未検証** | 反射署名・ピン整合性の検証、GetActorLocation接続引数の限定Lowering、SetActorLocation出力引数の安全な拒否と診断。正常系の呼び出し文生成は未達 |
 | Semantic IR Editor統合 | **実装済み・実機動作未検証** | 旧経路Shadow比較と独立したSemantic Previewメニューを追加 |
 | UE 5.7.4での生成C++ビルド・動作一致 | **一部未確認** | ユーザーからビルドは問題なさそうとの報告あり。Automation Test結果・生成C++ビルド・実行時の一致は未確認 |
 
@@ -100,15 +101,25 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 - [ ] 新Generatorで生成した.h/.cppのUEビルド・実行一致を確認
 
 ### M2: 汎用関数呼び出しの実証
-- [ ] UFunction/FProperty解決とC++署名の検証を実装
+- [x] UFunction/FProperty解決と署名・ピンの限定検証を実装（UEでのテスト合格は未確認）
 - [ ] 引数の既定値・参照/出力引数・ターゲット/静的呼び出しを処理
 - [ ] GetActorLocation、SetActorLocation等の代表例を検証
-- [ ] 未対応メタデータ・特殊関数を明示的に拒否
+- [x] 未対応メタデータ・特殊関数を限定的に明示拒否（対象拡張とUE検証は継続）
 
 ### M3: 自作関数への最短経路
 - [ ] 四則演算・比較・変数・ReturnをSemantic IRで生成
 - [ ] 引数と戻り値を持つ単純なBlueprint FunctionGraphをC++へ変換
 - [ ] 関数呼び出しの参照解決と複数関数の生成を検証
+
+### M2の直近作業（PR #30取り込み時点）
+- [x] `FBPConnectedFunctionCallEmitter` とAutomation Testを追加し、CallFunctionのノードGUID一意性・署名・ピン検証を統合
+- [x] `K2_SetActorLocation` の未対応出力引数を診断してC++文の生成を拒否
+- [ ] UE 5.7.4でEmitterのAutomation Testを実行し、反射関数名・引数フラグ・診断内容を確認
+- [ ] 出力ピンの接続先を検証し、未使用／使用中の区別と参照引数の生成規則を定義
+- [ ] 既定値・bool・参照引数・C++ APIとの署名差を扱い、成功する代表例を実装
+- [ ] 出力引数を後続ノードが参照する場合の変数寿命とデータフローを実装
+
+**現時点の注意:** PR #30のEmitterは出力引数を含む`K2_SetActorLocation`を安全に拒否する段階であり、成功するC++呼び出し文の生成は未完成。出力接続を調べるための所属グラフ参照は未使用で、整理または活用が必要。テストは追加済みだが実行結果は未確認。
 
 ## 実装・品質の原則
 
@@ -123,6 +134,6 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 
 ## 次の着手対象
 
-**最優先はM0/M1の実機検証の完了とPhase 2の着手。** まず `docs/SEMANTIC_IR_VERIFICATION.md` に従い、Automation Test・生成ActorのUHT/UBT・Blueprintとの実行結果を確認する。その後、UFunction/FPropertyによる関数署名の解決、未対応メタデータの診断、GetActorLocation等の限定的な汎用関数Loweringを順に実装する。
+**最優先はM0/M1の実機検証とPhase 2の正常系完成。** まず `docs/SEMANTIC_IR_VERIFICATION.md` に従い、Automation Test・生成ActorのUHT/UBT・Blueprintとの実行結果を確認する。その後、UFunction/FPropertyによる関数署名の解決、未対応メタデータの診断、GetActorLocation等の限定的な汎用関数Loweringを順に実装する。
 
 Semantic Previewは実験的な経路として維持し、旧Generatorの既定経路は実機検証が完了するまで切り替えない。
