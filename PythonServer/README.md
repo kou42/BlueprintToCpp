@@ -238,3 +238,10 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 `GET /review/records/{id}/report` は同一レビューID・修正後指紋に対応する最新の人間の判定、UHT/UBT結果、Blueprint/C++動作比較結果をまとめて返します。`checks` と `blockers` に未達項目を表示し、すべての申告が揃った場合のみ `evidence_complete=true` になります。後から失敗や却下が申告された場合は最新イベントが反映されます。
 
 **重要:** `evidence_complete` は**申告された証跡が揃っていること**のみを表します。APIはビルド・動作テストを実行せず、証跡の真正性も検証しません。意味的同値性や製品品質の保証、デプロイ許可として扱わないでください。
+
+
+## V2: レビュー一覧の検証状態
+
+`GET /review/records` の各 `items[]` に `verification` が追加されます。UHT・UBT・動作比較の最新状態、`evidence_complete`、未達項目 `blockers` を表示します。判定ロジックは `GET /review/records/{id}/report` と共通で、一覧に生成コードの本文は含めません。
+
+一覧の情報は外部から申告された証跡に基づきます。完了表示はコードの正しさやBlueprintとの意味的同値性を保証しません。

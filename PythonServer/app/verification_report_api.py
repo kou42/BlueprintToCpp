@@ -24,9 +24,18 @@ def get_verification_report(record_id: str) -> dict:
     review = load_record(record_id)
     if review is None or review.get("type") != "recomparison":
         raise HTTPException(status_code=404, detail="Review record not found")
+    return summarize_verification(review, list_records())
+
+
+def summarize_verification(review: dict, records: list[dict]) -> dict:
+    """読み込み済みレコードから総合状態を構築する。
+
+    一覧APIからも同じ判定を再利用し、レコード数分のディスク再走査を避ける。
+    """
+    record_id = review["id"]
     fingerprint = review["result"]["review"]["revised_fingerprint"]
     related = [
-        item for item in list_records()
+        item for item in records
         if item.get("source_record_id") == record_id
         and item.get("revised_fingerprint") == fingerprint
         and item.get("type") in ("decision", "verification", "behavior")
