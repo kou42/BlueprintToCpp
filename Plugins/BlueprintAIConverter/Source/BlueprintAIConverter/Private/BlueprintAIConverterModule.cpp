@@ -8,6 +8,9 @@
 #include "BPGeneratedCodePreview.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "Misc/MessageDialog.h"
+#include "Misc/App.h"
+#include "Misc/Paths.h"
+#include "HAL/FileManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogBlueprintAIConverter, Log, All);
 
@@ -102,7 +105,14 @@ private:
                         const FString ClassName = TEXT("A") + Blueprint->GetName() + TEXT("Generated");
                         FBPGeneratedActorFiles Files;
                         TArray<FString> Diagnostics;
-                        if (FBPActorCodeGenerator::Generate(IR, ClassName, FString(), Files, Diagnostics) == false)
+                        // 同名ゲームモジュールのBuild.csが存在する場合だけAPIマクロを付ける。
+                        // 推測した名前で別モジュールのAPIを参照しない。
+                        const FString ModuleName = FApp::GetProjectName();
+                        const FString BuildRules = FPaths::Combine(
+                            FPaths::ProjectSourceDir(), ModuleName, ModuleName + TEXT(".Build.cs"));
+                        const FString ApiMacro = IFileManager::Get().FileExists(*BuildRules)
+                            ? ModuleName.ToUpper() + TEXT("_API") : FString();
+                        if (FBPActorCodeGenerator::Generate(IR, ClassName, ApiMacro, Files, Diagnostics) == false)
                         {
                             const FString Message = FString::Join(Diagnostics, TEXT("\\n"));
                             UE_LOG(LogBlueprintAIConverter, Warning, TEXT("C++ preview failed: %s"), *Message);
