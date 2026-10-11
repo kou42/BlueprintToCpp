@@ -82,15 +82,16 @@ def _summarize(records: list[dict]) -> list[dict]:
     元レコードのpendingは変更しない。
     """
     reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
+    # 指紋の異なる判定を混ぜないよう、レビューごとの正しい証跡だけを参照する。
     event_index = index_verification_events(records)
-    decisions: dict[str, list[dict]] = {}
-    for item in records:
-        if item.get("type") == "decision" and item.get("source_record_id") in reviews:
-            decisions.setdefault(item["source_record_id"], []).append(item)
 
     summaries: list[dict] = []
     for record_id, review in reviews.items():
-        events = sorted(decisions.get(record_id, []), key=lambda item: (item.get("created_at", ""), item["id"]))
+        fingerprint = review["result"]["review"]["revised_fingerprint"]
+        events = sorted(
+            (item for item in event_index.get((record_id, fingerprint), []) if item["type"] == "decision"),
+            key=lambda item: (item.get("created_at", ""), item["id"]),
+        )
         latest = events[-1] if events else None
         summaries.append({
             "id": record_id,

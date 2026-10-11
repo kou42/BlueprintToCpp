@@ -37,7 +37,20 @@ def _records(count: int) -> tuple[list[dict], list[dict]]:
 def _measure(count: int) -> tuple[float, float]:
     reviews, records = _records(count)
     started = perf_counter()
-    baseline = [summarize_verification(review, records) for review in reviews]
+    # 旧方式: レビューごとに全証跡を走査して関連イベントを抽出する。
+    baseline = []
+    for review in reviews:
+        record_id = review["id"]
+        fingerprint = review["result"]["review"]["revised_fingerprint"]
+        related = [
+            item for item in records
+            if item.get("source_record_id") == record_id
+            and item.get("revised_fingerprint") == fingerprint
+            and item.get("type") in ("decision", "verification", "behavior")
+        ]
+        baseline.append(summarize_verification(
+            review, records, {(record_id, fingerprint): related},
+        ))
     baseline_seconds = perf_counter() - started
 
     started = perf_counter()
