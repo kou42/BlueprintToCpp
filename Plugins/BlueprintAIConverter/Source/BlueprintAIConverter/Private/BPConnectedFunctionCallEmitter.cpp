@@ -122,7 +122,7 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
 
     // 出力引数はC++側で書き込み可能な変数を必要とする。
     // 接続先がある場合はExec順序と変数寿命を検証し、
-    // 対応済みの単一VariableSetだけを後続の代入文として生成する。。
+    // 対応済みの単一VariableSetだけを後続の代入文として生成する。
     for (int32 Index = 0; Index < Signature.OutputParameters.Num(); ++Index)
     {
         if (Signature.OutputParameters[Index] == false)
@@ -249,7 +249,7 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         if (Binding.ConsumerPinIds.IsEmpty() == false)
         {
             // Exec順序が証明できない出力を、後続の変数参照に渡してはいけない。
-            // 順序が安全でもConsumerの文生成と同一スコープ化は未実装なので拒否する。
+            // 対応済みのConsumerだけを同一スコープの後続文として出力する。
             if (FBPOutputPinBindingPlan::ValidateExecOrder(
                 *CallGraph, Binding, BindingError) == false)
             {
