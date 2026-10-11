@@ -48,3 +48,27 @@ def load_record(record_id: str) -> dict | None:
             return json.load(file)
     except FileNotFoundError:
         return None
+
+
+
+def list_records() -> list[dict]:
+    """レビュー専用ディレクトリの正規IDファイルのみ列挙する。
+
+    一時ファイルや想定外のファイルは無視し、壊れたJSONも公開しない。
+    """
+    directory = store_directory()
+    if directory.is_dir() is False:
+        return []
+    records: list[dict] = []
+    for path in directory.glob("*.json"):
+        record_id = path.stem
+        if len(record_id) != 32 or any(char not in "0123456789abcdef" for char in record_id):
+            continue
+        try:
+            # ディレクトリ内のファイルだけを読み込み、レコードIDの一致も検証する。
+            record = load_record(record_id)
+            if isinstance(record, dict) and record.get("id") == record_id:
+                records.append(record)
+        except (ValueError, OSError):
+            continue
+    return records
