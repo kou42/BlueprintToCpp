@@ -109,7 +109,7 @@ private:
                         // 推測した名前で別モジュールのAPIを参照しない。
                         const FString ModuleName = FApp::GetProjectName();
                         const FString BuildRules = FPaths::Combine(
-                            FPaths::ProjectSourceDir(), ModuleName, ModuleName + TEXT(".Build.cs"));
+                            FPaths::ProjectDir(), TEXT("Source"), ModuleName, ModuleName + TEXT(".Build.cs"));
                         const FString ApiMacro = IFileManager::Get().FileExists(*BuildRules)
                             ? ModuleName.ToUpper() + TEXT("_API") : FString();
                         if (FBPActorCodeGenerator::Generate(IR, ClassName, ApiMacro, Files, Diagnostics) == false)
