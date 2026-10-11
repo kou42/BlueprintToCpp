@@ -118,6 +118,25 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         Link.TargetPin = FGuid::NewGuid();
         IR.Graphs[0].DataEdges.Add(Link);
         Diagnostics.Reset();
+        TestFalse(TEXT("Dangling output link rejected"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        if (Diagnostics.IsEmpty() == false)
+        {
+            TestTrue(TEXT("Dangling link diagnostic"),
+                Diagnostics.Last().Message.Contains(TEXT("Invalid output parameter data edge target")));
+        }
+
+        // 実在する入力ピンを接続先に指定した場合だけ、接続済みとして扱う。
+        FBPIRNode Consumer;
+        Consumer.Id = Link.TargetNode;
+        FBPIRPin ConsumerInput;
+        ConsumerInput.Id = Link.TargetPin;
+        ConsumerInput.Name = TEXT("Input");
+        ConsumerInput.Direction = EGPD_Input;
+        ConsumerInput.Category = UEdGraphSchema_K2::PC_Struct;
+        Consumer.Pins.Add(ConsumerInput);
+        IR.Graphs[0].Nodes.Add(Consumer);
+        Diagnostics.Reset();
         TestFalse(TEXT("Connected output rejected"),
             FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
         if (Diagnostics.IsEmpty() == false)
@@ -125,6 +144,17 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Connected output diagnostic"),
                 Diagnostics.Last().Message.Contains(TEXT("Connected output parameter")));
         }
+        // Execピンをデータ接続先として使う不正なIRも拒否する。
+        IR.Graphs[0].Nodes.Last().Pins[0].Category = UEdGraphSchema_K2::PC_Exec;
+        Diagnostics.Reset();
+        TestFalse(TEXT("Exec destination rejected"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        if (Diagnostics.IsEmpty() == false)
+        {
+            TestTrue(TEXT("Exec destination diagnostic"),
+                Diagnostics.Last().Message.Contains(TEXT("Invalid output parameter data edge target")));
+        }
+        IR.Graphs[0].Nodes.Pop();
         IR.Graphs[0].DataEdges.Reset();
     }
 
