@@ -7,7 +7,12 @@ from .schemas import SnapshotError, parse_snapshot
 from .graph_analyzer import analyze_snapshot
 from .ir_builder import build_ir
 
+from .generate_api import router as generate_router
+
 app = FastAPI(title="BlueprintToCpp Analyzer", version="0.2.0")
+
+
+app.include_router(generate_router)
 
 
 class AnalyzeRequest(BaseModel):
