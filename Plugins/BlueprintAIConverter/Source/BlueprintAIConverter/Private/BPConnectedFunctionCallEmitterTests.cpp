@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "BPConnectedFunctionCallEmitter.h"
 #include "BPOutputPinBindingPlan.h"
+#include "BPOutputConsumerAssignmentEmitter.h"
 #include "GameFramework/Actor.h"
 #include "EdGraphSchema_K2.h"
 #include "UObject/UnrealType.h"
@@ -362,6 +363,21 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Failed Exec-derived resolution clears variable"),
             ExecResolvedVariable.IsEmpty());
         IR.Graphs[0].ExecEdges.Add(ExecLink);
+        // VariableSet Loweringは実在するメンバープロパティに限定する。
+        // Actorに存在しないFHitResultプロパティ名をIRに書いても代入しない。
+        IR.Graphs[0].Nodes.Last().ClassPath =
+            TEXT("/Script/BlueprintGraph.K2Node_VariableSet");
+        IR.Graphs[0].Nodes.Last().VariableName = TEXT("NonexistentHitResult");
+        IR.Graphs[0].Nodes.Last().Pins[0].Name = TEXT("NonexistentHitResult");
+        FString ConsumerStatement = TEXT("stale");
+        TestFalse(TEXT("Unreflected variable set is rejected"),
+            FBPOutputConsumerAssignmentEmitter::Emit(
+                IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
+                AActor::StaticClass(), ConsumerStatement, BindingError));
+        TestTrue(TEXT("Failed assignment clears statement"), ConsumerStatement.IsEmpty());
+        IR.Graphs[0].Nodes.Last().ClassPath.Reset();
+        IR.Graphs[0].Nodes.Last().VariableName = NAME_None;
+        IR.Graphs[0].Nodes.Last().Pins[0].Name = TEXT("Input");
         TArray<FGuid> InvalidStatementOrder;
         InvalidStatementOrder.Add(Consumer.Id);
         InvalidStatementOrder.Add(CallId);
