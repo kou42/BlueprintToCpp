@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "EdGraph/EdGraphPin.h"
 
 class UBlueprint;
 
@@ -51,6 +52,8 @@ struct FBPGraphIR
 {
     FString AssetPath;
     FString ParentClassPath;
+    // 未対応のBlueprintメンバー変数を生成時に黙って失わないために保持する。
+    int32 BlueprintVariableCount = 0;
     TArray<FBPIRGraph> Graphs;
     TArray<FString> Diagnostics;
 };
