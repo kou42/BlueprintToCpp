@@ -28,14 +28,19 @@ def get_review_dashboard(limit: int = 10) -> dict:
     pending = 0
     blocked = 0
     complete = 0
+    blocker_counts = {"human_approved": 0, "uht_passed": 0, "ubt_passed": 0, "behavior_matched": 0}
+    decision_counts = {"pending": 0, "approved": 0, "rejected": 0}
     for summary in summaries:
         report = summarize_verification(reviews[summary["id"]], records, event_index)
+        decision_counts[report["review"]["decision"]] += 1
         if summary["latest_decision"] == "pending":
             pending += 1
         if report["evidence_complete"]:
             complete += 1
         else:
             blocked += 1
+            for blocker in report["blockers"]:
+                blocker_counts[blocker] += 1
             attention.append({
                 "id": summary["id"],
                 "created_at": summary["created_at"],
@@ -52,6 +57,8 @@ def get_review_dashboard(limit: int = 10) -> dict:
     return {
         "total_reviews": len(summaries),
         "pending_decisions": pending,
+        "decision_counts": decision_counts,
+        "blocker_counts": blocker_counts,
         "evidence_complete": complete,
         "needs_attention": blocked,
         "attention_items": attention[:limit],

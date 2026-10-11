@@ -287,3 +287,10 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 ## V2: 証跡集計の性能改善
 
 レビュー一覧・統計・期間別推移・ダッシュボードでは、読み込み済み証跡をレビューIDと修正後指紋で索引化して再利用します。これにより、レビューごとに全イベントを繰り返し走査する処理を削減します。個別レポートの応答形式と証跡の判定条件は変更しません。
+
+
+## V2: ダッシュボードの内訳と索引計測
+
+`GET /review/dashboard` に `decision_counts`（pending / approved / rejected）と `blocker_counts`（human_approved / uht_passed / ubt_passed / behavior_matched）を追加しました。従来のレスポンス項目は維持し、既存の総合検証判定と同じ基準で計算します。未達要因は一つのレビューに複数存在し得るため、内訳の合計は `needs_attention` と一致するとは限りません。
+
+証跡索引の計測には `cd PythonServer && pytest -q -s tests/test_review_index_scaling.py` を使用します。1・10・100レビューの合成データで索引なし／ありの実行時間を出力し、結果が一致することを確認します。実行時間は環境に依存するため、CIでは速度の大小を合否判定に用いません。

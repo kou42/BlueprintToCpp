@@ -27,6 +27,8 @@ def test_dashboard_empty_and_validation(tmp_path, monkeypatch):
     assert data["total_reviews"] == 0
     assert data["attention_items"] == []
     assert data["needs_attention"] == 0
+    assert data["decision_counts"] == {"pending": 0, "approved": 0, "rejected": 0}
+    assert all(value == 0 for value in data["blocker_counts"].values())
     assert data["verified_by_server"] is False
     assert client.get("/review/dashboard?limit=0").status_code == 422
     assert client.get("/review/dashboard?limit=101").status_code == 422
@@ -60,6 +62,8 @@ def test_dashboard_attention_and_latest_evidence(tmp_path, monkeypatch):
     assert data["pending_decisions"] == 1
     assert data["evidence_complete"] == 1
     assert data["needs_attention"] == 1
+    assert data["decision_counts"] == {"pending": 1, "approved": 1, "rejected": 0}
+    assert all(value == 1 for value in data["blocker_counts"].values())
     assert data["attention_total"] == 1
     assert len(data["attention_items"]) == 1
     assert data["attention_items"][0]["reviewer"] == "Bob"
@@ -74,5 +78,6 @@ def test_dashboard_attention_and_latest_evidence(tmp_path, monkeypatch):
     updated = client.get("/review/dashboard?limit=1").json()
     assert updated["evidence_complete"] == 0
     assert updated["needs_attention"] == 2
+    assert updated["blocker_counts"]["ubt_passed"] == 2
     assert updated["attention_total"] == 2
     assert len(updated["attention_items"]) == 1
