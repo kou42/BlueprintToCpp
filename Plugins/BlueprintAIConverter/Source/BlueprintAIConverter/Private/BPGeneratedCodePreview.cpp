@@ -1,4 +1,9 @@
 #include "BPGeneratedCodePreview.h"
+#include "BPGeneratedCodeSaver.h"
+#include "DesktopPlatformModule.h"
+#include "IDesktopPlatform.h"
+#include "Misc/MessageDialog.h"
+#include "Misc/Paths.h"
 
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformApplicationMisc.h"
@@ -36,7 +41,7 @@ void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files)
             [
                 SNew(STextBlock)
                 .Text(FText::FromString(
-                    TEXT("Preview only. No files have been written. Review the generated C++ before use.")))
+                    TEXT("Review generated C++ before use. Save New Files never overwrites existing files.")))
             ]
             + SVerticalBox::Slot()
             .AutoHeight()
@@ -64,6 +69,57 @@ void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files)
                     .OnClicked_Lambda([Source]()
                     {
                         FPlatformApplicationMisc::ClipboardCopy(*Source);
+                        return FReply::Handled();
+                    })
+                ]
+                + SHorizontalBox::Slot()
+                .AutoWidth()
+                .Padding(0.0f, 0.0f, 8.0f, 0.0f)
+                [
+                    SNew(SButton)
+                    .Text(FText::FromString(TEXT("Save New Files...")))
+                    .ToolTipText(FText::FromString(TEXT("Choose an existing folder. Existing files are never overwritten.")))
+                    .OnClicked_Lambda([Files, Window]()
+                    {
+                        IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+                        if (DesktopPlatform == nullptr)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("Folder picker is unavailable.")));
+                            return FReply::Handled();
+                        }
+
+                        FString Directory;
+                        const bool bSelected = DesktopPlatform->OpenDirectoryDialog(
+                            Window->GetNativeWindow().IsValid()
+                                ? Window->GetNativeWindow()->GetOSWindowHandle() : nullptr,
+                            TEXT("Choose an existing folder for generated C++ files"),
+                            FPaths::ProjectDir(), Directory);
+                        if (bSelected == false)
+                        {
+                            return FReply::Handled();
+                        }
+
+                        const EAppReturnType::Type Confirmation = FMessageDialog::Open(
+                            EAppMsgType::YesNo,
+                            FText::FromString(FString::Printf(
+                                TEXT("Create %s and %s in:\\n%s\\n\\nExisting files will not be overwritten. Continue?"),
+                                *Files.HeaderFileName, *Files.SourceFileName, *Directory)));
+                        if (Confirmation != EAppReturnType::Yes)
+                        {
+                            return FReply::Handled();
+                        }
+
+                        FString Error;
+                        if (FBPGeneratedCodeSaver::SaveNewFiles(Files, Directory, Error) == false)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Error));
+                        }
+                        else
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("Both generated files were saved successfully.")));
+                        }
                         return FReply::Handled();
                     })
                 ]
