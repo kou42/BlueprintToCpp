@@ -31,11 +31,11 @@ bool IsSafeFileName(const FString& FileName, const FString& Extension)
 }
 }
 
-bool FBPGeneratedCodeSaver::SaveNewFiles(const FBPGeneratedActorFiles& Files,
-    const FString& Directory, FString& OutError)
+bool FBPGeneratedCodeSaver::SaveNewFilesSplit(const FBPGeneratedActorFiles& Files,
+    const FString& HeaderDirectory, const FString& SourceDirectory, FString& OutError)
 {
     OutError.Reset();
-    if (Directory.IsEmpty() ||
+    if (HeaderDirectory.IsEmpty() || SourceDirectory.IsEmpty() ||
         IsSafeFileName(Files.HeaderFileName, TEXT(".h")) == false ||
         IsSafeFileName(Files.SourceFileName, TEXT(".cpp")) == false ||
         Files.HeaderContent.IsEmpty() || Files.SourceContent.IsEmpty())
@@ -45,15 +45,16 @@ bool FBPGeneratedCodeSaver::SaveNewFiles(const FBPGeneratedActorFiles& Files,
     }
 
     IFileManager& Manager = IFileManager::Get();
-    const FString TargetDir = FPaths::ConvertRelativePathToFull(Directory);
-    if (Manager.DirectoryExists(*TargetDir) == false)
+    const FString HeaderDir = FPaths::ConvertRelativePathToFull(HeaderDirectory);
+    const FString SourceDir = FPaths::ConvertRelativePathToFull(SourceDirectory);
+    if (Manager.DirectoryExists(*HeaderDir) == false || Manager.DirectoryExists(*SourceDir) == false)
     {
         OutError = TEXT("Output directory does not exist. Create it before saving.");
         return false;
     }
 
-    const FString HeaderPath = FPaths::Combine(TargetDir, Files.HeaderFileName);
-    const FString SourcePath = FPaths::Combine(TargetDir, Files.SourceFileName);
+    const FString HeaderPath = FPaths::Combine(HeaderDir, Files.HeaderFileName);
+    const FString SourcePath = FPaths::Combine(SourceDir, Files.SourceFileName);
     if (Manager.FileExists(*HeaderPath) || Manager.FileExists(*SourcePath))
     {
         OutError = TEXT("One or both target files already exist. No files were overwritten.");
@@ -99,4 +100,10 @@ bool FBPGeneratedCodeSaver::SaveNewFiles(const FBPGeneratedActorFiles& Files,
         return false;
     }
     return true;
+}
+
+bool FBPGeneratedCodeSaver::SaveNewFiles(const FBPGeneratedActorFiles& Files,
+    const FString& Directory, FString& OutError)
+{
+    return SaveNewFilesSplit(Files, Directory, Directory, OutError);
 }
