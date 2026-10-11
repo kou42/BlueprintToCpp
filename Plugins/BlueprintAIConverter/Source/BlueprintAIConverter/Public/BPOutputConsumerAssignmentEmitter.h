@@ -56,16 +56,25 @@ struct FBPOutputConsumerAssignmentEmitter
             return false;
         }
         int32 InputMatches = 0;
+        int32 ValueInputs = 0;
         for (const FBPIRPin& Pin : Consumer->Pins)
         {
+            if (Pin.Direction == EGPD_Input &&
+                Pin.Category != UEdGraphSchema_K2::PC_Exec)
+            {
+                // selfや別の値ピンが未接続でも存在する場合は、
+                // 代入先オブジェクトなどの意味を落とさないよう拒否する。
+                ++ValueInputs;
+            }
             if (Pin.Id == ConsumerPinId && Pin.Name == Consumer->VariableName &&
                 Pin.Direction == EGPD_Input &&
-                Pin.Category == UEdGraphSchema_K2::PC_Struct)
+                Pin.Category == UEdGraphSchema_K2::PC_Struct &&
+                Pin.SubCategoryObjectPath == Binding.TypePath)
             {
                 ++InputMatches;
             }
         }
-        if (InputMatches != 1)
+        if (InputMatches != 1 || ValueInputs != 1)
         {
             OutError = TEXT("Output consumer property input missing");
             return false;
