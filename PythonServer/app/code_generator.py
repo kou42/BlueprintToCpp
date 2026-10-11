@@ -48,8 +48,18 @@ def _print_string(ctx: ConversionContext) -> str:
     pins = node["pins"]
     allowed = {"execute", "then", "InString", "bPrintToScreen", "bPrintToLog",
                "TextColor", "Duration", "Key", "self"}
-    if any(p["name"] not in allowed for p in pins):
-        raise UnsupportedNodeError(f"{node['id']}: unsupported PrintString pin")
+    unsupported_pins = [
+        p["name"]
+        for p in pins
+        if p["name"] not in allowed
+    ]
+
+    if unsupported_pins:
+        raise UnsupportedNodeError(
+            f"{node['id']}: unsupported PrintString pins: "
+            f"{unsupported_pins}"
+        )
+    
     text = _pin(node, "InString", "input")
     if text["type"]["category"] != "string":
         raise GenerationError(f"{node['id']}: InString is not string")
