@@ -5,6 +5,7 @@
 #include "BPSnapshotExporter.h"
 #include "BPGraphIR.h"
 #include "BPActorCodeGenerator.h"
+#include "BPSemanticParityChecker.h"
 #include "BPGeneratedCodePreview.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "Misc/MessageDialog.h"
@@ -118,6 +119,21 @@ private:
                             UE_LOG(LogBlueprintAIConverter, Warning, TEXT("C++ preview failed: %s"), *Message);
                             FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
                             return;
+                        }
+
+                        // Shadow Mode: 旧Generatorのプレビュー結果はそのまま使用し、
+                        // Semantic経路との差異のみOutput Logへ記録する。差異があっても保存先は変えない。
+                        TArray<FString> ParityDiagnostics;
+                        if (FBPSemanticParityChecker::Compare(IR, ClassName, ApiMacro, Files, ParityDiagnostics))
+                        {
+                            UE_LOG(LogBlueprintAIConverter, Display,
+                                TEXT("Semantic IR parity passed for %s"), *Blueprint->GetName());
+                        }
+                        else
+                        {
+                            UE_LOG(LogBlueprintAIConverter, Warning,
+                                TEXT("Semantic IR parity failed for %s: %s"),
+                                *Blueprint->GetName(), *FString::Join(ParityDiagnostics, TEXT("; ")));
                         }
 
                         // 生成内容は読み取り専用の別ウィンドウで表示する。
