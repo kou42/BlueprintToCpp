@@ -18,6 +18,7 @@ from .verification_report_api import router as verification_report_router
 from .review_statistics_api import router as review_statistics_router
 from .review_trends_api import router as review_trends_router
 from .review_event_trends_api import router as review_event_trends_router
+from .review_dashboard_api import router as review_dashboard_router
 
 app = FastAPI(title="BlueprintToCpp Analyzer", version="0.2.0")
 
@@ -33,6 +34,7 @@ app.include_router(verification_report_router)
 app.include_router(review_statistics_router)
 app.include_router(review_trends_router)
 app.include_router(review_event_trends_router)
+app.include_router(review_dashboard_router)
 
 
 class AnalyzeRequest(BaseModel):
