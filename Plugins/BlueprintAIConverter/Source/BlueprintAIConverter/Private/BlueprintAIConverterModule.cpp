@@ -5,6 +5,9 @@
 #include "BPSnapshotExporter.h"
 #include "BPGraphIR.h"
 #include "BPActorCodeGenerator.h"
+#include "BPSemanticParityChecker.h"
+#include "BPSemanticLowering.h"
+#include "BPSemanticCodeGenerator.h"
 #include "BPGeneratedCodePreview.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "Misc/MessageDialog.h"
@@ -120,12 +123,101 @@ private:
                             return;
                         }
 
+                        // Shadow Mode: 旧Generatorのプレビュー結果はそのまま使用し、
+                        // Semantic経路との差異のみOutput Logへ記録する。差異があっても保存先は変えない。
+                        TArray<FString> ParityDiagnostics;
+                        if (FBPSemanticParityChecker::Compare(IR, ClassName, ApiMacro, Files, ParityDiagnostics))
+                        {
+                            UE_LOG(LogBlueprintAIConverter, Display,
+                                TEXT("Semantic IR parity passed for %s"), *Blueprint->GetName());
+                        }
+                        else
+                        {
+                            UE_LOG(LogBlueprintAIConverter, Warning,
+                                TEXT("Semantic IR parity failed for %s: %s"),
+                                *Blueprint->GetName(), *FString::Join(ParityDiagnostics, TEXT("; ")));
+                        }
+
                         // 生成内容は読み取り専用の別ウィンドウで表示する。
                         // コピー操作はウィンドウ内の個別ボタンから行える。
                         FBPGeneratedCodePreview::Show(Files, IR, ClassName);
                         UE_LOG(LogBlueprintAIConverter, Display,
                             TEXT("C++ preview opened for %s: %s, %s"),
                             *Blueprint->GetName(), *Files.HeaderFileName, *Files.SourceFileName);
+                    }));
+
+                // Semantic IRを明示的に試す独立プレビュー。
+                // 旧プレビューを既定経路として維持し、段階的に新経路を検証する。
+                InSection.AddMenuEntry(
+                    TEXT("BlueprintAIConverter.SemanticPreview"),
+                    FText::FromString(TEXT("Convert to C++ (Semantic Preview)")),
+                    FText::FromString(TEXT("Preview C++ generated via Semantic IR (no files written)")),
+                    FSlateIcon(),
+                    FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
+                    {
+                        const auto* Ctx = MenuContext.FindContext<UContentBrowserAssetContextMenuContext>();
+                        if (Ctx == nullptr)
+                        {
+                            return;
+                        }
+                        if (Ctx->SelectedAssets.Num() != 1)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("Select exactly one Blueprint for C++ preview.")));
+                            return;
+                        }
+                        UBlueprint* Blueprint = Cast<UBlueprint>(Ctx->SelectedAssets[0].GetAsset());
+                        if (Blueprint == nullptr)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("The selected asset is not a Blueprint.")));
+                            return;
+                        }
+
+                        FBPGraphIR GraphIR;
+                        if (FBPGraphIRBuilder::Build(Blueprint, GraphIR) == false)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(FString::Join(GraphIR.Diagnostics, TEXT("\\n"))));
+                            return;
+                        }
+
+                        FBPSemanticIR SemanticIR;
+                        if (FBPSemanticLowering::LowerPrintString(GraphIR, SemanticIR) == false)
+                        {
+                            TArray<FString> Messages;
+                            for (const FBPSemanticDiagnostic& Diagnostic : SemanticIR.Diagnostics)
+                            {
+                                Messages.Add(Diagnostic.Message);
+                            }
+                            const FString Message = FString::Join(Messages, TEXT("\\n"));
+                            UE_LOG(LogBlueprintAIConverter, Warning, TEXT("Semantic preview Lowering failed: %s"), *Message);
+                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
+                            return;
+                        }
+
+                        const FString ClassName = TEXT("A") + Blueprint->GetName() + TEXT("Generated");
+                        const FString ModuleName = FApp::GetProjectName();
+                        const FString BuildRules = FPaths::Combine(
+                            FPaths::ProjectDir(), TEXT("Source"), ModuleName, ModuleName + TEXT(".Build.cs"));
+                        const FString ApiMacro = IFileManager::Get().FileExists(*BuildRules)
+                            ? ModuleName.ToUpper() + TEXT("_API") : FString();
+
+                        FBPGeneratedActorFiles SemanticFiles;
+                        TArray<FString> Diagnostics;
+                        if (FBPSemanticCodeGenerator::Generate(
+                            SemanticIR, ClassName, ApiMacro, SemanticFiles, Diagnostics) == false)
+                        {
+                            const FString Message = FString::Join(Diagnostics, TEXT("\\n"));
+                            UE_LOG(LogBlueprintAIConverter, Warning, TEXT("Semantic preview generation failed: %s"), *Message);
+                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
+                            return;
+                        }
+
+                        // Preview画面は既存のものを再利用し、保存時の安全性チェックも共有する。
+                        FBPGeneratedCodePreview::Show(SemanticFiles, GraphIR, ClassName);
+                        UE_LOG(LogBlueprintAIConverter, Display,
+                            TEXT("Semantic C++ preview opened for %s"), *Blueprint->GetName());
                     }));
 
                 InSection.AddMenuEntry(
