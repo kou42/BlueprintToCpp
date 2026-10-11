@@ -435,5 +435,10 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     // 変数宣言と呼び出しを同じ文スコープにまとめる。
     OutStatement = FString::Printf(TEXT("%s\nK2_SetActorLocation(%s);"),
         *StorageDeclaration, *Arguments);
+    // 宣言・呼び出し・後続代入を同一スコープで順番に出力する。
+    for (const FString& ConsumerStatement : DeferredConsumerStatements)
+    {
+        OutStatement += TEXT("\\n") + ConsumerStatement;
+    }
     return true;
 }
