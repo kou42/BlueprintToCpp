@@ -29,6 +29,22 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Missing call node rejected"),
         FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
     TestTrue(TEXT("Missing call node reports diagnostic"), Diagnostics.IsEmpty() == false);
+
+    // ノードが存在しても出力パラメータを無視した文は生成しない。
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    FBPIRNode Call;
+    Call.Id = CallId;
+    Call.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Call.FunctionName = TEXT("K2_SetActorLocation");
+    Graph.Nodes.Add(Call);
+    IR.Graphs.Add(Graph);
+    Diagnostics.Reset();
+    Statement = TEXT("stale");
+    TestFalse(TEXT("Unsupported call signature rejected"),
+        FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+    TestTrue(TEXT("Unsupported call does not leave stale output"), Statement.IsEmpty());
+    TestTrue(TEXT("Unsupported call has diagnostics"), Diagnostics.IsEmpty() == false);
     return true;
 }
 #endif
