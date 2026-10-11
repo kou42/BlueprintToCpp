@@ -113,7 +113,10 @@ def parse_snapshot(raw: Any) -> Snapshot:
             function_name = n.get("function_name")
             if function_name is not None:
                 _string(function_name, "node.function_name")
-            variable_name = n.get("variable_name")\n            if variable_name is not None:\n                _string(variable_name, "node.variable_name")\n            nodes.append(Node(nid, _string(n.get("class"), "node.class"),
+            variable_name = n.get("variable_name")
+            if variable_name is not None:
+                _string(variable_name, "node.variable_name")
+            nodes.append(Node(nid, _string(n.get("class"), "node.class"),
                               _string(n.get("title"), "node.title"),
                               tuple(pins), function_name, variable_name))
         graphs.append(Graph(path, _string(g.get("name"), "graph.name"),
