@@ -4,7 +4,6 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from .review_history_api import _summarize
-from .review_statistics_api import get_review_statistics
 from .review_store import list_records
 from .verification_report_api import summarize_verification
 
