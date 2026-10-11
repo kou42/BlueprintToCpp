@@ -116,4 +116,86 @@ bool FBPSemanticGeneratorRejectTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("失敗時にソースを公開しない"), Files.SourceContent.IsEmpty());
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorOptionsParityTest,
+    "BlueprintAIConverter.SemanticIR.Generator.OptionsParity",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorOptionsParityTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR Graph = MakeGeneratorTestGraph();
+    FBPIRNode& Print = Graph.Graphs[0].Nodes[1];
+
+    // エスケープ文字と既定値以外のオプションを旧経路と比較する。
+    Print.Pins[0].DefaultValue = TEXT("Line 1\\nLine 2\\t\\\\ \\"quote\\"");
+    FBPIRPin Screen;
+    Screen.Name = TEXT("bPrintToScreen");
+    Screen.Direction = EGPD_Input;
+    Screen.DefaultValue = TEXT("false");
+    Print.Pins.Add(Screen);
+    FBPIRPin Log;
+    Log.Name = TEXT("bPrintToLog");
+    Log.Direction = EGPD_Input;
+    Log.DefaultValue = TEXT("true");
+    Print.Pins.Add(Log);
+    FBPIRPin Key;
+    Key.Name = TEXT("Key");
+    Key.Direction = EGPD_Input;
+    Key.DefaultValue = TEXT("debug-key");
+    Print.Pins.Add(Key);
+
+    FBPGeneratedActorFiles LegacyFiles;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("旧経路成功"), FBPActorCodeGenerator::Generate(
+        Graph, TEXT("AOptionsActor"), FString(), LegacyFiles, Diagnostics)) == false)
+    {
+        return false;
+    }
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("Lowering成功"), FBPSemanticLowering::LowerPrintString(Graph, Semantic)) == false)
+    {
+        return false;
+    }
+    FBPGeneratedActorFiles NewFiles;
+    if (TestTrue(TEXT("新経路成功"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AOptionsActor"), FString(), NewFiles, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("オプション付きヘッダー一致"), NewFiles.HeaderContent, LegacyFiles.HeaderContent);
+    TestEqual(TEXT("オプション付きソース一致"), NewFiles.SourceContent, LegacyFiles.SourceContent);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorInvalidLiteralTest,
+    "BlueprintAIConverter.SemanticIR.Generator.RejectInvalidLiteral",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorInvalidLiteralTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR Graph = MakeGeneratorTestGraph();
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("Lowering成功"), FBPSemanticLowering::LowerPrintString(Graph, Semantic)) == false)
+    {
+        return false;
+    }
+
+    // 手動構築されたSemantic IRでも、不正な値をC++へ流さない。
+    FBPSemanticExpression& Duration = Semantic.Functions[0].Blocks[0].Statements[0].Expression.Arguments[5];
+    Duration.LiteralValue = TEXT("not-a-number");
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("不正Durationを拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AInvalidActor"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("診断あり"), Diagnostics.IsEmpty() == false);
+    TestTrue(TEXT("失敗時はファイルを空にする"), Files.SourceContent.IsEmpty());
+
+    // 未対応の式を黙ってリテラルへ変換しない。
+    Duration.LiteralValue = TEXT("2.0");
+    Duration.Kind = EBPSemanticExpressionKind::VariableReference;
+    TestFalse(TEXT("未対応式を拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AInvalidActor"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("失敗時はヘッダーも空"), Files.HeaderContent.IsEmpty());
+    return true;
+}
+
 #endif
