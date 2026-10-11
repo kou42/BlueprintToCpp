@@ -50,6 +50,25 @@ def sample():
     }
 
 
+def test_variable_metadata_and_legacy_compatibility():
+    old = sample()
+    parse_semantic_json(old)
+    data = sample()
+    data["variables"] = [{
+        "name": "Health", "guid": None,
+        "type": {"kind": "int32", "type_path": "", "is_reference": False, "is_const": False},
+        "pin_category": "int", "type_path": "", "property_flags": "0",
+        "source": "blueprint_new_variables",
+        "default_value_available": False, "default_value": None,
+    }]
+    assert parse_semantic_json(data) is data
+    for invalid in ("", 0):
+        bad = copy.deepcopy(data)
+        bad["variables"][0]["default_value"] = invalid
+        with pytest.raises(SemanticJsonError):
+            parse_semantic_json(bad)
+
+
 def test_valid_nested_expression():
     data = sample()
     assert parse_semantic_json(data) is data
