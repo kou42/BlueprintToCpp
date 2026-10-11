@@ -141,13 +141,13 @@ void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files,
                         FString ModuleRoot;
                         if (Desktop->OpenDirectoryDialog(nullptr,
                                 TEXT("Select a Source module folder containing ModuleName.Build.cs"),
-                                FPaths::ProjectSourceDir(), ModuleRoot) == false)
+                                FPaths::Combine(FPaths::ProjectDir(), TEXT("Source")), ModuleRoot) == false)
                         {
                             return FReply::Handled();
                         }
                         FPaths::NormalizeDirectoryName(ModuleRoot);
                         const FString ModuleName = FPaths::GetCleanFilename(ModuleRoot);
-                        const FString ProjectSource = FPaths::ConvertRelativePathToFull(FPaths::ProjectSourceDir());
+                        const FString ProjectSource = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("Source")));
                         FString Root = FPaths::ConvertRelativePathToFull(ModuleRoot);
                         FPaths::NormalizeDirectoryName(Root);
                         // 選択されたパスを必ずProject/Source配下に限定する。
