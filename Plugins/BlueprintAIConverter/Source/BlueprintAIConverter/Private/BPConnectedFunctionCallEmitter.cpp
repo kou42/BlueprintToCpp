@@ -4,6 +4,7 @@
 #include "BPFunctionSignatureResolver.h"
 #include "BPFunctionCallValidator.h"
 #include "BPFunctionPinTypeMatcher.h"
+#include "BPOutputParameterStorage.h"
 #include "GameFramework/Actor.h"
 #include "EdGraphSchema_K2.h"
 #include "UObject/Class.h"
@@ -181,14 +182,28 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             }
         }
 
+        // 未接続の出力でもC++側には書き込み可能な領域が必要となる。
+        // 宣言生成を実際に試し、対応可能な型と未対応型を区別する。
+        // ただし呼び出し引数への組み込み前に文を出すと意味が壊れるため、ここでは診断のみ行う。
+        FString StorageName;
+        FString StorageDeclaration;
+        const bool bStorageSupported = FBPOutputParameterStorage::Emit(
+            Signature.ParameterTypes[Index], CallNodeId, StorageName, StorageDeclaration);
         FBPSemanticDiagnostic Diagnostic;
         Diagnostic.GraphName = CallGraphName;
         Diagnostic.NodeId = CallNodeId;
         Diagnostic.PinId = OutputPin->Id;
+        if (bStorageSupported == false)
+        {
+            Diagnostic.Message = FString::Printf(
+                TEXT("Unsupported output parameter storage type: %s"), *ParameterName.ToString());
+            OutDiagnostics.Add(MoveTemp(Diagnostic));
+            return false;
+        }
         Diagnostic.Message = ConnectedEdges > 0
             ? FString::Printf(TEXT("Connected output parameter requires data-flow lowering: %s (%d edges)"),
                 *ParameterName.ToString(), ConnectedEdges)
-            : FString::Printf(TEXT("Unconnected output parameter requires writable C++ storage: %s"),
+            : FString::Printf(TEXT("Unconnected output parameter storage prepared; call lowering pending: %s"),
                 *ParameterName.ToString());
         OutDiagnostics.Add(MoveTemp(Diagnostic));
         return false;
