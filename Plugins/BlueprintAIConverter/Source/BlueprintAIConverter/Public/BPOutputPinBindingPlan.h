@@ -136,6 +136,45 @@ struct FBPOutputPinBindingPlan
         return true;
     }
 
+    // 後続入力ピンをC++変数参照に解決する際は、ピンIDだけでなく
+    // 所属ノード・Exec順序・宣言スコープをまとめて検証する。
+    // 不正なIRで誤った変数名を返さないよう、失敗時の出力は必ず空にする。
+    static bool ResolveConsumerVariable(const FBPIRGraph& Graph,
+        const FBPOutputPinBinding& Binding, const FGuid& ConsumerNodeId,
+        const FGuid& ConsumerPinId, const TArray<FGuid>& EmittedStatementNodeIds,
+        FString& OutVariableName, FString& OutError)
+    {
+        OutVariableName.Reset();
+        OutError.Reset();
+        if (ConsumerNodeId.IsValid() == false || ConsumerPinId.IsValid() == false)
+        {
+            OutError = TEXT("Invalid output consumer identity");
+            return false;
+        }
+        int32 ConsumerMatches = 0;
+        for (int32 Index = 0; Index < Binding.ConsumerPinIds.Num(); ++Index)
+        {
+            if (Binding.ConsumerPinIds[Index] == ConsumerPinId &&
+                Binding.ConsumerNodeIds.IsValidIndex(Index) &&
+                Binding.ConsumerNodeIds[Index] == ConsumerNodeId)
+            {
+                ++ConsumerMatches;
+            }
+        }
+        if (ConsumerMatches != 1)
+        {
+            OutError = TEXT("Output consumer is missing or ambiguous");
+            return false;
+        }
+        if (ValidateExecOrder(Graph, Binding, OutError) == false ||
+            ValidateVariableScope(Binding, EmittedStatementNodeIds, OutError) == false)
+        {
+            return false;
+        }
+        OutVariableName = Binding.VariableName;
+        return true;
+    }
+
     // 出力を参照するノードは、生成元のExec実行後に必ず評価されなければならない。
     // 現段階では分岐・ループ・合流を安全に証明できないため、
     // 単一のExec後続チェーンだけを受理する保守的な判定とする。
