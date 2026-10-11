@@ -106,7 +106,7 @@ struct FBPOutputConsumerAssignmentEmitter
             OutError = TEXT("Output consumer property input missing");
             return false;
         }
-        // ほかのデータ入力やself接続がある場合は、意味を省略しないため拒否する。
+        // selfを含む他のデータ入力への接続は、代入先の意味が変わるため拒否する。
         for (const FBPIRLink& Edge : Graph.DataEdges)
         {
             if (Edge.TargetNode == ConsumerNodeId && Edge.TargetPin != ConsumerPinId)
