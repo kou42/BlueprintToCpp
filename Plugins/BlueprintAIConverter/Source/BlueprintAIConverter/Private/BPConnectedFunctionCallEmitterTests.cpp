@@ -243,7 +243,7 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         if (Diagnostics.IsEmpty() == false)
         {
             TestTrue(TEXT("Connected output diagnostic"),
-                Diagnostics.Last().Message.Contains(TEXT("Connected output parameter")));
+                Diagnostics.Last().Message.Contains(TEXT("Unsupported output consumer lowering")));
         }
         // Exec順序が正しくても、接続先ピンの所属・型が不正なら
         // Emitterは参照解決に進む前に安全に拒否する。
