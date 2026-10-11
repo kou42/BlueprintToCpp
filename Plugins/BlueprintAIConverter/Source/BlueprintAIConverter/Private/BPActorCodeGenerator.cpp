@@ -105,7 +105,13 @@ bool FBPActorCodeGenerator::Generate(const FBPGraphIR& IR, const FString& ClassN
     // PrintStringの引数を省略せず渡し、画面/ログ出力・Duration・Keyを保存する。
     const TCHAR* Screen = Call.bPrintToScreen ? TEXT("true") : TEXT("false");
     const TCHAR* Log = Call.bPrintToLog ? TEXT("true") : TEXT("false");
-    const FString Duration = FString::Printf(TEXT("%.9gf"), static_cast<double>(Call.Duration));
+    // 数値が整数の場合でもC++の浮動小数点リテラルになるよう小数点を補う。
+    FString Duration = FString::SanitizeFloat(Call.Duration);
+    if (Duration.Contains(TEXT(".")) == false && Duration.Contains(TEXT("e"), ESearchCase::IgnoreCase) == false)
+    {
+        Duration += TEXT(".0");
+    }
+    Duration += TEXT("f");
     OutFiles.SourceContent = FString::Printf(
         TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(0.0f, 0.66f, 1.0f), %s, TEXT(\"%s\"));\n}\n"),
         *BaseName, *ClassName, *EscapedText, Screen, Log, *Duration, *EscapedKey);
