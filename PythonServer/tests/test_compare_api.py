@@ -49,3 +49,13 @@ def test_compare_api_rejects_extra_input_fields():
     request["ai"]["secret"] = "unexpected"
     response = client.post("/compare", json=request)
     assert response.status_code == 422
+
+
+def test_compare_api_includes_header_structure_diff():
+    request = {
+        "direct": {"status": "generated", "files": [{"path": "Example.h", "content": "class AExample {\n void BeginPlay();\n};"}]},
+        "ai": {"status": "generated", "files": [{"path": "Example.h", "content": "class AExample {\n void Tick(float Delta);\n};"}]},
+    }
+    response = client.post("/compare", json=request)
+    assert response.status_code == 200
+    assert response.json()["structure"]["status"] == "different"
