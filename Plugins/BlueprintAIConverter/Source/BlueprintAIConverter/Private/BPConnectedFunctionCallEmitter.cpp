@@ -6,6 +6,7 @@
 #include "BPFunctionPinTypeMatcher.h"
 #include "BPOutputParameterStorage.h"
 #include "BPOutputPinBindingPlan.h"
+#include "BPOutputConsumerAssignmentEmitter.h"
 #include "BPSetActorLocationCallArguments.h"
 #include "BPConnectedActorLocationLowering.h"
 #include "BPBooleanPinDefaultEmitter.h"
@@ -97,6 +98,8 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         OutDiagnostics.Add(MoveTemp(Diagnostic));
         return false;
     }
+
+    TArray<FString> DeferredConsumerStatements;
 
     // 出力引数はC++側で書き込み可能な変数を必要とする。
     // 接続先がある場合は後続のデータフローと変数寿命の解決が必要なため、
@@ -265,11 +268,26 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
                     return false;
                 }
             }
-            Diagnostic.Message = FString::Printf(
-                TEXT("Connected output parameter requires data-flow lowering: %s (%d edges)"),
-                *ParameterName.ToString(), ConnectedEdges);
-            OutDiagnostics.Add(MoveTemp(Diagnostic));
-            return false;
+            // 現段階では一つのVariableSetだけを扱う。複数Consumerや
+            // 中間Execノードを省略すると実行意味が変わるため拒否する。
+            if (Binding.ConsumerPinIds.Num() != 1 || StatementOrder.Num() != 2)
+            {
+                Diagnostic.Message = TEXT("Unsupported output consumer statement chain");
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
+            FString ConsumerStatement;
+            if (FBPOutputConsumerAssignmentEmitter::Emit(
+                *CallGraph, Binding, Binding.ConsumerNodeIds[0],
+                Binding.ConsumerPinIds[0], AActor::StaticClass(),
+                ConsumerStatement, BindingError) == false)
+            {
+                Diagnostic.Message = FString::Printf(
+                    TEXT("Unsupported output consumer lowering: %s"), *BindingError);
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
+            DeferredConsumerStatements.Add(MoveTemp(ConsumerStatement));
         }
         // 未接続の出力のみ、後段で宣言と呼び出しを同時に生成する。
 
