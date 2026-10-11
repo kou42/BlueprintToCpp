@@ -14,18 +14,6 @@ const FBPIRPin* FindPin(const FBPIRNode& Node, const FName Name, const EEdGraphP
     return nullptr;
 }
 
-bool HasIncomingData(const FBPIRGraph& Graph, const FBPIRNode& Node, const FBPIRPin& Pin)
-{
-    for (const FBPIRLink& Link : Graph.DataEdges)
-    {
-        if (Link.TargetNode == Node.Id && Link.TargetPin == Pin.Id)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool ReadBool(const FBPIRPin* Pin, const bool DefaultValue, bool& OutValue, TArray<FString>& Diagnostics)
 {
     OutValue = DefaultValue;
@@ -79,7 +67,10 @@ bool FBPPrintStringAnalyzer::Analyze(const FBPGraphIR& IR, FBPPrintStringCall& O
                 Node.FunctionName == TEXT("PrintString"))
             {
                 ++PrintCount;
-                PrintString = &Node;
+                if (MatchedGraph == &Graph || BeginPlay == nullptr)
+                {
+                    PrintString = &Node;
+                }
             }
         }
     }
@@ -87,6 +78,21 @@ bool FBPPrintStringAnalyzer::Analyze(const FBPGraphIR& IR, FBPPrintStringCall& O
     if (EventCount != 1 || PrintCount != 1 || MatchedGraph == nullptr || BeginPlay == nullptr || PrintString == nullptr)
     {
         OutDiagnostics.Add(TEXT("Exactly one BeginPlay event and one PrintString call are required"));
+        return false;
+    }
+
+    // イベントと呼び出しが別グラフの場合は変換対象にしない。
+    bool bPrintInGraph = false;
+    for (const FBPIRNode& Node : MatchedGraph->Nodes)
+    {
+        if (&Node == PrintString)
+        {
+            bPrintInGraph = true;
+        }
+    }
+    if (bPrintInGraph == false)
+    {
+        OutDiagnostics.Add(TEXT("BeginPlay and PrintString must be in the same event graph"));
         return false;
     }
 
@@ -106,7 +112,7 @@ bool FBPPrintStringAnalyzer::Analyze(const FBPGraphIR& IR, FBPPrintStringCall& O
         return false;
     }
 
-    for (const FBPIRLink& Link : MatchedGraph->DataEdges)
+    if (MatchedGraph->DataEdges.IsEmpty() == false)
     {
         // データ依存の評価は未実装なので、定数へのフォールバックを禁止する。
         OutDiagnostics.Add(TEXT("Connected data inputs are not supported in PrintString MVP"));
