@@ -3,6 +3,9 @@
 #include "ContentBrowserMenuContexts.h"
 #include "Engine/Blueprint.h"
 #include "BPSnapshotExporter.h"
+#include "BPSemanticJsonSerializer.h"
+#include "BPSemanticJsonExporter.h"
+#include "Misc/EngineVersion.h"
 #include "BPGraphIR.h"
 #include "BPActorCodeGenerator.h"
 #include "BPSemanticParityChecker.h"
@@ -218,6 +221,135 @@ private:
                         FBPGeneratedCodePreview::Show(SemanticFiles, GraphIR, ClassName);
                         UE_LOG(LogBlueprintAIConverter, Display,
                             TEXT("Semantic C++ preview opened for %s"), *Blueprint->GetName());
+                    }));
+
+                // 保存前に内容を確認できるよう、JSON文字列のコピー機能を別途提供する。
+                InSection.AddMenuEntry(
+                    TEXT("BlueprintAIConverter.CopySemanticJson"),
+                    FText::FromString(TEXT("Copy Semantic JSON v2 (Preview)")),
+                    FText::FromString(TEXT("Copy Semantic JSON v2 to clipboard without writing files")),
+                    FSlateIcon(),
+                    FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
+                    {
+                        const auto* Ctx = MenuContext.FindContext<UContentBrowserAssetContextMenuContext>();
+                        if (Ctx == nullptr)
+                        {
+                            return;
+                        }
+                        if (Ctx->SelectedAssets.Num() != 1)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("Select exactly one Blueprint.")));
+                            return;
+                        }
+                        UBlueprint* Blueprint = Cast<UBlueprint>(Ctx->SelectedAssets[0].GetAsset());
+                        if (Blueprint == nullptr)
+                        {
+                            return;
+                        }
+                        FBPGraphIR GraphIR;
+                        FBPSemanticIR SemanticIR;
+                        if (FBPGraphIRBuilder::Build(Blueprint, GraphIR))
+                        {
+                            FBPSemanticLowering::LowerPrintString(GraphIR, SemanticIR);
+                        }
+                        else
+                        {
+                            SemanticIR.AssetPath = GraphIR.AssetPath;
+                            SemanticIR.ParentClassPath = GraphIR.ParentClassPath;
+                            for (const FString& Message : GraphIR.Diagnostics)
+                            {
+                                FBPSemanticDiagnostic Diagnostic;
+                                Diagnostic.Message = Message;
+                                SemanticIR.Diagnostics.Add(MoveTemp(Diagnostic));
+                            }
+                            if (SemanticIR.Diagnostics.IsEmpty())
+                            {
+                                FBPSemanticDiagnostic Diagnostic;
+                                Diagnostic.Message = TEXT("Graph IR build failed");
+                                SemanticIR.Diagnostics.Add(MoveTemp(Diagnostic));
+                            }
+                        }
+                        FString Json;
+                        if (FBPSemanticJsonSerializer::Serialize(
+                            SemanticIR, FEngineVersion::Current().ToString(), Json) == false)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("Semantic JSON serialization failed.")));
+                            return;
+                        }
+                        FPlatformApplicationMisc::ClipboardCopy(*Json);
+                        FMessageDialog::Open(EAppMsgType::Ok,
+                            FText::FromString(TEXT("Semantic JSON v2 copied to clipboard (no files written).")));
+                    }));
+
+                // Snapshot v1とは独立したSemantic JSON v2の明示的な保存導線。
+                // Loweringに失敗しても診断をJSONへ含め、失敗を成功扱いしない。
+                InSection.AddMenuEntry(
+                    TEXT("BlueprintAIConverter.ExportSemanticJson"),
+                    FText::FromString(TEXT("Export Semantic JSON v2")),
+                    FText::FromString(TEXT("Export Semantic IR and diagnostics to Saved/BlueprintSemanticJson")),
+                    FSlateIcon(),
+                    FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
+                    {
+                        const auto* Ctx = MenuContext.FindContext<UContentBrowserAssetContextMenuContext>();
+                        if (Ctx == nullptr)
+                        {
+                            return;
+                        }
+                        if (Ctx->SelectedAssets.Num() != 1)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("Select exactly one Blueprint for Semantic JSON export.")));
+                            return;
+                        }
+                        UBlueprint* Blueprint = Cast<UBlueprint>(Ctx->SelectedAssets[0].GetAsset());
+                        if (Blueprint == nullptr)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("The selected asset is not a Blueprint.")));
+                            return;
+                        }
+
+                        FBPGraphIR GraphIR;
+                        FBPSemanticIR SemanticIR;
+                        if (FBPGraphIRBuilder::Build(Blueprint, GraphIR))
+                        {
+                            // 現段階のLoweringはPrintString MVPに限定される。
+                            FBPSemanticLowering::LowerPrintString(GraphIR, SemanticIR);
+                        }
+                        else
+                        {
+                            SemanticIR.AssetPath = GraphIR.AssetPath;
+                            SemanticIR.ParentClassPath = GraphIR.ParentClassPath;
+                            for (const FString& Message : GraphIR.Diagnostics)
+                            {
+                                FBPSemanticDiagnostic Diagnostic;
+                                Diagnostic.Message = Message;
+                                SemanticIR.Diagnostics.Add(MoveTemp(Diagnostic));
+                            }
+                            if (SemanticIR.Diagnostics.IsEmpty())
+                            {
+                                FBPSemanticDiagnostic Diagnostic;
+                                Diagnostic.Message = TEXT("Graph IR build failed");
+                                SemanticIR.Diagnostics.Add(MoveTemp(Diagnostic));
+                            }
+                        }
+
+                        FString Path;
+                        FString Error;
+                        if (FBPSemanticJsonExporter::Export(
+                            SemanticIR, FEngineVersion::Current().ToString(), Path, Error) == false)
+                        {
+                            UE_LOG(LogBlueprintAIConverter, Error, TEXT("Semantic JSON export failed: %s"), *Error);
+                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Error));
+                            return;
+                        }
+                        const FString Status = SemanticIR.HasErrors() ? TEXT("unsupported") : TEXT("partial");
+                        UE_LOG(LogBlueprintAIConverter, Display,
+                            TEXT("Semantic JSON exported (%s): %s"), *Status, *Path);
+                        FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(
+                            FString::Printf(TEXT("Semantic JSON exported (%s):\n%s"), *Status, *Path)));
                     }));
 
                 InSection.AddMenuEntry(

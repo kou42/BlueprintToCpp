@@ -125,3 +125,12 @@ print(semantic["semantic_status"])
 ```
 
 この検証はJSONの構造確認であり、C++生成やBlueprintとの動作一致を保証しません。現行IRでは解析範囲の網羅性が不明なため、診断がない場合も `semantic_status=partial` として出力します。未対応・診断ありの場合は `unsupported` です。詳細は `docs/SEMANTIC_JSON_V2_DESIGN.md` を参照してください。
+
+### UE EditorからのSemantic JSON出力（実験的）
+
+Content BrowserでBlueprintを1つ選択し、右クリックから次を実行できます。
+
+- **Copy Semantic JSON v2 (Preview)**: ファイル保存せずJSON文字列をクリップボードへコピーします。
+- **Export Semantic JSON v2**: プロジェクトの `Saved/BlueprintSemanticJson/` に `.semantic.json` ファイルを保存します。
+
+現時点のSemantic LoweringはBeginPlay → PrintStringのMVPに限定されます。未対応Blueprintでも診断を含むJSONが出力されます。出力成功はC++変換成功を意味しません。UE 5.7.4でのコンパイルとAutomation Testは未確認です。
