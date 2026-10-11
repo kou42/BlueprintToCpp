@@ -12,6 +12,8 @@ struct FBPPrintStringCall
     bool bPrintToLog = true;
     float Duration = 2.0f;
     FString Key;
+    // BlueprintのPrint Stringで指定された文字色を保持する。
+    FLinearColor TextColor = FLinearColor(0.0f, 0.66f, 1.0f, 1.0f);
 };
 
 class BLUEPRINTAICONVERTER_API FBPPrintStringAnalyzer
