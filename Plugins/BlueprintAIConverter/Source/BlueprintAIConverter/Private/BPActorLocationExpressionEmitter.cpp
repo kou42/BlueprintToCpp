@@ -11,7 +11,7 @@ bool FBPActorLocationExpressionEmitter::Emit(const FBPSemanticExpression& Expres
         Expression.FunctionOwnerPath != TEXT("/Script/Engine.Actor") ||
         Expression.Type.Kind != EBPSemanticTypeKind::Struct ||
         Expression.Type.TypePath != TEXT("/Script/CoreUObject.Vector") ||
-        Expression.Type.bIsReference ||
+        Expression.Type.bIsReference || Expression.Type.bIsConst ||
         Expression.Arguments.Num() != 1)
     {
         OutDiagnostics.Add(TEXT("Unsupported Actor location expression"));
@@ -23,6 +23,7 @@ bool FBPActorLocationExpressionEmitter::Emit(const FBPSemanticExpression& Expres
         Target.VariableName != TEXT("this") ||
         Target.Type.Kind != EBPSemanticTypeKind::Object ||
         Target.Type.TypePath != TEXT("/Script/Engine.Actor") ||
+        Target.Type.bIsReference ||
         Target.Arguments.IsEmpty() == false)
     {
         OutDiagnostics.Add(TEXT("Unsupported Actor location call target"));
