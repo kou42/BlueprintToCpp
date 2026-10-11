@@ -103,7 +103,7 @@ void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files)
                         const EAppReturnType::Type Confirmation = FMessageDialog::Open(
                             EAppMsgType::YesNo,
                             FText::FromString(FString::Printf(
-                                TEXT("Create %s and %s in:\\n%s\\n\\nExisting files will not be overwritten. Continue?"),
+                                TEXT("Create %s and %s in:\n%s\n\nExisting files will not be overwritten. Continue?"),
                                 *Files.HeaderFileName, *Files.SourceFileName, *Directory)));
                         if (Confirmation != EAppReturnType::Yes)
                         {
