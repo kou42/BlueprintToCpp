@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "BPGraphIR.h"
 #include "BPFunctionSignatureResolver.h"
+#include "BPSemanticIR.h"
 
 // 検証済みの関数署名に沿って、接続された入力ピンからC++引数列を組み立てる。
 // 対象は現時点ではGetActorLocation由来のFVector入力のみ。
