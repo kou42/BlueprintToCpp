@@ -5,6 +5,8 @@
 #include "BPFunctionCallValidator.h"
 #include "BPFunctionPinTypeMatcher.h"
 #include "BPOutputParameterStorage.h"
+#include "BPOutputPinBindingPlan.h"
+#include "BPOutputConsumerAssignmentEmitter.h"
 #include "BPSetActorLocationCallArguments.h"
 #include "BPConnectedActorLocationLowering.h"
 #include "BPBooleanPinDefaultEmitter.h"
@@ -16,7 +18,26 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     const FGuid& CallNodeId, const UFunction* Function, FString& OutStatement,
     TArray<FBPSemanticDiagnostic>& OutDiagnostics)
 {
+    // 従来の呼び出し元はActorの反射情報を用いる。Blueprint固有変数の
+    // 変換時には生成対象クラスを明示する新しいオーバーロードを使う。
+    return Emit(GraphIR, CallNodeId, Function, AActor::StaticClass(),
+        OutStatement, OutDiagnostics);
+}
+
+bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
+    const FGuid& CallNodeId, const UFunction* Function,
+    const UClass* OwnerClass, FString& OutStatement,
+    TArray<FBPSemanticDiagnostic>& OutDiagnostics)
+{
     OutStatement.Reset();
+    if (OwnerClass == nullptr || OwnerClass->IsChildOf(AActor::StaticClass()) == false)
+    {
+        FBPSemanticDiagnostic Diagnostic;
+        Diagnostic.NodeId = CallNodeId;
+        Diagnostic.Message = TEXT("Invalid generated Actor owner class");
+        OutDiagnostics.Add(MoveTemp(Diagnostic));
+        return false;
+    }
 
     // 任意の反射名をそのままC++へ出力せず、変換規約が確認済みのAPIに限定する。
     if (Function == nullptr ||
@@ -97,9 +118,11 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         return false;
     }
 
+    TArray<FString> DeferredConsumerStatements;
+
     // 出力引数はC++側で書き込み可能な変数を必要とする。
-    // 接続先がある場合は後続のデータフローと変数寿命の解決が必要なため、
-    // 未接続の場合と区別して診断する。どちらも現段階では安全に拒否する。
+    // 接続先がある場合はExec順序と変数寿命を検証し、
+    // 対応済みの単一VariableSetだけを後続の代入文として生成する。
     for (int32 Index = 0; Index < Signature.OutputParameters.Num(); ++Index)
     {
         if (Signature.OutputParameters[Index] == false)
@@ -203,13 +226,87 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             OutDiagnostics.Add(MoveTemp(Diagnostic));
             return false;
         }
-        if (ConnectedEdges > 0)
+        // 出力ピンと後続入力ピンの対応をBindingPlanに集約する。
+        // 変数の寿命とExec順序が保証されるまでは接続済み出力を生成しない。
+        FBPOutputPinBinding Binding;
+        FString BindingError;
+        if (FBPOutputPinBindingPlan::Build(*CallGraph, CallNodeId,
+            OutputPin->Id, StorageName, Signature.ParameterTypes[Index],
+            Binding, BindingError) == false)
         {
             Diagnostic.Message = FString::Printf(
-                TEXT("Connected output parameter requires data-flow lowering: %s (%d edges)"),
-                *ParameterName.ToString(), ConnectedEdges);
+                TEXT("Invalid output binding plan: %s (%s)"),
+                *ParameterName.ToString(), *BindingError);
             OutDiagnostics.Add(MoveTemp(Diagnostic));
             return false;
+        }
+        if (ConnectedEdges != Binding.ConsumerPinIds.Num())
+        {
+            Diagnostic.Message = TEXT("Output binding edge count mismatch");
+            OutDiagnostics.Add(MoveTemp(Diagnostic));
+            return false;
+        }
+        if (Binding.ConsumerPinIds.IsEmpty() == false)
+        {
+            // Exec順序が証明できない出力を、後続の変数参照に渡してはいけない。
+            // 対応済みのConsumerだけを同一スコープの後続文として出力する。
+            if (FBPOutputPinBindingPlan::ValidateExecOrder(
+                *CallGraph, Binding, BindingError) == false)
+            {
+                Diagnostic.Message = FString::Printf(
+                    TEXT("Invalid output Exec order: %s (%s)"),
+                    *ParameterName.ToString(), *BindingError);
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
+            // Exec由来の文配置順を確定し、出力変数の宣言順を検証する。
+            TArray<FGuid> StatementOrder;
+            if (FBPOutputPinBindingPlan::BuildStatementOrder(
+                *CallGraph, Binding, StatementOrder, BindingError) == false)
+            {
+                Diagnostic.Message = FString::Printf(
+                    TEXT("Invalid output statement order: %s"),
+                    *BindingError);
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
+            // 実際のConsumerピンごとに参照解決を実行し、後続Loweringが
+            // 変数名を安全に受け取れることまで確認する。
+            for (int32 ConsumerIndex = 0; ConsumerIndex < Binding.ConsumerPinIds.Num(); ++ConsumerIndex)
+            {
+                FString ConsumerVariable;
+                if (FBPOutputPinBindingPlan::ResolveConsumerVariableFromExec(
+                    *CallGraph, Binding, Binding.ConsumerNodeIds[ConsumerIndex],
+                    Binding.ConsumerPinIds[ConsumerIndex],
+                    ConsumerVariable, BindingError) == false)
+                {
+                    Diagnostic.Message = FString::Printf(
+                        TEXT("Invalid output consumer variable: %s (%s)"),
+                        *ParameterName.ToString(), *BindingError);
+                    OutDiagnostics.Add(MoveTemp(Diagnostic));
+                    return false;
+                }
+            }
+            // 現段階では一つのVariableSetだけを扱う。複数Consumerや
+            // 中間Execノードを省略すると実行意味が変わるため拒否する。
+            if (Binding.ConsumerPinIds.Num() != 1 || StatementOrder.Num() != 2)
+            {
+                Diagnostic.Message = TEXT("Unsupported output consumer statement chain");
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
+            FString ConsumerStatement;
+            if (FBPOutputConsumerAssignmentEmitter::Emit(
+                *CallGraph, Binding, Binding.ConsumerNodeIds[0],
+                Binding.ConsumerPinIds[0], OwnerClass,
+                ConsumerStatement, BindingError) == false)
+            {
+                Diagnostic.Message = FString::Printf(
+                    TEXT("Unsupported output consumer lowering: %s"), *BindingError);
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
+            DeferredConsumerStatements.Add(MoveTemp(ConsumerStatement));
         }
         // 未接続の出力のみ、後段で宣言と呼び出しを同時に生成する。
 
@@ -357,5 +454,10 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     // 変数宣言と呼び出しを同じ文スコープにまとめる。
     OutStatement = FString::Printf(TEXT("%s\nK2_SetActorLocation(%s);"),
         *StorageDeclaration, *Arguments);
+    // 宣言・呼び出し・後続代入を同一スコープで順番に出力する。
+    for (const FString& ConsumerStatement : DeferredConsumerStatements)
+    {
+        OutStatement += TEXT("\n") + ConsumerStatement;
+    }
     return true;
 }

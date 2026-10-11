@@ -1,7 +1,7 @@
 # BlueprintToCpp 開発ロードマップ
 
 対象: Unreal Engine 5.7.4 / BlueprintAIConverter / PythonServer  
-更新日: 2026-10-12（Phase 2のPR #31〜#40の進捗と未検証事項を反映）
+更新日: 2026-10-12（PR #41の進捗、メンバー変数初期値、Actor以外への拡張計画を反映）
 
 ## 最終目標
 
@@ -49,7 +49,9 @@ C++ Generator（宣言・式・文・関数・クラス）
 | Editorプレビュー・保存 | **実装済み・実機での全面検証は未完** | Convert to C++ (Preview)、プロジェクトSourceへの保存経路 |
 | Snapshot JSON / PythonServer | **維持** | 比較・デバッグ・回帰検証に活用 |
 | Semantic IR / PrintString変換 | **最小縦断実装済み・実機動作未検証** | 型付きIR、Lowering、C++ Generator、比較テストを追加。汎用UFunction変換は未実装 |
-| Phase 2 UFunction呼び出し基盤 | **限定実装済み・UE実機未検証** | 反射署名・ピン検証、GetActorLocation接続Lowering、bool既定値、未接続HitResultの宣言とK2_SetActorLocation文生成、出力ピンBindingPlanを実装。接続済み出力の後続変換は未対応 |
+| Phase 2 UFunction呼び出し基盤 | **限定実装済み・UE実機未検証** | 反射署名・ピン検証、GetActorLocation接続Lowering、bool既定値、未接続HitResultの宣言とK2_SetActorLocation文生成、出力ピンBindingPlanを実装。接続済みHitResultから単一VariableSetへの限定Loweringとテストを追加（UE未検証）。実変換経路への統合は未完了 |
+| Blueprintメンバー変数・初期値 | **未対応** | 現行MVPはBlueprintVariableCount != 0を拒否。変数定義とCDOの値取得、型別C++初期化生成が必要 |
+| Actor以外のBlueprint | **未対応** | 直接Actor親のMVP制限あり。Component、UObject、Widget、Anim等は段階的に拡張 |
 | Semantic IR Editor統合 | **実装済み・実機動作未検証** | 旧経路Shadow比較と独立したSemantic Previewメニューを追加 |
 | UE 5.7.4での生成C++ビルド・動作一致 | **一部未確認** | ユーザーからビルドは問題なさそうとの報告あり。Automation Test結果・生成C++ビルド・実行時の一致は未確認 |
 
@@ -62,10 +64,10 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 | Phase 0 | **最優先** | 現行MVPの安定化・ベースライン | UE 5.7.4でBeginPlay→PrintStringを生成・ビルド・実行し、文字色や未接続Tickを含めて元BPとの動作一致を確認。回帰テストを整備 |
 | Phase 1 | **最優先** | Semantic IR設計 | Graph IRを維持しつつ、型付き式、関数呼び出し、変数参照、代入、文、基本ブロック、診断情報の表現を定義。既存MVPを移行 |
 | Phase 2 | **高** | 型解決と汎用UFunction呼び出し | UFunction / FPropertyから所有クラス、引数、戻り値、const、参照、静的/メンバー呼び出しを解決。対象関数のC++呼び出しを汎用生成し、代表的なUE APIで検証 |
-| Phase 3 | **高** | 式・変数・データフロー | リテラル、数値演算、比較、変換、Get/Set Variable、ローカル/メンバー変数、純粋ノードの依存順を扱う。循環・副作用を診断 |
+| Phase 3 | **高** | 式・変数・データフロー | リテラル、数値演算、比較、変換、Get/Set Variable、ローカル/メンバー変数、純粋ノードの依存順を扱う。変数の型・属性・初期値をVariable IRへ取り込み、CDO値の取得と安全なC++初期化を段階実装。循環・副作用を診断 |
 | Phase 4 | **高** | 制御フロー構造化 | Branch、Sequence、Return、For/WhileなどをCFGから構造化し、実行順序と分岐の意味を保存 |
 | Phase 5 | **高** | Blueprint自作関数 | FunctionGraphsを関数宣言/定義に変換。引数、戻り値、ローカル変数、関数間呼び出し、再帰・参照を段階的に対応 |
-| Phase 6 | **中** | イベント・クラス構造 | 複数イベント、イベントディスパッチャ、継承、プロパティ、コンポーネント、必要なUCLASS/UPROPERTY/UFUNCTION宣言を拡張 |
+| Phase 6 | **中** | イベント・クラス構造 | 複数イベント、イベントディスパッチャ、継承、プロパティ、コンポーネント、必要なUCLASS/UPROPERTY/UFUNCTION宣言を拡張。Actor派生 → ActorComponent/SceneComponent → UObject → Widget → Anim Blueprintの順にクラス固有のライフサイクル・生成規則を追加 |
 | Phase 7 | **中** | 特殊ノードの変換 | Cast、SpawnActor、配列/Map/Set、構造体、Interface、Macro展開、Timeline、Delay等を意味論と実装難度に応じて個別対応 |
 | Phase 8 | **並行** | Editor統合・UBT・品質保証 | 診断UI、生成差分、保存安全性、ビルド検証、Blueprint/C++動作比較、回帰テストを継続強化 |
 
@@ -106,21 +108,38 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 - [ ] GetActorLocation、SetActorLocation等の代表例を検証
 - [x] 未対応メタデータ・特殊関数を限定的に明示拒否（対象拡張とUE検証は継続）
 
+### M3-V: メンバー変数と初期値の変換（Phase 3の先行縦断実装）
+- [ ] Graph IRとは独立したVariable IRに、変数名・FProperty型・Blueprintメタデータ・編集/公開属性・初期値の出典を保持する
+- [ ] `UBlueprint::NewVariables` と `GeneratedClass` / Class Default Object（CDO）の対応を検証し、継承元プロパティとBlueprint定義変数を区別する
+- [ ] bool / 整数 / float / double / FString / FName / FText の既定値を型安全にC++へ出力する
+- [ ] FVector / FRotator / FTransform / FLinearColor、Enumの初期値を対応する型とコンストラクタ表現で生成する
+- [ ] UPROPERTYの編集・公開・カテゴリ等を実際のメタデータから復元し、ヘッダー宣言とコンストラクタ初期化を必要に応じて使い分ける
+- [ ] 配列・Set・Map・ユーザー定義Struct、Object/アセット参照は依存関係とロード規則を確認して段階対応する
+- [ ] 変換不能な値・未対応の属性・親クラス既定値との差分を黙って破棄せず診断し、Blueprintと生成C++のCDO値を比較するAutomation Testを追加する
+- [ ] 既存の `BlueprintVariableCount != 0` 制限は安全な変数生成経路が完成するまで維持し、限定ケースから解除する
+
+### M6-C: Actor以外のBlueprint対応（Phase 6）
+- [ ] Actor専用Generator/Emitterの前提を整理し、UObject共通の型解決・変数・初期値生成とクラス別コード生成を分離する
+- [ ] AActor派生の親クラスを保持する生成を検証する
+- [ ] UActorComponent / USceneComponent、UObject、UUserWidget、UAnimInstanceを順次対応し、ライフサイクルや特殊グラフは個別に検証する
+- [ ] 未対応のBlueprint種類を明示診断し、Actor MVPと旧プレビューの既定動作を維持する
+
 ### M3: 自作関数への最短経路
 - [ ] 四則演算・比較・変数・ReturnをSemantic IRで生成
 - [ ] 引数と戻り値を持つ単純なBlueprint FunctionGraphをC++へ変換
 - [ ] 関数呼び出しの参照解決と複数関数の生成を検証
 
-### M2の直近作業（PR #31〜#40実装時点・UE未検証）
-- [x] `FBPConnectedFunctionCallEmitter` とAutomation Testを追加し、CallFunctionのノードGUID一意性・署名・ピン検証を統合
-- [x] `K2_SetActorLocation` の未対応出力引数を診断してC++文の生成を拒否
-- [ ] UE 5.7.4でEmitterのAutomation Testを実行し、反射関数名・引数フラグ・診断内容を確認
-- [x] 出力ピンの接続先を検証し、未使用／使用中の区別と参照引数の生成規則を定義（UE未検証）
-- [x] bool既定値、FHitResult参照引数、K2_SetActorLocationの限定正常系と統合テストを追加（UE未検証）
-- [x] 出力ピンGUIDと生成C++変数・後続入力ピンを対応付けるBindingPlanを追加（Emitter未統合）
-- [ ] 出力引数を後続ノードが参照する場合の変数寿命とデータフローを実装
+### M2の直近作業（PR #31〜#41・UE未検証）
+- [x] `FBPConnectedFunctionCallEmitter` とAutomation Testを追加し、CallFunctionのGUID・署名・ピン検証を統合
+- [x] bool既定値、FHitResult参照引数、GetActorLocation → K2_SetActorLocationの限定生成を追加
+- [x] 出力ピンと後続入力を対応付けるBindingPlanをEmitterへ統合し、Exec順序・変数スコープを限定検証
+- [x] 接続済みSweepHitResultから単一の反射済みVariableSetへの代入Loweringと正常系/拒否系テストを追加
+- [x] 未接続selfを許可し、接続self・型不一致・不正な追加入力を拒否する検証を追加
+- [ ] UE 5.7.4でEmitter/VariableSetのAutomation Testを実行し、生成文・診断・UHT/UBTを確認
+- [ ] 生成対象Blueprintの実際のOwnerClassを渡す変換経路を設計・統合する
+- [ ] ReturnValue、複数Consumer、一般的な関数・変数型のデータフローを段階的に実装する
 
-**現時点の注意:** `GetActorLocation()` → `K2_SetActorLocation(...)` の限定的な正常系は実装したが、接続された `SweepHitResult` と `ReturnValue` の後続データフローは引き続き拒否する。BindingPlanは独立部品でありEmitterへの統合・変数寿命・Exec順序の保証は未実装。PR #31〜#40は段階的な積み重ね変更であり、UE 5.7.4のビルド・Automation Test・生成コード実行一致は未確認。
+**現時点の注意:** PR #41の接続済み出力LoweringはEmitter単体の限定ケースであり、既定のActor Generator / Semantic Previewへは未統合。Blueprint固有メンバー変数を含むグラフはMVPの制限により引き続き拒否する。UE 5.7.4のビルド・Automation Test・生成コードの動作一致は未確認。
 
 ## 実装・品質の原則
 
@@ -135,6 +154,6 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 
 ## 次の着手対象
 
-**最優先はM0/M1の実機検証とPhase 2の正常系完成。** まず `docs/SEMANTIC_IR_VERIFICATION.md` に従い、Automation Test・生成ActorのUHT/UBT・Blueprintとの実行結果を確認する。その後、出力BindingPlanのEmitter統合、戻り値・出力変数のスコープとExec順序の保証、対応する後続ノードのデータフローLoweringを段階的に実装する。
+**最優先はM0/M1の実機検証とPhase 2の正常系完成。** まず `docs/SEMANTIC_IR_VERIFICATION.md` に従い、Automation Test・生成ActorのUHT/UBT・Blueprintとの実行結果を確認する。その後、Phase 2のOwnerClass統合と限定Loweringの検証を進め、Variable IR・CDO初期値の最小縦断実装に着手する。Actor以外への対応は共通変数生成を確立したうえで段階的に行う。
 
 Semantic Previewは実験的な経路として維持し、旧Generatorの既定経路は実機検証が完了するまで切り替えない。
