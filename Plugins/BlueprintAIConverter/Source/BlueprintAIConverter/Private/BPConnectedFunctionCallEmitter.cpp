@@ -34,6 +34,16 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         return false;
     }
 
+    // 出力パラメータを省略したC++呼び出しは生成しない。
+    if (Signature.OutputParameters.Contains(true))
+    {
+        FBPSemanticDiagnostic Diagnostic;
+        Diagnostic.NodeId = CallNodeId;
+        Diagnostic.Message = TEXT("Output parameters are not supported");
+        OutDiagnostics.Add(MoveTemp(Diagnostic));
+        return false;
+    }
+
     FString Arguments;
     if (FBPConnectedFunctionArguments::Emit(GraphIR, CallNodeId, Function,
         Arguments, OutDiagnostics) == false)
