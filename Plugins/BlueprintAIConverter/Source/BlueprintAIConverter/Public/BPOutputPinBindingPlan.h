@@ -311,6 +311,23 @@ struct FBPOutputPinBindingPlan
         return true;
     }
 
+    // 呼び出し側が任意の文順序を偽装できないよう、実Execチェーンから
+    // 順序を構築したうえで入力ピンを変数参照に解決する。
+    static bool ResolveConsumerVariableFromExec(const FBPIRGraph& Graph,
+        const FBPOutputPinBinding& Binding, const FGuid& ConsumerNodeId,
+        const FGuid& ConsumerPinId, FString& OutVariableName,
+        FString& OutError)
+    {
+        OutVariableName.Reset();
+        TArray<FGuid> StatementOrder;
+        if (BuildStatementOrder(Graph, Binding, StatementOrder, OutError) == false)
+        {
+            return false;
+        }
+        return ResolveConsumerVariable(Graph, Binding, ConsumerNodeId,
+            ConsumerPinId, StatementOrder, OutVariableName, OutError);
+    }
+
     // 出力を参照するノードは、生成元のExec実行後に必ず評価されなければならない。
     // 現段階では分岐・ループ・合流を安全に証明できないため、
     // 単一のExec後続チェーンだけを受理する保守的な判定とする。
