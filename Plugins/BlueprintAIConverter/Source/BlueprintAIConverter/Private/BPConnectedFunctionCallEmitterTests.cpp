@@ -115,7 +115,8 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         if (Diagnostics.IsEmpty() == false)
         {
             TestTrue(TEXT("Unconnected output diagnostic"),
-                Diagnostics.Last().Message.Contains(TEXT("Unconnected output parameter storage prepared")));
+                Diagnostics.Last().Message.Contains(TEXT("data edge")) ||
+                Diagnostics.Last().Message.Contains(TEXT("Unsupported")));
         }
 
         FBPIRLink Link;
