@@ -101,4 +101,58 @@ bool FBPSemanticLoweringRejectTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("失敗時に関数を生成しない"), Semantic.Functions.Num(), 0);
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticLoweringStandardGraphsTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.StandardGraphs",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticLoweringStandardGraphsTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR = MakeSemanticTestGraph();
+    FBPIRGraph Construction;
+    Construction.Name = TEXT("UserConstructionScript");
+    Construction.Kind = TEXT("function");
+    FBPIRNode Entry;
+    Entry.Id = FGuid::NewGuid();
+    Entry.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry");
+    Construction.Nodes.Add(Entry);
+    IR.Graphs.Add(Construction);
+
+    FBPIRNode Tick;
+    Tick.Id = FGuid::NewGuid();
+    Tick.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_Event");
+    Tick.FunctionName = TEXT("ReceiveTick");
+    IR.Graphs[0].Nodes.Add(Tick);
+
+    FBPSemanticIR Semantic;
+    TestTrue(TEXT("空Construction Scriptと未接続Tickを許容"),
+        FBPSemanticLowering::LowerPrintString(IR, Semantic));
+    TestEqual(TEXT("BeginPlayだけ生成"), Semantic.Functions.Num(), 1);
+
+    // Construction Scriptに実行エッジが存在する場合は、意味を落とさず拒否する。
+    FBPIRLink Unsupported;
+    Unsupported.SourceNode = Entry.Id;
+    Unsupported.TargetNode = FGuid::NewGuid();
+    IR.Graphs[1].ExecEdges.Add(Unsupported);
+    TestFalse(TEXT("実行可能Construction Scriptを拒否"),
+        FBPSemanticLowering::LowerPrintString(IR, Semantic));
+    TestTrue(TEXT("失敗理由を保持"), Semantic.HasErrors());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticLoweringVariableTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.RejectMemberVariable",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticLoweringVariableTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR = MakeSemanticTestGraph();
+    IR.BlueprintVariableCount = 1;
+    FBPSemanticIR Semantic;
+    TestFalse(TEXT("未対応メンバー変数を拒否"),
+        FBPSemanticLowering::LowerPrintString(IR, Semantic));
+    TestTrue(TEXT("診断を保持"), Semantic.HasErrors());
+    TestTrue(TEXT("部分的な関数を公開しない"), Semantic.Functions.IsEmpty());
+    return true;
+}
+
 #endif
