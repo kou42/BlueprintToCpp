@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "BPGraphIR.h"
 #include "BPSemanticIR.h"
+#include "BPFunctionPinTypeMatcher.h"
 
 // 出力ピンからC++変数への対応を、実際の式生成より先に確定する。
 // データフローが未実装の段階では接続先を検証し、使用可能な変数名だけを保持する。
@@ -81,6 +82,7 @@ struct FBPOutputPinBindingPlan
                 }
             }
             if (Matches != 1 || TargetPin == nullptr ||
+                FBPFunctionPinTypeMatcher::Matches(*TargetPin, Type) == false ||
                 Consumers.Contains(Edge.TargetPin))
             {
                 OutError = TEXT("Output target missing, ambiguous or duplicated");
@@ -88,8 +90,7 @@ struct FBPOutputPinBindingPlan
             }
             Consumers.Add(Edge.TargetPin);
         }
-        // 接続先の型適合性は既存のFunctionPinTypeMatcherが担う。
-        // ここではGUIDに基づく対応と重複・方向の検証のみを担当する。
+        // 既存のFunctionPinTypeMatcherで型を照合し、型の異なる接続を拒否する。
         OutBinding.SourceNodeId = SourceNodeId;
         OutBinding.SourcePinId = SourcePinId;
         OutBinding.VariableName = VariableName;
