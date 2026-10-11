@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from .ai_provider import AIProviderError, get_ai_provider
 from .semantic_json import SemanticJsonError
+from .generated_output_validator import GeneratedOutputError, validate_generation_result
 
 router = APIRouter()
 
@@ -14,8 +15,9 @@ class AIGenerateRequest(BaseModel):
 def ai_generate(request: AIGenerateRequest) -> dict:
     try:
         result = get_ai_provider(request.provider).generate(request.semantic)
-    except (SemanticJsonError, AIProviderError) as exc:
+        files = validate_generation_result(result.status, result.files)
+    except (SemanticJsonError, AIProviderError, GeneratedOutputError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"status": result.status, "provider": result.provider,
-            "files": [{"path": f.path, "content": f.content} for f in result.files],
+            "files": list(files),
             "diagnostics": list(result.diagnostics)}
