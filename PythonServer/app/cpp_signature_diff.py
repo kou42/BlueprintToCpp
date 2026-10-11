@@ -12,7 +12,7 @@ from .output_comparison import GenerationArtifact
 _FUNCTION = re.compile(
     r"^\s*(?:(?:virtual|static|inline|FORCEINLINE)\s+)*"
     r"([A-Za-z_][\w:<>,*&\s]*?)\s+([A-Za-z_]\w*)\s*"
-    r"\(([^()]*)\)\s*(const\s+)?(override\s+)?(?:;|\{)\s*$"
+    r"\(([^()]*)\)\s*(const\b\s*)?(override\b\s*)?(?:;|\{)\s*$"
 )
 _CLASS = re.compile(r"^\s*(?:class|struct)\s+(?:\w+_API\s+)?([A-Za-z_]\w*)\b")
 
