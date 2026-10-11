@@ -55,6 +55,30 @@ struct FBPOutputConsumerAssignmentEmitter
             OutError = TEXT("Output consumer property is not writable in generated code");
             return false;
         }
+        // BlueprintのSet Variableにはselfピンが存在する場合がある。
+        // 未接続のselfは現在のインスタンスを指すため許可するが、
+        // 外部オブジェクトへの接続は代入対象が異なるため拒否する。
+        int32 SelfInputs = 0;
+        for (const FBPIRPin& Pin : Consumer->Pins)
+        {
+            if (Pin.Direction == EGPD_Input && Pin.Name == TEXT("self"))
+            {
+                ++SelfInputs;
+                for (const FBPIRLink& Edge : Graph.DataEdges)
+                {
+                    if (Edge.TargetNode == ConsumerNodeId && Edge.TargetPin == Pin.Id)
+                    {
+                        OutError = TEXT("Connected variable set self unsupported");
+                        return false;
+                    }
+                }
+            }
+        }
+        if (SelfInputs > 1)
+        {
+            OutError = TEXT("Ambiguous variable set self pin");
+            return false;
+        }
         int32 InputMatches = 0;
         int32 ValueInputs = 0;
         for (const FBPIRPin& Pin : Consumer->Pins)
@@ -64,7 +88,10 @@ struct FBPOutputConsumerAssignmentEmitter
             {
                 // selfや別の値ピンが未接続でも存在する場合は、
                 // 代入先オブジェクトなどの意味を落とさないよう拒否する。
-                ++ValueInputs;
+                if (Pin.Name != TEXT("self"))
+                {
+                    ++ValueInputs;
+                }
             }
             if (Pin.Id == ConsumerPinId && Pin.Name == Consumer->VariableName &&
                 Pin.Direction == EGPD_Input &&
