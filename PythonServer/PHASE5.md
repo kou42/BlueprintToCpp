@@ -1,24 +1,16 @@
-# Phase 5 — Typed variable declaration and literal Set MVP
+# Phase 5 — 型付き変数宣言とリテラルSetのMVP
 
-Adds preservation of `UK2Node_Variable` member names in Phase 1 snapshots,
-through the parser and IR. A strict generator handles a direct Actor Blueprint
-with one BeginPlay event and a linear sequence of VariableSet nodes assigning
-**unlinked literals**. It emits UPROPERTY members for supported bool/int/int64
-types, with restricted float support only when precision is explicitly marked.
+Phase 1のSnapshotで`UK2Node_Variable`のメンバー名を保持し、パーサーとIRまで引き継ぐ機能を追加します。厳格な生成器は、Actorを直接の親とするBlueprintで、単一のBeginPlayイベントと、**リンクされていないリテラル**を代入するVariableSetノードの直列実行を処理します。対応するbool/int/int64型のUPROPERTYメンバーを出力し、float型は精度が明示されている場合のみ制限付きで対応します。
 
-## Deliberate constraints
+## 意図的な制約
 
-- VariableGet is detected but **rejected** until data dependency resolution
-  and evaluation order are implemented.
-- Connected values, Blueprint defaults not representable as literals,
-  containers, object types, inherited members, branching and loops are rejected.
-- Blueprint variables' metadata/flags are not yet mapped to UPROPERTY specifiers;
-  the generated EditAnywhere/BlueprintReadWrite declaration is a placeholder
-  policy and must be reviewed before production use.
-- No AI generation or UBT build verification is performed.
-- Generated code may require additional integration into the target UE module.
+- VariableGetは検出しますが、データ依存関係の解決と評価順序が実装されるまでは**拒否**します。
+- リンクされた値、リテラルで表現できないBlueprintのデフォルト値、コンテナ、オブジェクト型、継承メンバー、分岐、ループは拒否します。
+- Blueprint変数のメタデータやフラグは、まだUPROPERTY指定子に対応付けていません。生成されるEditAnywhere/BlueprintReadWrite宣言は暫定方針であり、本番利用前に確認が必要です。
+- AIによる生成やUBTによるビルド検証は行いません。
+- 生成コードを対象UEモジュールへ組み込む際に、追加作業が必要になる場合があります。
 
-## Tests
+## テスト
 
 ```bash
 cd PythonServer
