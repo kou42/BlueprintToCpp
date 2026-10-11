@@ -104,6 +104,38 @@ struct FBPOutputPinBindingPlan
         return true;
     }
 
+    // 宣言と呼び出しを同じC++ブロックに置き、参照先がそのブロックの
+    // 後続文である場合だけ寿命を保証する。異なるブロック間の共有は扱わない。
+    static bool ValidateVariableScope(const FBPOutputPinBinding& Binding,
+        const TArray<FGuid>& EmittedStatementNodeIds, FString& OutError)
+    {
+        OutError.Reset();
+        if (Binding.VariableName.IsEmpty() ||
+            Binding.ConsumerNodeIds.Num() != Binding.ConsumerPinIds.Num())
+        {
+            OutError = TEXT("Invalid binding for variable scope validation");
+            return false;
+        }
+        const int32 SourceIndex = EmittedStatementNodeIds.IndexOfByKey(Binding.SourceNodeId);
+        if (SourceIndex == INDEX_NONE ||
+            EmittedStatementNodeIds.FindLast(Binding.SourceNodeId) != SourceIndex)
+        {
+            OutError = TEXT("Output source is missing or repeated in the statement block");
+            return false;
+        }
+        for (const FGuid& ConsumerId : Binding.ConsumerNodeIds)
+        {
+            const int32 ConsumerIndex = EmittedStatementNodeIds.IndexOfByKey(ConsumerId);
+            if (ConsumerIndex <= SourceIndex ||
+                EmittedStatementNodeIds.FindLast(ConsumerId) != ConsumerIndex)
+            {
+                OutError = TEXT("Output consumer is outside the source variable lifetime");
+                return false;
+            }
+        }
+        return true;
+    }
+
     // 出力を参照するノードは、生成元のExec実行後に必ず評価されなければならない。
     // 現段階では分岐・ループ・合流を安全に証明できないため、
     // 単一のExec後続チェーンだけを受理する保守的な判定とする。
