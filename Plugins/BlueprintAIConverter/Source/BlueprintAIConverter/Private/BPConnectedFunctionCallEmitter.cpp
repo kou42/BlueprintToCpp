@@ -438,7 +438,7 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     // 宣言・呼び出し・後続代入を同一スコープで順番に出力する。
     for (const FString& ConsumerStatement : DeferredConsumerStatements)
     {
-        OutStatement += TEXT("\\n") + ConsumerStatement;
+        OutStatement += TEXT("\n") + ConsumerStatement;
     }
     return true;
 }
