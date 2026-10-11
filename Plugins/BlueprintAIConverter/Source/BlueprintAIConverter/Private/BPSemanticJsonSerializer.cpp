@@ -1,0 +1,186 @@
+#include "BPSemanticJsonSerializer.h"
+
+#include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+
+namespace
+{
+FString TypeKindName(EBPSemanticTypeKind Kind)
+{
+    switch (Kind)
+    {
+    case EBPSemanticTypeKind::Unresolved: return TEXT("unresolved");
+    case EBPSemanticTypeKind::Void: return TEXT("void");
+    case EBPSemanticTypeKind::Bool: return TEXT("bool");
+    case EBPSemanticTypeKind::Int32: return TEXT("int32");
+    case EBPSemanticTypeKind::Int64: return TEXT("int64");
+    case EBPSemanticTypeKind::Float: return TEXT("float");
+    case EBPSemanticTypeKind::Double: return TEXT("double");
+    case EBPSemanticTypeKind::String: return TEXT("string");
+    case EBPSemanticTypeKind::Name: return TEXT("name");
+    case EBPSemanticTypeKind::Text: return TEXT("text");
+    case EBPSemanticTypeKind::Object: return TEXT("object");
+    case EBPSemanticTypeKind::Struct: return TEXT("struct");
+    }
+    return TEXT("unresolved");
+}
+
+FString ExpressionKindName(EBPSemanticExpressionKind Kind)
+{
+    switch (Kind)
+    {
+    case EBPSemanticExpressionKind::Literal: return TEXT("literal");
+    case EBPSemanticExpressionKind::VariableReference: return TEXT("variable_reference");
+    case EBPSemanticExpressionKind::FunctionCall: return TEXT("function_call");
+    }
+    return TEXT("literal");
+}
+
+FString StatementKindName(EBPSemanticStatementKind Kind)
+{
+    switch (Kind)
+    {
+    case EBPSemanticStatementKind::Expression: return TEXT("expression");
+    case EBPSemanticStatementKind::Assignment: return TEXT("assignment");
+    case EBPSemanticStatementKind::Return: return TEXT("return");
+    }
+    return TEXT("expression");
+}
+
+// 無効GUIDをゼロGUIDとして偽装せず、出典が存在しないことをnullで示す。
+TSharedPtr<FJsonValue> GuidValue(const FGuid& Id)
+{
+    if (Id.IsValid() == false)
+    {
+        return MakeShared<FJsonValueNull>();
+    }
+    return MakeShared<FJsonValueString>(Id.ToString(EGuidFormats::DigitsWithHyphens));
+}
+
+TSharedPtr<FJsonValue> OptionalName(FName Name)
+{
+    if (Name.IsNone())
+    {
+        return MakeShared<FJsonValueNull>();
+    }
+    return MakeShared<FJsonValueString>(Name.ToString());
+}
+
+TSharedPtr<FJsonValue> OptionalString(const FString& Value)
+{
+    if (Value.IsEmpty())
+    {
+        return MakeShared<FJsonValueNull>();
+    }
+    return MakeShared<FJsonValueString>(Value);
+}
+
+TSharedRef<FJsonObject> TypeToJson(const FBPSemanticType& Type)
+{
+    TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+    Json->SetStringField(TEXT("kind"), TypeKindName(Type.Kind));
+    Json->SetStringField(TEXT("type_path"), Type.TypePath);
+    Json->SetBoolField(TEXT("is_reference"), Type.bIsReference);
+    Json->SetBoolField(TEXT("is_const"), Type.bIsConst);
+    return Json;
+}
+
+TSharedRef<FJsonObject> ExpressionToJson(const FBPSemanticExpression& Expression)
+{
+    TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+    Json->SetStringField(TEXT("kind"), ExpressionKindName(Expression.Kind));
+    Json->SetObjectField(TEXT("type"), TypeToJson(Expression.Type));
+    Json->SetField(TEXT("source_node_id"), GuidValue(Expression.SourceNodeId));
+    Json->SetField(TEXT("source_pin_id"), GuidValue(Expression.SourcePinId));
+    // 空文字列リテラルは有効な値なので省略しない。
+    Json->SetStringField(TEXT("literal_value"), Expression.LiteralValue);
+    Json->SetField(TEXT("variable_name"), OptionalName(Expression.VariableName));
+    Json->SetField(TEXT("function_name"), OptionalName(Expression.FunctionName));
+    Json->SetField(TEXT("function_owner_path"), OptionalString(Expression.FunctionOwnerPath));
+    TArray<TSharedPtr<FJsonValue>> Arguments;
+    for (const FBPSemanticExpression& Argument : Expression.Arguments)
+    {
+        Arguments.Add(MakeShared<FJsonValueObject>(ExpressionToJson(Argument)));
+    }
+    Json->SetArrayField(TEXT("arguments"), Arguments);
+    return Json;
+}
+
+TSharedRef<FJsonObject> StatementToJson(const FBPSemanticStatement& Statement)
+{
+    TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+    Json->SetStringField(TEXT("kind"), StatementKindName(Statement.Kind));
+    Json->SetField(TEXT("source_node_id"), GuidValue(Statement.SourceNodeId));
+    Json->SetField(TEXT("assignment_target"), OptionalName(Statement.AssignmentTarget));
+    Json->SetObjectField(TEXT("expression"), ExpressionToJson(Statement.Expression));
+    return Json;
+}
+}
+
+TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& IR, const FString& EngineVersion)
+{
+    TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+    Root->SetNumberField(TEXT("schema_version"), 2);
+    Root->SetStringField(TEXT("format"), TEXT("blueprint_semantic_ir"));
+    TSharedRef<FJsonObject> Producer = MakeShared<FJsonObject>();
+    Producer->SetStringField(TEXT("name"), TEXT("BlueprintAIConverter"));
+    Producer->SetStringField(TEXT("engine_version"), EngineVersion);
+    Root->SetObjectField(TEXT("producer"), Producer);
+    TSharedRef<FJsonObject> Source = MakeShared<FJsonObject>();
+    Source->SetStringField(TEXT("asset_path"), IR.AssetPath);
+    Source->SetStringField(TEXT("parent_class_path"), IR.ParentClassPath);
+    Source->SetNumberField(TEXT("snapshot_schema_version"), 1);
+    Root->SetObjectField(TEXT("source"), Source);
+
+    // 現行IRは解析対象全体の網羅性を証明できない。成功時もpartialとし、AIによる過信を防ぐ。
+    Root->SetStringField(TEXT("semantic_status"), IR.HasErrors() ? TEXT("unsupported") : TEXT("partial"));
+
+    TArray<TSharedPtr<FJsonValue>> Functions;
+    for (const FBPSemanticFunction& Function : IR.Functions)
+    {
+        TSharedRef<FJsonObject> FunctionJson = MakeShared<FJsonObject>();
+        FunctionJson->SetStringField(TEXT("name"), Function.Name.ToString());
+        FunctionJson->SetObjectField(TEXT("return_type"), TypeToJson(Function.ReturnType));
+        TArray<TSharedPtr<FJsonValue>> Blocks;
+        for (const FBPSemanticBasicBlock& Block : Function.Blocks)
+        {
+            TSharedRef<FJsonObject> BlockJson = MakeShared<FJsonObject>();
+            BlockJson->SetField(TEXT("source_entry_node_id"), GuidValue(Block.SourceEntryNodeId));
+            TArray<TSharedPtr<FJsonValue>> Statements;
+            for (const FBPSemanticStatement& Statement : Block.Statements)
+            {
+                Statements.Add(MakeShared<FJsonValueObject>(StatementToJson(Statement)));
+            }
+            BlockJson->SetArrayField(TEXT("statements"), Statements);
+            Blocks.Add(MakeShared<FJsonValueObject>(BlockJson));
+        }
+        FunctionJson->SetArrayField(TEXT("blocks"), Blocks);
+        Functions.Add(MakeShared<FJsonValueObject>(FunctionJson));
+    }
+    Root->SetArrayField(TEXT("functions"), Functions);
+
+    TArray<TSharedPtr<FJsonValue>> Diagnostics;
+    for (const FBPSemanticDiagnostic& Diagnostic : IR.Diagnostics)
+    {
+        TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        // 現行IRはseverity/codeを持たず、HasErrorsは全診断をエラーとして扱う。
+        Json->SetStringField(TEXT("severity"), TEXT("error"));
+        Json->SetStringField(TEXT("code"), TEXT("SEMANTIC_LOWERING_ERROR"));
+        Json->SetStringField(TEXT("graph_name"), Diagnostic.GraphName);
+        Json->SetField(TEXT("node_id"), GuidValue(Diagnostic.NodeId));
+        Json->SetField(TEXT("pin_id"), GuidValue(Diagnostic.PinId));
+        Json->SetStringField(TEXT("message"), Diagnostic.Message);
+        Diagnostics.Add(MakeShared<FJsonValueObject>(Json));
+    }
+    Root->SetArrayField(TEXT("diagnostics"), Diagnostics);
+    return Root;
+}
+
+bool FBPSemanticJsonSerializer::Serialize(const FBPSemanticIR& IR, const FString& EngineVersion, FString& OutJson)
+{
+    OutJson.Reset();
+    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutJson);
+    return FJsonSerializer::Serialize(ToJson(IR, EngineVersion), Writer);
+}
