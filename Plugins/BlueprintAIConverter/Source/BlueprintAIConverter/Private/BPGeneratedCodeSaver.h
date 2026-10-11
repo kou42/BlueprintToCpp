@@ -8,6 +8,10 @@
 class FBPGeneratedCodeSaver
 {
 public:
+    // 既存の二つのディレクトリへ分割保存する。上書きと片方だけの保存を防止。
+    static bool SaveNewFilesSplit(const FBPGeneratedActorFiles& Files,
+        const FString& HeaderDirectory, const FString& SourceDirectory, FString& OutError);
+
     static bool SaveNewFiles(const FBPGeneratedActorFiles& Files,
         const FString& Directory, FString& OutError);
 };

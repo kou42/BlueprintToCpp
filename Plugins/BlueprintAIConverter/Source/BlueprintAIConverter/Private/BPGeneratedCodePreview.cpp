@@ -4,6 +4,7 @@
 #include "IDesktopPlatform.h"
 #include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
+#include "HAL/FileManager.h"
 
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformApplicationMisc.h"
@@ -15,7 +16,8 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/SBoxPanel.h"
 
-void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files)
+void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files,
+    const FBPGraphIR& IR, const FString& ClassName)
 {
     // 生成結果は値として保持し、元Blueprintの変更・破棄の影響を受けない。
     const FString Header = Files.HeaderContent;
@@ -119,6 +121,75 @@ void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files)
                         {
                             FMessageDialog::Open(EAppMsgType::Ok,
                                 FText::FromString(TEXT("Both generated files were saved successfully.")));
+                        }
+                        return FReply::Handled();
+                    })
+                ]
+                + SHorizontalBox::Slot()
+                .AutoWidth()
+                .Padding(0.0f, 0.0f, 8.0f, 0.0f)
+                [
+                    SNew(SButton)
+                    .Text(FText::FromString(TEXT("Save to Module...")))
+                    .OnClicked_Lambda([IR, ClassName, Window]()
+                    {
+                        IDesktopPlatform* Desktop = FDesktopPlatformModule::Get();
+                        if (Desktop == nullptr)
+                        {
+                            return FReply::Handled();
+                        }
+                        FString ModuleRoot;
+                        if (Desktop->OpenDirectoryDialog(nullptr,
+                                TEXT("Select a Source module folder containing ModuleName.Build.cs"),
+                                FPaths::ProjectSourceDir(), ModuleRoot) == false)
+                        {
+                            return FReply::Handled();
+                        }
+                        FPaths::NormalizeDirectoryName(ModuleRoot);
+                        const FString ModuleName = FPaths::GetCleanFilename(ModuleRoot);
+                        const FString ProjectSource = FPaths::ConvertRelativePathToFull(FPaths::ProjectSourceDir());
+                        FString Root = FPaths::ConvertRelativePathToFull(ModuleRoot);
+                        FPaths::NormalizeDirectoryName(Root);
+                        // 選択されたパスを必ずProject/Source配下に限定する。
+                        FString Prefix = ProjectSource;
+                        FPaths::NormalizeDirectoryName(Prefix);
+                        Prefix += TEXT("/");
+                        if (Root.StartsWith(Prefix) == false ||
+                            IFileManager::Get().FileExists(*FPaths::Combine(Root, ModuleName + TEXT(".Build.cs"))) == false)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("Select an existing module under Project/Source.")));
+                            return FReply::Handled();
+                        }
+                        // 公開ヘッダーの参照関係を保つため、両ディレクトリは既存のみ許可する。
+                        const FString HeaderDir = FPaths::Combine(Root, TEXT("Public"));
+                        const FString SourceDir = FPaths::Combine(Root, TEXT("Private"));
+                        FBPGeneratedActorFiles ModuleFiles;
+                        TArray<FString> Diagnostics;
+                        if (FBPActorCodeGenerator::Generate(IR, ClassName,
+                                ModuleName.ToUpper() + TEXT("_API"), ModuleFiles, Diagnostics) == false)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(FString::Join(Diagnostics, TEXT("\\n"))));
+                            return FReply::Handled();
+                        }
+                        if (FMessageDialog::Open(EAppMsgType::YesNo,
+                                FText::FromString(FString::Printf(
+                                    TEXT("Save %s to Public and %s to Private of module %s? Existing files will not be overwritten."),
+                                    *ModuleFiles.HeaderFileName, *ModuleFiles.SourceFileName, *ModuleName))) != EAppReturnType::Yes)
+                        {
+                            return FReply::Handled();
+                        }
+                        FString Error;
+                        if (FBPGeneratedCodeSaver::SaveNewFilesSplit(
+                                ModuleFiles, HeaderDir, SourceDir, Error) == false)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Error));
+                        }
+                        else
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("C++ files saved to module Public and Private.")));
                         }
                         return FReply::Handled();
                     })
