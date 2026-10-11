@@ -5,6 +5,7 @@
 #include "BPSnapshotExporter.h"
 #include "BPGraphIR.h"
 #include "BPActorCodeGenerator.h"
+#include "BPGeneratedCodePreview.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "Misc/MessageDialog.h"
 
@@ -60,11 +61,11 @@ private:
                     return;
                 }
                 // 既存のJSON Exportとは独立した、C++直接解析の最小Editor導線。
-                // ファイルへの書き込みは行わず、生成結果をクリップボードに渡す。
+                // ファイルへの書き込みは行わず、生成結果をSlate画面で確認する。
                 InSection.AddMenuEntry(
                     TEXT("BlueprintAIConverter.CopyGeneratedCpp"),
-                    FText::FromString(TEXT("Convert to C++ (Copy Preview)")),
-                    FText::FromString(TEXT("Generate a minimal Actor C++ preview and copy both files to clipboard (no files written)")),
+                    FText::FromString(TEXT("Convert to C++ (Preview)")),
+                    FText::FromString(TEXT("Preview generated Actor C++ files in a read-only window (no files written)")),
                     FSlateIcon(),
                     FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
                     {
@@ -109,19 +110,12 @@ private:
                             return;
                         }
 
-                        // ヘッダーとソースを分かるように区切る。保存や上書きは行わない。
-                        const FString Preview = FString::Printf(
-                            TEXT("// ===== %s =====\\n%s\\n// ===== %s =====\\n%s"),
-                            *Files.HeaderFileName, *Files.HeaderContent,
-                            *Files.SourceFileName, *Files.SourceContent);
-                        FPlatformApplicationMisc::ClipboardCopy(*Preview);
+                        // 生成内容は読み取り専用の別ウィンドウで表示する。
+                        // コピー操作はウィンドウ内の個別ボタンから行える。
+                        FBPGeneratedCodePreview::Show(Files);
                         UE_LOG(LogBlueprintAIConverter, Display,
-                            TEXT("C++ preview copied for %s: %s, %s"),
+                            TEXT("C++ preview opened for %s: %s, %s"),
                             *Blueprint->GetName(), *Files.HeaderFileName, *Files.SourceFileName);
-                        FMessageDialog::Open(EAppMsgType::Ok,
-                            FText::FromString(FString::Printf(
-                                TEXT("C++ preview copied to clipboard.\\nFiles: %s and %s\\nNo files were written.\\nReview the code before using it."),
-                                *Files.HeaderFileName, *Files.SourceFileName)));
                     }));
 
                 InSection.AddMenuEntry(
