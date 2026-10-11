@@ -192,3 +192,10 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 ## D3: 関数内の処理順序比較（試験実装）
 
 `POST /compare` の `effects` では、`.cpp` の単純な1行関数開始宣言と、その本体にある単純な関数呼び出し・代入文の**出現順序**を比較します。異なる順序や式は `statement_sequence_changed` として返します。分岐、ループ、複雑な式など未対応構文は `incomplete` と診断します。これは副作用の可能性を示すレビュー補助であり、実際の副作用、制御フロー、Blueprintとの動作一致を証明しません。
+
+
+## D4: レビュー後の修正・再比較（保存なし）
+
+`POST /review/recompare` は `original` に従来の `POST /compare` と同じ `direct` / `ai` を受け取り、`revision` に `target`（`direct` または `ai`）、`revised`（修正後の生成結果）、`note`（人間による修正理由）、`expected_direct_fingerprint`、`expected_ai_fingerprint` を受け取ります。指紋が元の生成結果と違う場合はHTTP 409を返します。正常時は `before` / `after` の全比較結果とレビュー情報を返します。
+
+**重要:** 修正候補は検証しますが、ディスク保存、履歴永続化、AI自動修正、承認操作はしません。`review.approved` は常に `false` であり、差分が消えても正しさやBlueprintとの意味的同値性を保証しません。UHT/UBT・動作テストと人間による最終レビューが必要です。
