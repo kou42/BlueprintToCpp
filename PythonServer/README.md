@@ -215,3 +215,10 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 `GET /review/records?limit=50&offset=0` は保存済みレビューの概要を新しい順に返し、`latest_decision`（`pending` / `approved` / `rejected`）と判定件数を含みます。コード本体は一覧には含めません。`GET /review/records/{id}/status` は、そのレビューに紐づく承認・却下イベントを時系列で返します。最新判定は保存イベントの作成時刻とIDに基づき集約し、元のレビューJSONは変更しません。
 
 ファイル数に比例して読み込みコストが増えるため、小規模なローカル利用向けです。認証・アクセス制御・複数プロセスでの厳密な順序保証はまだありません。外部公開しないでください。
+
+
+## V2: UHT/UBTの外部検証証跡
+
+`POST /review/records/{id}/verification` で、`reviewer`、`tool`（`uht` / `ubt`）、`outcome`（`passed` / `failed` / `not_run`）、`evidence_reference`、`summary`、`expected_revised_fingerprint` を送ると、そのレビューに対応する外部検証結果をJSONイベントとして保存します。`GET /review/records/{id}/verification` で各ツールの最新の提出結果と全イベントを取得できます。未提出の場合は `not_recorded` と表示します。
+
+**注意:** APIはUHT/UBTを実行しません。結果は利用者が提出した申告値であり、真正性の検証・ログの読み込み・署名検証・自動承認は行いません。機密コードを扱うため、引き続き信頼できるローカル環境だけで使用してください。
