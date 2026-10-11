@@ -155,4 +155,52 @@ bool FBPSemanticLoweringVariableTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticLoweringInvalidOptionsTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.RejectInvalidOptions",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticLoweringInvalidOptionsTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR = MakeSemanticTestGraph();
+    FBPIRPin Color;
+    Color.Name = TEXT("TextColor");
+    Color.Direction = EGPD_Input;
+    Color.DefaultValue = TEXT("(R=nan,G=0,B=0,A=1)");
+    IR.Graphs[0].Nodes[1].Pins.Add(Color);
+
+    FBPSemanticIR Semantic;
+    TestFalse(TEXT("非有限な色を拒否"),
+        FBPSemanticLowering::LowerPrintString(IR, Semantic));
+    TestTrue(TEXT("色エラーの診断あり"), Semantic.HasErrors());
+    TestTrue(TEXT("失敗時に関数を生成しない"), Semantic.Functions.IsEmpty());
+
+    IR.Graphs[0].Nodes[1].Pins.Last().DefaultValue = TEXT("(R=1,G=0.5,B=0,A=1)");
+    FBPIRPin Screen;
+    Screen.Name = TEXT("bPrintToScreen");
+    Screen.Direction = EGPD_Input;
+    Screen.DefaultValue = TEXT("maybe");
+    IR.Graphs[0].Nodes[1].Pins.Add(Screen);
+    TestFalse(TEXT("不正な真偽値を拒否"),
+        FBPSemanticLowering::LowerPrintString(IR, Semantic));
+    TestTrue(TEXT("真偽値エラーの診断あり"), Semantic.HasErrors());
+    TestTrue(TEXT("失敗時に関数を生成しない"), Semantic.Functions.IsEmpty());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticLoweringGraphDiagnosticsTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.RejectGraphDiagnostics",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticLoweringGraphDiagnosticsTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR = MakeSemanticTestGraph();
+    IR.Diagnostics.Add(TEXT("Graph IR contains unsupported data"));
+    FBPSemanticIR Semantic;
+    TestFalse(TEXT("Graph IR診断がある場合は拒否"),
+        FBPSemanticLowering::LowerPrintString(IR, Semantic));
+    TestTrue(TEXT("診断をSemantic IRへ引き継ぐ"), Semantic.HasErrors());
+    TestTrue(TEXT("不完全な関数を残さない"), Semantic.Functions.IsEmpty());
+    return true;
+}
+
 #endif
