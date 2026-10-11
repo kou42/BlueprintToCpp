@@ -97,6 +97,13 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         }
         IR.Graphs[0].Nodes[0].Pins.Add(Pin);
     }
+    // K2_SetActorLocationはbool戻り値を持つため、Validator用のピンを明示する。
+    FBPIRPin ReturnPin;
+    ReturnPin.Id = FGuid::NewGuid();
+    ReturnPin.Name = TEXT("ReturnValue");
+    ReturnPin.Direction = EGPD_Output;
+    ReturnPin.Category = UEdGraphSchema_K2::PC_Boolean;
+    IR.Graphs[0].Nodes[0].Pins.Add(ReturnPin);
     const FBPIRPin* OutputPin = IR.Graphs[0].Nodes[0].Pins.FindByPredicate(
         [](const FBPIRPin& Pin) { return Pin.Name == TEXT("SweepHitResult"); });
     if (TestNotNull(TEXT("SweepHitResult output pin"), OutputPin))
