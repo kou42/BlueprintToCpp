@@ -170,3 +170,10 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 ```
 
 返却値は `status`（`identical` / `different` / `unavailable`）、`files`（`identical` / `modified` / `direct_only` / `ai_only` と変更時の `diff`）、`diagnostics`、各出力のSHA-256 fingerprintです。`equivalent` は現段階では常に `null` であり、**テキスト一致はC++の正しさやBlueprintとの意味一致を保証しません。** Mockや片側失敗時は `unavailable` となります。パス・ファイル内容は既存Validatorで検証されます。社内コードの送信先を増やさないよう、ローカルホスト上での利用を想定します。
+
+
+## D3: C++ヘッダー宣言の限定的な構造比較
+
+`POST /compare` のレスポンスに `structure` を追加します。生成済みの両側の `.h` / `.hpp` から、単純なクラス名・関数宣言・変数宣言を抽出し、片側だけにある宣言を `differences` に返します。`structure.status` は `different`、`no_detected_difference`、`unavailable` のいずれかです。
+
+この段階では正規表現による**限定的な補助検査**であり、複雑なテンプレート、複数行宣言、マクロ展開、関数本体、実行順、副作用、C++の意味的同値性は解析できません。`no_detected_difference` は合格や同値の証明ではありません。最終採用にはUHT/UBTとBlueprintの動作検証が必要です。
