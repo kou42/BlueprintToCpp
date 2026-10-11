@@ -1,7 +1,7 @@
 # BlueprintToCpp 開発ロードマップ
 
 対象: Unreal Engine 5.7.4 / BlueprintAIConverter / PythonServer  
-更新日: 2026-10-12
+更新日: 2026-10-12（Semantic IR Phase 1実装状況を反映）
 
 ## 最終目標
 
@@ -48,10 +48,11 @@ C++ Generator（宣言・式・文・関数・クラス）
 | 標準グラフ・イベントの判定 | **限定的に実装済み** | 空Construction Script、未接続Event Tickの一部を許容 |
 | Editorプレビュー・保存 | **実装済み・実機での全面検証は未完** | Convert to C++ (Preview)、プロジェクトSourceへの保存経路 |
 | Snapshot JSON / PythonServer | **維持** | 比較・デバッグ・回帰検証に活用 |
-| Semantic IR / 汎用関数変換 | **未実装** | 次の最優先課題 |
-| UE 5.7.4での生成C++ビルド・動作一致 | **未確認** | 実機検証を必須とする |
+| Semantic IR / PrintString変換 | **最小縦断実装済み・実機動作未検証** | 型付きIR、Lowering、C++ Generator、比較テストを追加。汎用UFunction変換は未実装 |
+| Semantic IR Editor統合 | **実装済み・実機動作未検証** | 旧経路Shadow比較と独立したSemantic Previewメニューを追加 |
+| UE 5.7.4での生成C++ビルド・動作一致 | **一部未確認** | ユーザーからビルドは問題なさそうとの報告あり。Automation Test結果・生成C++ビルド・実行時の一致は未確認 |
 
-GitHubへのコミットとUEでのコンパイル成功・動作確認は区別する。上記の「実装済み」は実機での正常動作を保証しない。
+GitHubへのコミットとUEでのコンパイル成功・動作確認は区別する。ユーザーからのビルド状況の共有は参考情報として記録し、Automation Test・生成C++のUHT/UBT・実行時の意味一致を別途検証する。
 
 ## 更新版フェーズ
 
@@ -90,10 +91,13 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 - [ ] 成功/失敗ケースの自動テストと再現用Blueprintを整備する
 
 ### M1: Semantic IRの最小縦断実装
-- [ ] 型・式・関数呼び出し・文・基本ブロックのデータ構造を設計
-- [ ] Graph IRからSemantic IRへBeginPlay→PrintStringをLowering
-- [ ] 既存のPrintString専用Analyzerとの結果一致をテスト
-- [ ] 新Generatorで同等の.h/.cppを生成し、UEでビルド確認
+- [x] 型・式・関数呼び出し・文・基本ブロックのデータ構造を設計
+- [x] Graph IRからSemantic IRへBeginPlay→PrintStringをLowering
+- [x] 既存のPrintString専用Analyzerとの比較テストを追加（テスト実行の合格確認は別途）
+- [x] Semantic IRからActorの.h/.cppを生成する経路と旧経路の比較機構を実装
+- [x] Shadow ModeとSemantic専用Editor Previewを追加
+- [ ] 新旧生成結果のAutomation Test合格を確認
+- [ ] 新Generatorで生成した.h/.cppのUEビルド・実行一致を確認
 
 ### M2: 汎用関数呼び出しの実証
 - [ ] UFunction/FProperty解決とC++署名の検証を実装
@@ -119,4 +123,6 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 
 ## 次の着手対象
 
-**Phase 0のUE実機検証を完了させた上で、Phase 1のSemantic IR最小実装に着手する。** 以後のノード追加は原則としてSemantic IRを経由させ、PrintString専用ロジックの横展開を避ける。
+**最優先はM0/M1の実機検証の完了とPhase 2の着手。** まず `docs/SEMANTIC_IR_VERIFICATION.md` に従い、Automation Test・生成ActorのUHT/UBT・Blueprintとの実行結果を確認する。その後、UFunction/FPropertyによる関数署名の解決、未対応メタデータの診断、GetActorLocation等の限定的な汎用関数Loweringを順に実装する。
+
+Semantic Previewは実験的な経路として維持し、旧Generatorの既定経路は実機検証が完了するまで切り替えない。
