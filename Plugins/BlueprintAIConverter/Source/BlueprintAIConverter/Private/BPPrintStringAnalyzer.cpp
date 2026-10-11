@@ -43,6 +43,7 @@ bool FBPPrintStringAnalyzer::Analyze(const FBPGraphIR& IR, FBPPrintStringCall& O
     OutDiagnostics.Append(IR.Diagnostics);
 
     const FBPIRGraph* MatchedGraph = nullptr;
+    const FBPIRGraph* PrintGraph = nullptr;
     const FBPIRNode* BeginPlay = nullptr;
     const FBPIRNode* PrintString = nullptr;
     int32 EventCount = 0;
@@ -67,10 +68,8 @@ bool FBPPrintStringAnalyzer::Analyze(const FBPGraphIR& IR, FBPPrintStringCall& O
                 Node.FunctionName == TEXT("PrintString"))
             {
                 ++PrintCount;
-                if (MatchedGraph == &Graph || BeginPlay == nullptr)
-                {
-                    PrintString = &Node;
-                }
+                PrintString = &Node;
+                PrintGraph = &Graph;
             }
         }
     }
@@ -81,16 +80,8 @@ bool FBPPrintStringAnalyzer::Analyze(const FBPGraphIR& IR, FBPPrintStringCall& O
         return false;
     }
 
-    // イベントと呼び出しが別グラフの場合は変換対象にしない。
-    bool bPrintInGraph = false;
-    for (const FBPIRNode& Node : MatchedGraph->Nodes)
-    {
-        if (&Node == PrintString)
-        {
-            bPrintInGraph = true;
-        }
-    }
-    if (bPrintInGraph == false)
+    // ポインタの一致で同一グラフを検証し、別グラフのノードを誤参照しない。
+    if (PrintGraph != MatchedGraph)
     {
         OutDiagnostics.Add(TEXT("BeginPlay and PrintString must be in the same event graph"));
         return false;
@@ -128,6 +119,21 @@ bool FBPPrintStringAnalyzer::Analyze(const FBPGraphIR& IR, FBPPrintStringCall& O
         }
     }
 
+    // 未知のピンを黙って無視するとBlueprintと生成コードの意味がずれる。
+    for (const FBPIRPin& Pin : PrintString->Pins)
+    {
+        const FName Name = Pin.Name;
+        if (Name != TEXT("execute") && Name != TEXT("then") &&
+            Name != TEXT("self") && Name != TEXT("InString") &&
+            Name != TEXT("bPrintToScreen") && Name != TEXT("bPrintToLog") &&
+            Name != TEXT("TextColor") && Name != TEXT("Duration") &&
+            Name != TEXT("Key") && Name != TEXT("WorldContextObject"))
+        {
+            OutDiagnostics.Add(FString::Printf(TEXT("Unsupported PrintString pin: %s"), *Name.ToString()));
+            return false;
+        }
+    }
+
     OutCall.InString = InString->DefaultValue;
 
     const FBPIRPin* PrintToScreen = FindPin(*PrintString, TEXT("bPrintToScreen"), EGPD_Input);
@@ -141,7 +147,8 @@ bool FBPPrintStringAnalyzer::Analyze(const FBPGraphIR& IR, FBPPrintStringCall& O
     const FBPIRPin* Duration = FindPin(*PrintString, TEXT("Duration"), EGPD_Input);
     if (Duration != nullptr && Duration->DefaultValue.IsEmpty() == false)
     {
-        if (LexTryParseString(OutCall.Duration, *Duration->DefaultValue) == false)
+        if (LexTryParseString(OutCall.Duration, *Duration->DefaultValue) == false ||
+            FMath::IsFinite(OutCall.Duration) == false)
         {
             OutDiagnostics.Add(TEXT("PrintString.Duration is not a valid float"));
             return false;
@@ -156,8 +163,9 @@ bool FBPPrintStringAnalyzer::Analyze(const FBPGraphIR& IR, FBPPrintStringCall& O
 
     // WorldContextObjectは通常自動解決されるが、明示値の意味はまだ保証できない。
     const FBPIRPin* WorldContext = FindPin(*PrintString, TEXT("WorldContextObject"), EGPD_Input);
-    if (WorldContext != nullptr && WorldContext->DefaultObjectPath.IsEmpty() == false &&
-        WorldContext->DefaultObjectPath != TEXT("None"))
+    if (WorldContext != nullptr &&
+        ((WorldContext->DefaultObjectPath.IsEmpty() == false && WorldContext->DefaultObjectPath != TEXT("None")) ||
+         WorldContext->DefaultValue.IsEmpty() == false))
     {
         OutDiagnostics.Add(TEXT("Explicit WorldContextObject is not supported"));
         return false;

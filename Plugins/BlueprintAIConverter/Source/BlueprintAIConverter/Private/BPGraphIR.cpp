@@ -125,6 +125,7 @@ bool FBPGraphIRBuilder::Build(const UBlueprint* Blueprint, FBPGraphIR& OutIR)
 
     OutIR.AssetPath = Blueprint->GetPathName();
     OutIR.ParentClassPath = GetPathNameSafe(Blueprint->ParentClass);
+    OutIR.BlueprintVariableCount = Blueprint->NewVariables.Num();
 
     for (const UEdGraph* Graph : Blueprint->UbergraphPages)
     {
