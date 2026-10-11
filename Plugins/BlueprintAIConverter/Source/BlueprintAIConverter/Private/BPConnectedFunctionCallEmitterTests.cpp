@@ -244,6 +244,14 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Connected output diagnostic"),
                 Diagnostics.Last().Message.Contains(TEXT("Connected output parameter")));
         }
+        // Exec順序が正しくても、接続先ピンの所属・型が不正なら
+        // Emitterは参照解決に進む前に安全に拒否する。
+        IR.Graphs[0].Nodes.Last().Pins[0].Direction = EGPD_Output;
+        Diagnostics.Reset();
+        TestFalse(TEXT("Emitter rejects reversed consumer pin"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        TestTrue(TEXT("Emitter clears statement on invalid consumer"), Statement.IsEmpty());
+        IR.Graphs[0].Nodes.Last().Pins[0].Direction = EGPD_Input;
         // 以下は独立した順序検証テストのため、EmitterテストのExecリンクを除去する。
         IR.Graphs[0].ExecEdges.Reset();
         // 接続先の実行順序が保証されるか、生成前に独立して検証する。
