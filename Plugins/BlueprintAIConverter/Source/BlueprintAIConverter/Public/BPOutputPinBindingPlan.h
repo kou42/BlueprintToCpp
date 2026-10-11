@@ -166,6 +166,23 @@ struct FBPOutputPinBindingPlan
             OutError = TEXT("Output consumer is missing or ambiguous");
             return false;
         }
+        // 保存済みBindingが別のGraphに使い回されても、実際の接続を再検証する。
+        int32 MatchingEdges = 0;
+        for (const FBPIRLink& Edge : Graph.DataEdges)
+        {
+            if (Edge.SourceNode == Binding.SourceNodeId &&
+                Edge.SourcePin == Binding.SourcePinId &&
+                Edge.TargetNode == ConsumerNodeId &&
+                Edge.TargetPin == ConsumerPinId)
+            {
+                ++MatchingEdges;
+            }
+        }
+        if (MatchingEdges != 1)
+        {
+            OutError = TEXT("Output consumer data edge is missing or duplicated");
+            return false;
+        }
         if (ValidateExecOrder(Graph, Binding, OutError) == false ||
             ValidateVariableScope(Binding, EmittedStatementNodeIds, OutError) == false)
         {
