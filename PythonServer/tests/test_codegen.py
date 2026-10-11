@@ -126,3 +126,55 @@ def test_print_string_rejects_explicit_world_context():
     raw["graphs"][0]["nodes"][1]["pins"][3]["default_value"] = "ExplicitContext"
     with pytest.raises(UnsupportedNodeError, match="explicit WorldContextObject"):
         generate_cpp(parse_snapshot(raw))
+
+
+@pytest.mark.parametrize(
+    ("screen", "log", "expected"),
+    [
+        ("true", "false", "true, false"),
+        ("false", "true", "false, true"),
+        ("false", "false", "false, false"),
+        ("true", "true", "true, true"),
+    ],
+)
+def test_print_string_boolean_output_flags(screen, log, expected):
+    raw = begin_play_snapshot()
+    event = raw["graphs"][0]["nodes"][0]
+    event["pins"][0]["links"] = [{"node_id": "print", "pin_id": "execute"}]
+    screen_pin = pin("bPrintToScreen", "input", "bool")
+    screen_pin["default_value"] = screen
+    log_pin = pin("bPrintToLog", "input", "bool")
+    log_pin["default_value"] = log
+    raw["graphs"][0]["nodes"].append({
+        "id": "print", "class": "/Script/BlueprintGraph.K2Node_CallFunction",
+        "title": "Print String", "function_name": "PrintString",
+        "pins": [
+            pin("execute", "input", "exec", [("begin", "then")]),
+            pin("then", "output", "exec"),
+            pin("InString", "input", "string"),
+            screen_pin, log_pin,
+        ],
+    })
+    cpp = generate_cpp(parse_snapshot(raw))["files"][1]["content"]
+    assert f'{expected});' in cpp
+
+
+def test_print_string_rejects_invalid_boolean_default():
+    raw = begin_play_snapshot()
+    raw["graphs"][0]["nodes"][0]["pins"][0]["links"] = [
+        {"node_id": "print", "pin_id": "execute"}
+    ]
+    screen_pin = pin("bPrintToScreen", "input", "bool")
+    screen_pin["default_value"] = "maybe"
+    raw["graphs"][0]["nodes"].append({
+        "id": "print", "class": "/Script/BlueprintGraph.K2Node_CallFunction",
+        "title": "Print String", "function_name": "PrintString",
+        "pins": [
+            pin("execute", "input", "exec", [("begin", "then")]),
+            pin("then", "output", "exec"),
+            pin("InString", "input", "string"),
+            screen_pin,
+        ],
+    })
+    with pytest.raises(UnsupportedNodeError, match="invalid bPrintToScreen"):
+        generate_cpp(parse_snapshot(raw))

@@ -73,14 +73,28 @@ def _print_string(ctx: ConversionContext) -> str:
     for edge in ctx.graph["data_edges"]:
         if edge["target_node"] == node["id"]:
             raise UnsupportedNodeError(f"{node['id']}: linked PrintString data inputs unsupported")
-    # Do not silently ignore non-default optional inputs.
+    # BlueprintのboolリテラルをC++へ変換し、画面／ログ出力設定を保持する。
+    # 空値はUEのPrintStringの標準デフォルト（両方true）として扱う。
+    bool_values = {}
+    for name in ("bPrintToScreen", "bPrintToLog"):
+        matching = [p for p in pins if p["name"] == name and p["direction"] == "input"]
+        if len(matching) > 1:
+            raise UnsupportedNodeError(f"{node['id']}: duplicate {name} pin")
+        value = matching[0].get("default_value", "") if matching else ""
+        if value == "":
+            bool_values[name] = "true"
+        elif value.lower() in ("true", "false"):
+            bool_values[name] = value.lower()
+        else:
+            raise UnsupportedNodeError(f"{node['id']}: invalid {name} bool default {value!r}")
+    # 色・表示時間・キーは意味を検証できるまで明示値を拒否する。
     for p in pins:
-        if p["direction"] == "input" and p["name"] in ("bPrintToScreen", "bPrintToLog",
-                                                       "TextColor", "Duration", "Key"):
+        if p["direction"] == "input" and p["name"] in ("TextColor", "Duration", "Key"):
             if p.get("default_value") not in ("", None):
                 raise UnsupportedNodeError(
                     f"{node['id']}: explicit {p['name']} default requires semantic handling")
-    return f"    UKismetSystemLibrary::PrintString(this, {_cpp_string(text['default_value'])});"
+    return (f"    UKismetSystemLibrary::PrintString(this, {_cpp_string(text['default_value'])}, "
+            f"{bool_values['bPrintToScreen']}, {bool_values['bPrintToLog']});")
 
 
 def _is_class(node: dict, name: str) -> bool:
