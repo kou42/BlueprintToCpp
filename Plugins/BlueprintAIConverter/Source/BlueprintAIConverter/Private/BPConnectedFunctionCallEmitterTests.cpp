@@ -3,6 +3,7 @@
 #include "BPConnectedFunctionCallEmitter.h"
 #include "BPOutputPinBindingPlan.h"
 #include "BPOutputConsumerAssignmentEmitter.h"
+#include "BPEmitterTestActor.h"
 #include "GameFramework/Actor.h"
 #include "Components/ActorComponent.h"
 #include "EdGraphSchema_K2.h"
@@ -180,6 +181,49 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Teleport argument preserved"),
             Statement.Contains(TEXT(", false);")));
         TestTrue(TEXT("Successful emission has no diagnostics"), Diagnostics.IsEmpty());
+        // 正常系: HitResult出力を同じActorの反射済みメンバーへ代入する。
+        // 宣言、関数呼び出し、後続の代入がこの順に実際の改行で生成されることを確認する。
+        FBPIRNode PositiveConsumer;
+        PositiveConsumer.Id = FGuid::NewGuid();
+        PositiveConsumer.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_VariableSet");
+        PositiveConsumer.VariableName = TEXT("TestHitResult");
+        FBPIRPin PositiveInput;
+        PositiveInput.Id = FGuid::NewGuid();
+        PositiveInput.Name = TEXT("TestHitResult");
+        PositiveInput.Direction = EGPD_Input;
+        PositiveInput.Category = UEdGraphSchema_K2::PC_Struct;
+        PositiveInput.SubCategoryObjectPath = OutputTypePath;
+        PositiveConsumer.Pins.Add(PositiveInput);
+        IR.Graphs[0].Nodes.Add(PositiveConsumer);
+        FBPIRLink PositiveDataEdge;
+        PositiveDataEdge.SourceNode = CallId;
+        PositiveDataEdge.SourcePin = OutputPinId;
+        PositiveDataEdge.TargetNode = PositiveConsumer.Id;
+        PositiveDataEdge.TargetPin = PositiveInput.Id;
+        IR.Graphs[0].DataEdges.Add(PositiveDataEdge);
+        FBPIRLink PositiveExecEdge;
+        PositiveExecEdge.SourceNode = CallId;
+        PositiveExecEdge.SourcePin = FGuid::NewGuid();
+        PositiveExecEdge.TargetNode = PositiveConsumer.Id;
+        PositiveExecEdge.TargetPin = FGuid::NewGuid();
+        IR.Graphs[0].ExecEdges.Add(PositiveExecEdge);
+        Diagnostics.Reset();
+        Statement.Reset();
+        TestTrue(TEXT("Reflected HitResult variable set emitted"),
+            FBPConnectedFunctionCallEmitter::Emit(
+                IR, CallId, Function, ABPEmitterTestActor::StaticClass(),
+                Statement, Diagnostics));
+        const int32 DeclarationPos = Statement.Find(TEXT("FHitResult BP_Hit_"));
+        const int32 CallPos = Statement.Find(TEXT("\nK2_SetActorLocation("));
+        const int32 AssignmentPos = Statement.Find(TEXT("\nTestHitResult = BP_Hit_"));
+        TestTrue(TEXT("Declaration precedes call and assignment"),
+            DeclarationPos != INDEX_NONE && CallPos > DeclarationPos &&
+            AssignmentPos > CallPos);
+        TestTrue(TEXT("Positive lowering has no diagnostics"), Diagnostics.IsEmpty());
+        IR.Graphs[0].ExecEdges.Pop();
+        IR.Graphs[0].DataEdges.Pop();
+        IR.Graphs[0].Nodes.Pop();
+
         // 戻り値を利用するグラフは、結果の保持が未実装なので拒否する。
         FBPIRLink ReturnLink;
         ReturnLink.SourceNode = CallId;
