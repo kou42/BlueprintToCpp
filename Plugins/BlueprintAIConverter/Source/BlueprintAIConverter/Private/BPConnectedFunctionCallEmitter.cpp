@@ -34,6 +34,27 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         return false;
     }
 
+    // 呼び出しノードが存在しない場合は署名の詳細より先に構造エラーを報告する。
+    int32 CallMatches = 0;
+    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    {
+        for (const FBPIRNode& Node : Graph.Nodes)
+        {
+            if (Node.Id == CallNodeId)
+            {
+                ++CallMatches;
+            }
+        }
+    }
+    if (CallMatches != 1)
+    {
+        FBPSemanticDiagnostic Diagnostic;
+        Diagnostic.NodeId = CallNodeId;
+        Diagnostic.Message = TEXT("Call node missing or ambiguous");
+        OutDiagnostics.Add(MoveTemp(Diagnostic));
+        return false;
+    }
+
     // 出力パラメータに対応するピンの接続先を検証するまでは生成しない。
     // 引数数と型を事前に確認し、エラーメッセージを明確にする。
     if (Signature.ParameterNames.Num() != Signature.ParameterTypes.Num() ||
