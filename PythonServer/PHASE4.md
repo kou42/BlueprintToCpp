@@ -1,15 +1,10 @@
-# Phase 4 — Typed Branch MVP
+# Phase 4 — 型付きBranchのMVP
 
-Extends the Phase 3 restricted generator with a **single** `K2Node_IfThenElse`
-following `ReceiveBeginPlay`, with a **literal unlinked bool Condition**
-and up to one `PrintString` leaf per True/False arm.
+Phase 3の制限付き生成器を拡張し、`ReceiveBeginPlay`の後に**単一の**`K2Node_IfThenElse`を配置できるようにします。条件は**リンクされていないboolリテラルのCondition**に限り、True/Falseの各分岐先には最大1つの`PrintString`を配置できます。
 
-The new `typed_ir.py` retains a typed BoolLiteral and branch source pin
-identity. `generator_dispatch.py` selects a strict generator based on the
-presence of a Branch node. It does not silently fall back when conversion
-fails. The API remains `POST /generate`.
+新しい`typed_ir.py`は型付きの`BoolLiteral`と分岐元ピンの識別情報を保持します。`generator_dispatch.py`はBranchノードの有無に応じて厳格な生成器を選択します。変換失敗時に黙って別の生成器へフォールバックすることはありません。APIは引き続き`POST /generate`です。
 
-## Tests
+## テスト
 
 ```bash
 cd PythonServer
@@ -17,12 +12,12 @@ python -m pip install -e ".[test,api]"
 python -m pytest -q
 ```
 
-## Deferred deliberately
+## 意図的に後回しにしている項目
 
-- Connected Branch conditions, variables, numeric expressions and type coercion.
-- General-purpose CFG structuring, nested branches, merge points and loops.
-- Arbitrary function calls and signature resolution.
-- UE-specific default pin semantics and complete PrintString optional inputs.
-- UBT compile, runtime behavior equivalence and AI-assisted code generation.
+- リンクされたBranch条件、変数、数値式、型変換。
+- 汎用的な制御フローグラフ（CFG）の構造化、入れ子の分岐、合流点、ループ。
+- 任意の関数呼び出しとシグネチャ解決。
+- UE固有のピンのデフォルト値の意味、およびPrintStringのオプション入力への完全対応。
+- UBTコンパイル、実行時の動作一致検証、AI支援によるコード生成。
 
-No UE 5.7 engine compilation or Python test run has been performed here.
+この段階ではUE 5.7エンジンでのコンパイルもPythonテストの実行も行われていません。
