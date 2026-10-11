@@ -156,8 +156,23 @@ bool FBPActorCodeGenerator::Generate(const FBPGraphIR& IR, const FString& ClassN
         Duration += TEXT(".0");
     }
     Duration += TEXT("f");
+    // 色成分はSanitizeFloatでC++数値リテラルへ変換し、整数にも小数点を付ける。
+    const auto ColorComponent = [](float Value) -> FString
+    {
+        FString Result = FString::SanitizeFloat(Value);
+        if (Result.Contains(TEXT(".")) == false &&
+            Result.Contains(TEXT("e"), ESearchCase::IgnoreCase) == false)
+        {
+            Result += TEXT(".0");
+        }
+        return Result + TEXT("f");
+    };
+    const FString Red = ColorComponent(Call.TextColor.R);
+    const FString Green = ColorComponent(Call.TextColor.G);
+    const FString Blue = ColorComponent(Call.TextColor.B);
+    const FString Alpha = ColorComponent(Call.TextColor.A);
     OutFiles.SourceContent = FString::Printf(
-        TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(0.0f, 0.66f, 1.0f), %s, TEXT(\"%s\"));\n}\n"),
-        *BaseName, *ClassName, *EscapedText, Screen, Log, *Duration, *EscapedKey);
+        TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n}\n"),
+        *BaseName, *ClassName, *EscapedText, Screen, Log, *Red, *Green, *Blue, *Alpha, *Duration, *EscapedKey);
     return true;
 }
