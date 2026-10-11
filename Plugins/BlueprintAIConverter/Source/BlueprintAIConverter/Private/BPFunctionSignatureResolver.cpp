@@ -126,7 +126,9 @@ bool FBPFunctionSignatureResolver::Resolve(const UFunction* Function,
         // OutParmだけでは非const参照とは限らない。両フラグを独立して保持する。
         Candidate.ParameterNames.Add(Property->GetFName());
         Candidate.ParameterTypes.Add(Type);
-        Candidate.OutputParameters.Add(Property->HasAnyPropertyFlags(CPF_OutParm));
+        // const参照の入力引数はOutParmが立つ場合もあるため、出力とは区別する。
+        Candidate.OutputParameters.Add(Property->HasAnyPropertyFlags(CPF_OutParm) &&
+            Property->HasAnyPropertyFlags(CPF_ConstParm) == false);
     }
 
     if (bValid == false)
