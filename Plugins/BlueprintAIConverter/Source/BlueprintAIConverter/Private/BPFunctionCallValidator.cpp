@@ -82,6 +82,40 @@ bool FBPFunctionCallValidator::Validate(const FBPIRNode& Node, const UFunction* 
         }
     }
 
+    // void関数にReturnValueが存在する場合は、未対応の出力を黙って破棄しない。
+    if (Candidate.ReturnType.Kind == EBPSemanticTypeKind::Void)
+    {
+        for (const FBPIRPin& Pin : Node.Pins)
+        {
+            if (Pin.Name == TEXT("ReturnValue"))
+            {
+                OutDiagnostics.Add(TEXT("Void function must not have ReturnValue pin"));
+                return false;
+            }
+        }
+    }
+
+    // selfピンはインスタンス関数の入力に限定する。
+    int32 SelfPins = 0;
+    for (const FBPIRPin& Pin : Node.Pins)
+    {
+        if (Pin.Name == TEXT("self"))
+        {
+            ++SelfPins;
+            if (Candidate.bStatic || Pin.Direction != EGPD_Input ||
+                Pin.Category == UEdGraphSchema_K2::PC_Exec)
+            {
+                OutDiagnostics.Add(TEXT("Invalid self pin"));
+                return false;
+            }
+        }
+    }
+    if (SelfPins > 1)
+    {
+        OutDiagnostics.Add(TEXT("Duplicate self pins"));
+        return false;
+    }
+
     // 未知のデータピンを黙って無視すると引数や出力が欠落する。
     for (const FBPIRPin& Pin : Node.Pins)
     {
