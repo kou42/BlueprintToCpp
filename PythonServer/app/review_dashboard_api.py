@@ -21,9 +21,9 @@ def get_review_dashboard(limit: int = 10) -> dict:
         raise HTTPException(status_code=422, detail="limit must be 1..100")
 
     records = list_records()
-    summaries = _summarize(records)
     reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
     event_index = index_verification_events(records)
+    summaries = _summarize(records, event_index)
     attention: list[dict] = []
     pending = 0
     blocked = 0
