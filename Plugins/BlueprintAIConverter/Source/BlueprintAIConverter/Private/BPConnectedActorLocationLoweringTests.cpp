@@ -54,11 +54,22 @@ bool FBPConnectedActorLocationTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Resolved source pin"), Expression.SourcePinId, Return.Id);
     TestEqual(TEXT("Resolved call name"), Expression.FunctionName, FName(TEXT("K2_GetActorLocation")));
 
+    FString Cpp;
+    Diagnostics.Reset();
+    TestTrue(TEXT("Connected location emits C++"),
+        FBPConnectedActorLocationLowering::EmitInputCpp(IR, Target.Id, Input.Id,
+            Cpp, Diagnostics));
+    TestEqual(TEXT("Connected C++ expression"), Cpp, FString(TEXT("GetActorLocation()")));
+
     IR.Graphs[0].Nodes[1].Pins[0].SubCategoryObjectPath = TEXT("/Script/CoreUObject.Rotator");
     Diagnostics.Reset();
     TestFalse(TEXT("Mismatched input type rejected"),
         FBPConnectedActorLocationLowering::LowerInput(IR, Target.Id, Input.Id,
             Expression, Diagnostics));
+    TestFalse(TEXT("Invalid connection does not emit C++"),
+        FBPConnectedActorLocationLowering::EmitInputCpp(IR, Target.Id, Input.Id,
+            Cpp, Diagnostics));
+    TestTrue(TEXT("Invalid connection clears C++"), Cpp.IsEmpty());
     TestTrue(TEXT("Failure clears semantic expression"),
         Expression.Type.Kind == EBPSemanticTypeKind::Unresolved);
     return true;
