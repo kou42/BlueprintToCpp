@@ -121,8 +121,8 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     TArray<FString> DeferredConsumerStatements;
 
     // 出力引数はC++側で書き込み可能な変数を必要とする。
-    // 接続先がある場合は後続のデータフローと変数寿命の解決が必要なため、
-    // 未接続の場合と区別して診断する。どちらも現段階では安全に拒否する。
+    // 接続先がある場合はExec順序と変数寿命を検証し、
+    // 対応済みの単一VariableSetだけを後続の代入文として生成する。。
     for (int32 Index = 0; Index < Signature.OutputParameters.Num(); ++Index)
     {
         if (Signature.OutputParameters[Index] == false)
