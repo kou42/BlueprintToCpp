@@ -199,3 +199,12 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 `POST /review/recompare` は `original` に従来の `POST /compare` と同じ `direct` / `ai` を受け取り、`revision` に `target`（`direct` または `ai`）、`revised`（修正後の生成結果）、`note`（人間による修正理由）、`expected_direct_fingerprint`、`expected_ai_fingerprint` を受け取ります。指紋が元の生成結果と違う場合はHTTP 409を返します。正常時は `before` / `after` の全比較結果とレビュー情報を返します。
 
 **重要:** 修正候補は検証しますが、ディスク保存、履歴永続化、AI自動修正、承認操作はしません。`review.approved` は常に `false` であり、差分が消えても正しさやBlueprintとの意味的同値性を保証しません。UHT/UBT・動作テストと人間による最終レビューが必要です。
+
+
+## D4: レビュー履歴のJSON保存と人間による判定
+
+`POST /review/records` に `{ "request": <POST /review/recompare のリクエスト>, "reviewer": "担当者" }` を送ると、再比較結果をJSONとして保存します。`GET /review/records/{id}` で取得できます。保存先は環境変数 `BLUEPRINT_TO_CPP_REVIEW_STORE` で指定し、省略時は実行ディレクトリの `review_records` です。修正前後のコードも保存するため、機密情報の扱いとディレクトリ権限に注意してください。
+
+`POST /review/records/{id}/decision` には `reviewer`、`decision`（`approved` / `rejected`）、`reason`、`expected_revised_fingerprint` を指定します。判定は元のレビュー記録を上書きせず、独立したイベントとして保存されます。元のレビュー記録は `pending` のままです。**承認は人間の明示的な入力のみ**であり、UHT/UBT・Blueprint動作検証は別途必要です。
+
+現段階のAPIには認証・アクセス制御・判定イベントの一覧取得・単一の最新承認状態集約・複数プロセス間の整合性保証はありません。**信頼できるローカル環境に限定**し、外部公開しないでください。
