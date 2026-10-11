@@ -4,6 +4,7 @@
 #include "BPFunctionSignatureResolver.h"
 #include "BPFunctionCallValidator.h"
 #include "GameFramework/Actor.h"
+#include "EdGraphSchema_K2.h"
 #include "UObject/Class.h"
 
 bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
@@ -130,6 +131,38 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         {
             if (Edge.SourceNode == CallNodeId && Edge.SourcePin == OutputPin->Id)
             {
+                // 接続先が同じグラフに存在し、入力データピンであることを確認する。
+                // 存在しないノードやExecピンを参照するIRを有効なデータフローと数えない。
+                const FBPIRPin* TargetPin = nullptr;
+                int32 TargetMatches = 0;
+                for (const FBPIRNode& TargetNode : CallGraph->Nodes)
+                {
+                    if (TargetNode.Id == Edge.TargetNode)
+                    {
+                        for (const FBPIRPin& Pin : TargetNode.Pins)
+                        {
+                            if (Pin.Id == Edge.TargetPin)
+                            {
+                                ++TargetMatches;
+                                TargetPin = &Pin;
+                            }
+                        }
+                    }
+                }
+                if (TargetMatches != 1 || TargetPin == nullptr ||
+                    TargetPin->Direction != EGPD_Input ||
+                    TargetPin->Category == UEdGraphSchema_K2::PC_Exec)
+                {
+                    FBPSemanticDiagnostic Diagnostic;
+                    Diagnostic.GraphName = CallGraphName;
+                    Diagnostic.NodeId = CallNodeId;
+                    Diagnostic.PinId = OutputPin->Id;
+                    Diagnostic.Message = FString::Printf(
+                        TEXT("Invalid output parameter data edge target: %s"),
+                        *ParameterName.ToString());
+                    OutDiagnostics.Add(MoveTemp(Diagnostic));
+                    return false;
+                }
                 ++ConnectedEdges;
             }
             // 逆方向のリンクも不正なIRとして拒否する。
