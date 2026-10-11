@@ -156,3 +156,17 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 ```
 
 この例はAPI形式の説明用であり、実際の変換にはUEからエクスポートした意味情報を使用してください。応答は既存の共通Validatorで検証されます。現段階ではC++のコンパイル、意味一致、APIの実通信は未検証です。特に `partial` は未解析領域を含むため、生成結果を自動適用しないでください。認証のないローカルAPIを外部ネットワークに公開しないでください。
+
+
+## D1/D2: Direct / AI生成結果の差分比較API（実験的）
+
+`POST /compare` は既存の `/generate` と `/ai/generate` のレスポンスから、`status`・`files`・`diagnostics` を取り出して比較します。**APIは生成やAI通信、ファイル保存を行いません。**
+
+```json
+{
+  "direct": {"status": "generated", "files": [{"path": "Example.cpp", "content": "int x = 1;\n"}], "diagnostics": []},
+  "ai": {"status": "generated", "files": [{"path": "Example.cpp", "content": "int x = 2;\n"}], "diagnostics": []}
+}
+```
+
+返却値は `status`（`identical` / `different` / `unavailable`）、`files`（`identical` / `modified` / `direct_only` / `ai_only` と変更時の `diff`）、`diagnostics`、各出力のSHA-256 fingerprintです。`equivalent` は現段階では常に `null` であり、**テキスト一致はC++の正しさやBlueprintとの意味一致を保証しません。** Mockや片側失敗時は `unavailable` となります。パス・ファイル内容は既存Validatorで検証されます。社内コードの送信先を増やさないよう、ローカルホスト上での利用を想定します。
