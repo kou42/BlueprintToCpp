@@ -38,6 +38,18 @@ Actor派生Blueprintを作成し、Event BeginPlayからPrint StringへExec接�
 6. **Save to Module...** では選択モジュールの `Public` / `Private` 配下へ出力し、UEで再ビルドする。
 7. 元Blueprintと生成Actorを同じ条件で実行し、表示文字列、画面/ログ、色、Duration、Keyの挙動を比較する。
 
+## 2a. Semantic専用プレビュー（新規）
+
+Content BrowserでActor Blueprintを1つ選択し、**Convert to C++ (Semantic Preview)** を実行する。
+このメニューはGraph IR → Semantic IR → C++ Generatorを直接使用する。
+旧メニューの **Convert to C++ (Preview)** は引き続き旧Generatorの出力を表示する。
+
+1. 両メニューで同じBlueprintをプレビューし、ヘッダー名・ソース名・生成内容を比較する。
+2. PrintStringの文字列、色、Duration、Key、画面/ログ設定を変更し、両経路の一致を確認する。
+3. 未対応のデータ接続や追加ノードを含むBlueprintでは、Semantic Previewが診断を表示して停止することを確認する。
+4. Semantic Previewは表示時にファイルを書き込まない。ただし、**既存のプレビュー画面にある保存ボタンは利用可能**なので、保存する場合は出力先と既存ファイル保護を確認する。
+5. 旧プレビューのShadow比較ログも併せて確認し、差異があれば新経路への正式切り替えを保留する。
+
 ## 3. 拒否ケース
 
 - 未接続Event Tick: 変換成功すること
