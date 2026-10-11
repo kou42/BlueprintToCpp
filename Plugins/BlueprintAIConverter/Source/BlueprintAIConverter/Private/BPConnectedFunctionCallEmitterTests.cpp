@@ -221,6 +221,22 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         Consumer.Pins.Add(ConsumerInput);
         IR.Graphs[0].Nodes.Add(Consumer);
         Diagnostics.Reset();
+        TestFalse(TEXT("Connected output without Exec order rejected"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        TestTrue(TEXT("Missing Exec order clears output"), Statement.IsEmpty());
+        if (Diagnostics.IsEmpty() == false)
+        {
+            TestTrue(TEXT("Missing Exec order diagnostic"),
+                Diagnostics.Last().Message.Contains(TEXT("Invalid output Exec order")));
+        }
+        // 接続済み出力のデータフローは、Exec順序が正しくてもまだ生成しない。
+        FBPIRLink OrderedExecLink;
+        OrderedExecLink.SourceNode = CallId;
+        OrderedExecLink.TargetNode = Consumer.Id;
+        OrderedExecLink.SourcePin = FGuid::NewGuid();
+        OrderedExecLink.TargetPin = FGuid::NewGuid();
+        IR.Graphs[0].ExecEdges.Add(OrderedExecLink);
+        Diagnostics.Reset();
         TestFalse(TEXT("Connected output rejected"),
             FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
         if (Diagnostics.IsEmpty() == false)
@@ -305,6 +321,7 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Exec destination diagnostic"),
                 Diagnostics.Last().Message.Contains(TEXT("Invalid output parameter data edge target")));
         }
+        IR.Graphs[0].ExecEdges.Reset();
         IR.Graphs[0].Nodes.Pop();
         IR.Graphs[0].DataEdges.Reset();
         IR.Graphs[0].Nodes.Pop();
