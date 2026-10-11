@@ -1,0 +1,40 @@
+"""Optional FastAPI service: install with pip install -e '.[api]'."""
+from typing import Any
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from .schemas import SnapshotError, parse_snapshot
+from .graph_analyzer import analyze_snapshot
+from .ir_builder import build_ir
+
+app = FastAPI(title="BlueprintToCpp Analyzer", version="0.2.0")
+
+
+class AnalyzeRequest(BaseModel):
+    snapshot: dict[str, Any]
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/analyze")
+def analyze(request: AnalyzeRequest) -> dict:
+    try:
+        snapshot = parse_snapshot(request.snapshot)
+        graphs = analyze_snapshot(snapshot)
+        return {
+            "status": "ok",
+            "asset_path": snapshot.asset_path,
+            "graphs": [{
+                "path": graph.path,
+                "nodes": graph.node_count,
+                "exec_edges": len(graph.exec_edges),
+                "data_edges": len(graph.data_edges),
+                "entry_nodes": list(graph.entry_nodes),
+            } for graph in graphs],
+            "ir": build_ir(snapshot),
+        }
+    except SnapshotError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
