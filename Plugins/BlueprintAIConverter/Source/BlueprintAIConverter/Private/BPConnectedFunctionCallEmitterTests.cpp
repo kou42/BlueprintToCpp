@@ -280,6 +280,21 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
                 IR.Graphs[0], Binding, Consumer.Id, FGuid::NewGuid(),
                 ValidStatementOrder, ResolvedVariable, BindingError));
         TestTrue(TEXT("Failed variable resolution clears output"), ResolvedVariable.IsEmpty());
+        // Binding作成後にDataEdgeが変更された場合、古い変数参照を許可しない。
+        IR.Graphs[0].DataEdges.Pop();
+        ResolvedVariable = TEXT("stale");
+        TestFalse(TEXT("Stale consumer edge rejected"),
+            FBPOutputPinBindingPlan::ResolveConsumerVariable(
+                IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
+                ValidStatementOrder, ResolvedVariable, BindingError));
+        TestTrue(TEXT("Stale edge clears variable"), ResolvedVariable.IsEmpty());
+        IR.Graphs[0].DataEdges.Add(Link);
+        IR.Graphs[0].DataEdges.Add(Link);
+        TestFalse(TEXT("Duplicate consumer edge rejected at resolution"),
+            FBPOutputPinBindingPlan::ResolveConsumerVariable(
+                IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
+                ValidStatementOrder, ResolvedVariable, BindingError));
+        IR.Graphs[0].DataEdges.Pop();
         TArray<FGuid> InvalidStatementOrder;
         InvalidStatementOrder.Add(Consumer.Id);
         InvalidStatementOrder.Add(CallId);
