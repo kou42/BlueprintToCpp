@@ -78,10 +78,21 @@ def generate_cpp(snapshot: Snapshot, class_name: str = "AGeneratedBlueprintActor
     if snapshot.variables:
         raise UnsupportedNodeError("MVP does not yet generate Blueprint member variables")
     ir = build_ir(snapshot)
-    if len(ir["graphs"]) != 1 or ir["graphs"][0]["kind"] != "event":
+    # 全グラフの接続整合性は build_ir で検証済み。
+    # 実行線を持たないイベントは実行されないため、変換対象から除外する。
+    event_graphs = [g for g in ir["graphs"] if g["kind"] == "event"]
+    if len(event_graphs) != 1:
         raise UnsupportedNodeError("MVP requires exactly one EventGraph")
-    graph = ir["graphs"][0]
+    graph = event_graphs[0]
     nodes = {n["id"]: n for n in graph["nodes"]}
+    active = {e["source_node"] for e in graph["exec_edges"]} | {e["target_node"] for e in graph["exec_edges"]}
+    for node in nodes.values():
+        if _is_class(node, "K2Node_Event") and node["id"] not in active:
+            # 未接続イベントはC++に副作用を生まない。
+            continue
+    nodes = {nid: n for nid, n in nodes.items()
+             if nid in active or not _is_class(n, "K2Node_Event")
+             or n.get("function_name") == "ReceiveBeginPlay"}
     if not nodes:
         raise UnsupportedNodeError("empty event graph")
     if graph["data_edges"]:

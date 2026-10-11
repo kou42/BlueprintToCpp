@@ -68,3 +68,24 @@ def test_registry_fails_closed():
     registry = NodeConverterRegistry()
     with pytest.raises(UnsupportedNodeError):
         registry.convert(type("Context", (), {"node": {"class": "Unknown"}})())
+
+
+def test_disconnected_tick_does_not_block_begin_play():
+    raw = begin_play_snapshot()
+    raw["graphs"][0]["nodes"].append({
+        "id": "tick", "class": "/Script/BlueprintGraph.K2Node_Event",
+        "title": "Event Tick", "function_name": "ReceiveTick",
+        "pins": [pin("then", "output", "exec")],
+    })
+    cpp = generate_cpp(parse_snapshot(raw))["files"][1]["content"]
+    assert "Super::BeginPlay();" in cpp
+
+
+def test_additional_empty_function_graph_is_analyzed():
+    raw = begin_play_snapshot()
+    raw["graphs"].append({
+        "name": "UnusedFunction", "path": "/Game/BP_Test.BP_Test:UnusedFunction",
+        "kind": "function", "nodes": [],
+    })
+    result = generate_cpp(parse_snapshot(raw))
+    assert result["status"] == "generated"
