@@ -21,7 +21,8 @@ def build_ir(snapshot: Snapshot) -> dict:
                 "id": node.id,
                 "class": node.node_class,
                 "title": node.title,
-                "function_name": node.function_name,\n                "variable_name": node.variable_name,
+                "function_name": node.function_name,
+                "variable_name": node.variable_name,
                 "pins": [{
                     "id": pin.id,
                     "name": pin.name,
