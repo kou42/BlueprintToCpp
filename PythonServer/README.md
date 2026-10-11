@@ -140,3 +140,9 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 実験用の `POST /ai/generate` は `{"semantic": <Semantic JSON v2>, "provider": "mock"}` を受け付けます。既存の `POST /generate` とは独立しています。
 
 `mock` は構造検証だけを行い、外部AIへの通信やC++生成はしません。入力が `partial` または `complete` なら `status: "mocked"`、`unsupported` なら `status: "rejected"` を返し、どちらも `files: []` です。未知のProviderや不正JSONはHTTP 422になります。現段階では実AI Provider、APIキー管理、コード生成結果の検証は未実装です。
+
+## 生成結果の共通Validator
+
+`app.generated_output_validator` は `/generate` と `/ai/generate` のレスポンスを返す前にファイルパス・内容・状態を検証します。相対パスのみ許可し、拡張子は `.h`、`.hpp`、`.cpp` に限定します。ファイル数は最大32、各ファイルの文字数は最大2,000,000、パス長は最大240文字です。
+
+これは保存前の入力検証であり、C++コードの安全性、UHT/UBTビルド、Blueprintとの意味一致、保存時のシンボリックリンク対策は保証しません。保存機能の実装時には保存先ディレクトリを固定し、書き込み直前にもパス検証が必要です。
