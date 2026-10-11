@@ -50,6 +50,22 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Output parameter is identified"),
             Diagnostics[0].Message.Contains(TEXT("SweepHitResult")));
     }
+    // 同じGUIDのノードが複数存在する場合も安全に拒否する。
+    IR.Graphs[0].Nodes.Add(Call);
+    Diagnostics.Reset();
+    Statement = TEXT("stale");
+    TestFalse(TEXT("Duplicate call GUID rejected"),
+        FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+    TestTrue(TEXT("Duplicate call clears statement"), Statement.IsEmpty());
+    if (Diagnostics.IsEmpty() == false)
+    {
+        TestTrue(TEXT("Duplicate call diagnostic"),
+            Diagnostics[0].Message.Contains(TEXT("ambiguous")));
+    }
+    else
+    {
+        AddError(TEXT("Duplicate call must produce a diagnostic"));
+    }
     return true;
 }
 #endif
