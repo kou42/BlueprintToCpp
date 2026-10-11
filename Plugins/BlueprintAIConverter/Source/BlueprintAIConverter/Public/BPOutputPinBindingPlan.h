@@ -140,6 +140,19 @@ struct FBPOutputPinBindingPlan
                 {
                     break;
                 }
+                // 合流点には生成元を通らない別経路があり得るため拒否する。
+                int32 IncomingCount = 0;
+                for (const FBPIRLink& Edge : Graph.ExecEdges)
+                {
+                    if (Edge.TargetNode == NextNodeId)
+                    {
+                        ++IncomingCount;
+                    }
+                }
+                if (IncomingCount != 1)
+                {
+                    break;
+                }
                 if (NextNodeId == ConsumerNodeId)
                 {
                     bReached = true;
