@@ -182,3 +182,8 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 ## D3: Unreal Reflection差分（試験実装）
 
 `POST /compare` の `reflection` フィールドでは、`.h` / `.hpp` 内の単一行 `UCLASS` / `USTRUCT` / `UFUNCTION` / `UPROPERTY` と、その直後の宣言を対応付け、マクロの欠落やspecifier文字列の違いを検出します。対応できない複数行宣言などがあれば `status: incomplete` と診断を返します。マクロ展開、複雑な引数、C++ AST、関数本体や実行時の意味は検証できません。比較結果だけで自動承認しないでください。
+
+
+## D3: 関数シグネチャ差分（試験実装）
+
+`POST /compare` の `signatures` フィールドで、ヘッダー内の単純な1行メンバー関数宣言を比較します。戻り値・引数の文字列表現・`const`・`override` の差分を報告します。同名オーバーロードや複数行宣言など、正確に扱えない構文は `incomplete` と診断します。C++ ASTや実行時の意味的同値性の検証ではありません。
