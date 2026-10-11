@@ -295,6 +295,26 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
                 IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
                 ValidStatementOrder, ResolvedVariable, BindingError));
         IR.Graphs[0].DataEdges.Pop();
+        // DataEdgeが残っていても入力ピンが失われた場合や型変更は拒否する。
+        IR.Graphs[0].Nodes.Last().Pins[0].Id = FGuid::NewGuid();
+        TestFalse(TEXT("Removed consumer pin rejected at resolution"),
+            FBPOutputPinBindingPlan::ResolveConsumerVariable(
+                IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
+                ValidStatementOrder, ResolvedVariable, BindingError));
+        IR.Graphs[0].Nodes.Last().Pins[0].Id = ConsumerInput.Id;
+        IR.Graphs[0].Nodes.Last().Pins[0].SubCategoryObjectPath =
+            TEXT("/Script/CoreUObject.Vector");
+        TestFalse(TEXT("Changed consumer type rejected at resolution"),
+            FBPOutputPinBindingPlan::ResolveConsumerVariable(
+                IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
+                ValidStatementOrder, ResolvedVariable, BindingError));
+        IR.Graphs[0].Nodes.Last().Pins[0].SubCategoryObjectPath = OutputTypePath;
+        IR.Graphs[0].Nodes.Last().Pins[0].Direction = EGPD_Output;
+        TestFalse(TEXT("Reversed consumer pin rejected at resolution"),
+            FBPOutputPinBindingPlan::ResolveConsumerVariable(
+                IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
+                ValidStatementOrder, ResolvedVariable, BindingError));
+        IR.Graphs[0].Nodes.Last().Pins[0].Direction = EGPD_Input;
         TArray<FGuid> InvalidStatementOrder;
         InvalidStatementOrder.Add(Consumer.Id);
         InvalidStatementOrder.Add(CallId);
