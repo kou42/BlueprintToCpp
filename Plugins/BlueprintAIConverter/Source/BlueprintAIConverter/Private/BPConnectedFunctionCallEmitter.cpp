@@ -3,6 +3,7 @@
 #include "BPConnectedFunctionArguments.h"
 #include "BPFunctionSignatureResolver.h"
 #include "BPFunctionCallValidator.h"
+#include "BPFunctionPinTypeMatcher.h"
 #include "GameFramework/Actor.h"
 #include "EdGraphSchema_K2.h"
 #include "UObject/Class.h"
@@ -132,7 +133,7 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             if (Edge.SourceNode == CallNodeId && Edge.SourcePin == OutputPin->Id)
             {
                 // 接続先が同じグラフに存在し、入力データピンであることを確認する。
-                // 存在しないノードやExecピンを参照するIRを有効なデータフローと数えない。
+                // 存在しないノードや型の異なるピンへの接続はデータフローと認めない。
                 const FBPIRPin* TargetPin = nullptr;
                 int32 TargetMatches = 0;
                 for (const FBPIRNode& TargetNode : CallGraph->Nodes)
@@ -151,14 +152,15 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
                 }
                 if (TargetMatches != 1 || TargetPin == nullptr ||
                     TargetPin->Direction != EGPD_Input ||
-                    TargetPin->Category == UEdGraphSchema_K2::PC_Exec)
+                    TargetPin->Category == UEdGraphSchema_K2::PC_Exec ||
+                    FBPFunctionPinTypeMatcher::Matches(*TargetPin, Signature.ParameterTypes[Index]) == false)
                 {
                     FBPSemanticDiagnostic Diagnostic;
                     Diagnostic.GraphName = CallGraphName;
                     Diagnostic.NodeId = CallNodeId;
                     Diagnostic.PinId = OutputPin->Id;
                     Diagnostic.Message = FString::Printf(
-                        TEXT("Invalid output parameter data edge target: %s"),
+                        TEXT("Invalid output parameter data edge target or type: %s"),
                         *ParameterName.ToString());
                     OutDiagnostics.Add(MoveTemp(Diagnostic));
                     return false;

@@ -134,6 +134,7 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         ConsumerInput.Name = TEXT("Input");
         ConsumerInput.Direction = EGPD_Input;
         ConsumerInput.Category = UEdGraphSchema_K2::PC_Struct;
+        ConsumerInput.SubCategoryObjectPath = OutputPin->SubCategoryObjectPath;
         Consumer.Pins.Add(ConsumerInput);
         IR.Graphs[0].Nodes.Add(Consumer);
         Diagnostics.Reset();
@@ -144,6 +145,17 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Connected output diagnostic"),
                 Diagnostics.Last().Message.Contains(TEXT("Connected output parameter")));
         }
+        // ピンのカテゴリが同じでも構造体型が異なる接続は拒否する。
+        IR.Graphs[0].Nodes.Last().Pins[0].SubCategoryObjectPath = TEXT("/Script/CoreUObject.Vector");
+        Diagnostics.Reset();
+        TestFalse(TEXT("Mismatched struct destination rejected"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        if (Diagnostics.IsEmpty() == false)
+        {
+            TestTrue(TEXT("Mismatched struct destination diagnostic"),
+                Diagnostics.Last().Message.Contains(TEXT("Invalid output parameter data edge target or type")));
+        }
+        IR.Graphs[0].Nodes.Last().Pins[0].SubCategoryObjectPath = OutputPin->SubCategoryObjectPath;
         // Execピンをデータ接続先として使う不正なIRも拒否する。
         IR.Graphs[0].Nodes.Last().Pins[0].Category = UEdGraphSchema_K2::PC_Exec;
         Diagnostics.Reset();
