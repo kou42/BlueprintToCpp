@@ -105,25 +105,58 @@ def _summarize(records: list[dict]) -> list[dict]:
 
 
 @router.get("/review/records")
-def get_review_records(limit: int = 50, offset: int = 0) -> dict:
-    """レビュー一覧と最新判断を返す。コード本体は一覧に含めない。"""
+def get_review_records(
+    limit: int = 50,
+    offset: int = 0,
+    reviewer: str | None = None,
+    target: Literal["direct", "ai"] | None = None,
+    decision: Literal["pending", "approved", "rejected"] | None = None,
+    uht: Literal["not_recorded", "passed", "failed", "not_run"] | None = None,
+    ubt: Literal["not_recorded", "passed", "failed", "not_run"] | None = None,
+    behavior: Literal["not_recorded", "matched", "mismatched", "not_run"] | None = None,
+    evidence_complete: bool | None = None,
+) -> dict:
+    """レビューのメタデータと最新証跡で絞り込んでからページングする。"""
     if limit < 1 or limit > 200 or offset < 0:
         raise HTTPException(status_code=422, detail="limit must be 1..200 and offset >= 0")
+    if reviewer is not None and (len(reviewer) == 0 or len(reviewer) > 120):
+        raise HTTPException(status_code=422, detail="reviewer must be 1..120 characters")
+
     records = list_records()
     summaries = _summarize(records)
-    page = summaries[offset:offset + limit]
     reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
-    # ページ内のレビューだけを集約する。全レコードは一度だけ読み込む。
-    for item in page:
+    filtered: list[dict] = []
+
+    for item in summaries:
+        if reviewer is not None and reviewer.casefold() not in item["reviewer"].casefold():
+            continue
+        if target is not None and item["target"] != target:
+            continue
+        if decision is not None and item["latest_decision"] != decision:
+            continue
+
+        # 検証状態のフィルタは、一覧と個別レポートで同じ判定を使用する。
         report = summarize_verification(reviews[item["id"]], records)
-        item["verification"] = {
+        verification = {
             "uht": report["build"]["uht"]["status"],
             "ubt": report["build"]["ubt"]["status"],
             "behavior": report["behavior"]["status"],
             "evidence_complete": report["evidence_complete"],
             "blockers": report["blockers"],
         }
-    return {"total": len(summaries), "items": page}
+        if uht is not None and verification["uht"] != uht:
+            continue
+        if ubt is not None and verification["ubt"] != ubt:
+            continue
+        if behavior is not None and verification["behavior"] != behavior:
+            continue
+        if evidence_complete is not None and verification["evidence_complete"] != evidence_complete:
+            continue
+        item["verification"] = verification
+        filtered.append(item)
+
+    # totalは絞り込み後の件数とし、ページを跨いでも意味が変わらないようにする。
+    return {"total": len(filtered), "items": filtered[offset:offset + limit]}
 
 
 @router.get("/review/records/{record_id}/status")

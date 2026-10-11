@@ -245,3 +245,10 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 `GET /review/records` の各 `items[]` に `verification` が追加されます。UHT・UBT・動作比較の最新状態、`evidence_complete`、未達項目 `blockers` を表示します。判定ロジックは `GET /review/records/{id}/report` と共通で、一覧に生成コードの本文は含めません。
 
 一覧の情報は外部から申告された証跡に基づきます。完了表示はコードの正しさやBlueprintとの意味的同値性を保証しません。
+
+
+## V2: レビュー一覧の検索・絞り込み
+
+`GET /review/records` は次のクエリパラメータを受け付けます: `reviewer`（大文字小文字を区別しない部分一致）、`target`（`direct` / `ai`）、`decision`（`pending` / `approved` / `rejected`）、`uht` / `ubt`（`not_recorded` / `passed` / `failed` / `not_run`）、`behavior`（`not_recorded` / `matched` / `mismatched` / `not_run`）、`evidence_complete`（真偽値）。複数指定時はAND条件で絞り込みます。
+
+`total` は絞り込み後の件数です。絞り込み後に `offset` / `limit` を適用します。例: `/review/records?decision=pending&ubt=failed&limit=20`。証跡は外部申告に基づくため、検証完了の表示は意味的同値性を保証しません。
