@@ -109,7 +109,7 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 **完了判定上の注意:** 「実装済み」はコミットが存在することを示し、機能完成や検証合格を意味しない。Pythonのpytest、UE 5.7.4でのAutomation Test・UHT/UBT、実AI疎通、BlueprintとC++の意味一致は別途確認する。特にSemantic JSONがpartialのときはAI生成結果を自動採用しない。
 
 ### 次の検証ゲート
-- [ ] PythonServerの全pytestを実行し、既存Direct APIの回帰を確認
+- [ ] PythonServerの全pytestを実行し、既存Direct APIの回帰を確認（Python 3.10 / 3.12のGitHub Actionsを追加。初回実行結果待ち）
 - [ ] UE 5.7.4でSerializer・Editor Export・Automation Testのコンパイルと動作を確認
 - [ ] JSON v2をPython validatorに渡す往復テストと診断ケースを確認
 - [ ] OpenAI Providerの認証・通信失敗・不正応答・出力拒否を実環境で検証
