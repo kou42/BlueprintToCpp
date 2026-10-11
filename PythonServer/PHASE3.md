@@ -1,15 +1,12 @@
-# Phase 3 — Restricted C++ generator
+# Phase 3 — 制限付きC++コード生成器
 
-The Phase 3 MVP is deliberately fail-closed. It supports **only** an Actor
-Blueprint with one EventGraph, no Blueprint variables, and one
-`ReceiveBeginPlay` event. That event may be followed by a linear chain of
-`UKismetSystemLibrary::PrintString` calls using literal `InString` values.
-Disconnected, branched, pure, cyclic, latent and otherwise unsupported nodes
-raise errors rather than being omitted.
+Phase 3のMVPは、未対応の処理を黙って通さず、明示的に失敗させる設計です。基本的な対応対象は、Actorを親とするBlueprint、単一のEventGraph、Blueprint変数なし、単一の`ReceiveBeginPlay`イベントです。このイベントの後に、リテラルの`InString`値を使用する`UKismetSystemLibrary::PrintString`の直列呼び出しを配置できます。
+
+未接続、分岐、純粋、循環、遅延などの未対応ノードは、黙って省略せずエラーにします。ただし、後続の開発で未接続イベントと追加グラフの扱いは一部緩和されています。最新の対応範囲は実装とテストを参照してください。
 
 ## CLI/API
 
-Run the analyzer API with:
+解析APIの起動方法：
 
 ```bash
 cd PythonServer
@@ -18,22 +15,15 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 python -m pytest -q
 ```
 
-`POST /generate` takes `{"snapshot": <Phase 1 JSON>, "class_name": "AMyActor"}`
-and returns two in-memory files (`.h` and `.cpp`). It does **not** write to
-the project or compile code.
+`POST /generate` は `{"snapshot": <Phase 1のJSON>, "class_name": "AMyActor"}` を受け取り、メモリ上で2つのファイル（`.h`と`.cpp`）を返します。プロジェクトへの書き込みやコンパイルは**行いません**。
 
-The Phase 1 extractor is extended to include `UK2Node_Event`'s
-`EventReference.GetMemberName()` as `function_name`. Without it, the
-generator rejects the event as ambiguous.
+Phase 1の抽出器は、`UK2Node_Event`の`EventReference.GetMemberName()`を`function_name`として出力するよう拡張されています。この情報がない場合、生成器はイベントを曖昧なものとして拒否します。
 
-## Safety and next steps
+## 安全性と今後の課題
 
-- This is a minimal deterministic generator, **not a general BP-to-C++ converter**.
-- API calls use no LLM and have no access to secrets or project source files.
-- PrintString optional pins are rejected when explicitly configured; default
-  behavior is not guaranteed equivalent across all Blueprint versions.
-- Generated classes omit project-specific `MODULE_API` exports and need
-  integration into a proper UE module.
-- Before expanding supported nodes, implement semantic pin resolution,
-  function signature validation, control-flow lowering, and UBT validation.
-- UE 5.7 compilation and generated-code builds have not been performed.
+- これは最小限の決定的なコード生成器であり、**汎用的なBlueprintからC++への変換器ではありません**。
+- API呼び出しではLLMを使用せず、機密情報やプロジェクトのソースファイルにもアクセスしません。
+- 明示的に設定されたPrintStringのオプションピンは拒否します。Blueprintのすべてのバージョンでデフォルト動作が一致する保証はありません。
+- 生成クラスにはプロジェクト固有の`MODULE_API`エクスポート指定がなく、適切なUEモジュールへの組み込みが必要です。
+- 対応ノードを増やす前に、ピンの意味解決、関数シグネチャ検証、制御フローの低レベル表現への変換、UBT検証を実装する必要があります。
+- UE 5.7でのコンパイルと生成コードのビルドは未実施です。
