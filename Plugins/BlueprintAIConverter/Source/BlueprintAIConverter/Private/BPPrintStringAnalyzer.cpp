@@ -114,7 +114,32 @@ bool FBPPrintStringAnalyzer::Analyze(const FBPGraphIR& IR, FBPPrintStringCall& O
     {
         if (Node.Id != BeginPlay->Id && Node.Id != PrintString->Id)
         {
-            OutDiagnostics.Add(FString::Printf(TEXT("Unsupported node in event graph: %s"), *Node.ClassPath));
+            // 接続のない標準Event Tickだけは副作用のないイベントとして除外する。
+            // 任意のイベントを無条件に除外するとオーバーライドの意味を失うため許可しない。
+            bool bHasLinks = false;
+            for (const FBPIRLink& Link : MatchedGraph->ExecEdges)
+            {
+                if (Link.SourceNode == Node.Id || Link.TargetNode == Node.Id)
+                {
+                    bHasLinks = true;
+                    break;
+                }
+            }
+            for (const FBPIRLink& Link : MatchedGraph->DataEdges)
+            {
+                if (Link.SourceNode == Node.Id || Link.TargetNode == Node.Id)
+                {
+                    bHasLinks = true;
+                    break;
+                }
+            }
+            if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
+                Node.FunctionName == TEXT("ReceiveTick") && bHasLinks == false)
+            {
+                continue;
+            }
+            OutDiagnostics.Add(FString::Printf(TEXT("Unsupported node in event graph: %s (event=%s)"),
+                *Node.ClassPath, *Node.FunctionName.ToString()));
             return false;
         }
     }
@@ -174,8 +199,18 @@ bool FBPPrintStringAnalyzer::Analyze(const FBPGraphIR& IR, FBPPrintStringCall& O
     const FBPIRPin* TextColor = FindPin(*PrintString, TEXT("TextColor"), EGPD_Input);
     if (TextColor != nullptr && TextColor->DefaultValue.IsEmpty() == false)
     {
-        OutDiagnostics.Add(TEXT("Explicit TextColor requires color parsing before code generation"));
-        return false;
+        // UnrealのLinearColorピンの既定値は "(R=...,G=...,B=...,A=...)" 形式。
+        // パース失敗や非有限値を黙って既定色へ置き換えない。
+        if (OutCall.TextColor.InitFromString(TextColor->DefaultValue) == false ||
+            FMath::IsFinite(OutCall.TextColor.R) == false ||
+            FMath::IsFinite(OutCall.TextColor.G) == false ||
+            FMath::IsFinite(OutCall.TextColor.B) == false ||
+            FMath::IsFinite(OutCall.TextColor.A) == false)
+        {
+            OutDiagnostics.Add(FString::Printf(TEXT("Invalid PrintString.TextColor: %s"),
+                *TextColor->DefaultValue));
+            return false;
+        }
     }
 
     return OutDiagnostics.Num() == 0;
