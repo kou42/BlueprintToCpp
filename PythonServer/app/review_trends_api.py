@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 from .review_history_api import _summarize
 from .review_store import list_records
-from .verification_report_api import summarize_verification
+from .verification_report_api import index_verification_events, summarize_verification
 
 router = APIRouter()
 
@@ -52,6 +52,7 @@ def get_review_trends(
     records = list_records()
     summaries = _summarize(records)
     reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
+    event_index = index_verification_events(records)
     buckets: dict[str, dict] = {}
     included = 0
 
@@ -78,7 +79,7 @@ def get_review_trends(
                 "behavior_mismatched": 0,
             }
         row = buckets[key]
-        report = summarize_verification(reviews[summary["id"]], records)
+        report = summarize_verification(reviews[summary["id"]], records, event_index)
         row["created"] += 1
         row["decisions"][report["review"]["decision"]] += 1
         if report["evidence_complete"]:
