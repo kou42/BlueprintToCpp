@@ -82,7 +82,7 @@ C++ Generator（宣言・式・文・関数・クラス）
 | PrintStringのオプション | **実装済み・UE実機未検証** | TextColorのRGBA解析、Duration、Key、画面/ログ設定 |
 | 標準グラフ・イベントの判定 | **限定的に実装済み** | 空Construction Script、未接続Event Tickの一部を許容 |
 | Editorプレビュー・保存 | **実装済み・実機での全面検証は未完** | Convert to C++ (Preview)、プロジェクトSourceへの保存経路 |
-| Snapshot JSON / PythonServer | **既存v1を維持** | Snapshot出力・Python解析/生成経路あり。Semantic JSON v2・汎用AI Provider・3モード統合は未実装 |
+| Snapshot JSON / PythonServer | **既存v1を維持・JSON/AI機能を段階追加** | Semantic JSON v2の設計・Serializer・Validator・Editorコピー/保存、Mock/OpenAI Provider、生成結果ValidatorをPR #43〜#48で実装。実機・実API未検証 |
 | Semantic IR / PrintString変換 | **最小縦断実装済み・実機動作未検証** | 型付きIR、Lowering、C++ Generator、比較テストを追加。汎用UFunction変換は未実装 |
 | Phase 2 UFunction呼び出し基盤 | **限定実装済み・UE実機未検証** | 反射署名・ピン検証、GetActorLocation接続Lowering、bool既定値、未接続HitResultの宣言とK2_SetActorLocation文生成、出力ピンBindingPlanを実装。接続済みHitResultから単一VariableSetへの限定Loweringとテストを追加（UE未検証）。実変換経路への統合は未完了 |
 | Blueprintメンバー変数・初期値 | **未対応** | 現行MVPはBlueprintVariableCount != 0を拒否。変数定義とCDOの値取得、型別C++初期化生成が必要 |
@@ -91,6 +91,30 @@ C++ Generator（宣言・式・文・関数・クラス）
 | UE 5.7.4での生成C++ビルド・動作一致 | **一部未確認** | ユーザーからビルドは問題なさそうとの報告あり。Automation Test結果・生成C++ビルド・実行時の一致は未確認 |
 
 GitHubへのコミットとUEでのコンパイル成功・動作確認は区別する。ユーザーからのビルド状況の共有は参考情報として記録し、Automation Test・生成C++のUHT/UBT・実行時の意味一致を別途検証する。
+
+## JSON/AIトラックの実装更新（2026-10-12）
+
+| 項目 | 関連PR | 実装状況・残課題 |
+| --- | --- | --- |
+| J0: Semantic JSON v2仕様 | #43 | スキーマ設計を文書化。実装との整合性レビューは継続 |
+| J1: JSON Serializer / Python検証 | #44 | 型・式・GUID・診断の出力と入力検証を実装。UEビルド・テスト実行は未確認 |
+| J1 / E1一部: Editor導線 | #45 | Content BrowserからJSONコピー・保存。未対応Loweringは診断を記録。実機検証未実施 |
+| A1: Provider境界とMock | #46 | 独立したAI API、Mock、テストコードを追加。実行結果は未確認 |
+| V1一部: 出力検証 | #47 | Direct/AI APIに共通ファイルパス・内容・状態Validatorを追加。C++構文・ビルド検証は未対応 |
+| A1一部: OpenAI Provider | #48 | 環境変数による認証、HTTP通信、応答検証、通信モックテスト。実API疎通未実施 |
+| A2 / H1 / E1全体 | 今後 | 複数Provider比較、Hybridの安全な部分変換、3モード統合UIは未実装 |
+
+**統合順序:** #43 → #44 → #45 → #46 → #47 → #48。積み重ねPRのため、先行PRをmainへマージした後、後続PRのbaseをmainへ変更して差分とCIを再確認する。
+
+**完了判定上の注意:** 「実装済み」はコミットが存在することを示し、機能完成や検証合格を意味しない。Pythonのpytest、UE 5.7.4でのAutomation Test・UHT/UBT、実AI疎通、BlueprintとC++の意味一致は別途確認する。特にSemantic JSONがpartialのときはAI生成結果を自動採用しない。
+
+### 次の検証ゲート
+- [ ] PythonServerの全pytestを実行し、既存Direct APIの回帰を確認
+- [ ] UE 5.7.4でSerializer・Editor Export・Automation Testのコンパイルと動作を確認
+- [ ] JSON v2をPython validatorに渡す往復テストと診断ケースを確認
+- [ ] OpenAI Providerの認証・通信失敗・不正応答・出力拒否を実環境で検証
+- [ ] 生成C++のUHT/UBTと元Blueprintの動作一致を確認
+- [ ] A2・H1に着手する前に、出力保存・レビューの安全境界を明確化
 
 ## 更新版フェーズ
 
@@ -189,6 +213,6 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 
 ## 次の着手対象
 
-**Direct側の最優先はM0/M1の実機検証とPhase 2の正常系完成。JSON/AI側は並行してJ0（スキーマ設計）から開始する。** まず `docs/SEMANTIC_IR_VERIFICATION.md` に従い、Automation Test・生成ActorのUHT/UBT・Blueprintとの実行結果を確認する。その後、Phase 2のOwnerClass統合と限定Loweringの検証を進め、Variable IR・CDO初期値の最小縦断実装に着手する。Actor以外への対応は共通変数生成を確立したうえで段階的に行う。
+**Direct側の最優先はM0/M1の実機検証とPhase 2の正常系完成。JSON/AI側はPR #43〜#48の実装を統合し、検証を優先する。** まず `docs/SEMANTIC_IR_VERIFICATION.md` に従い、Automation Test・生成ActorのUHT/UBT・Blueprintとの実行結果を確認する。その後、Phase 2のOwnerClass統合と限定Loweringの検証を進め、Variable IR・CDO初期値の最小縦断実装に着手する。Actor以外への対応は共通変数生成を確立したうえで段階的に行う。
 
 Semantic Previewは実験的な経路として維持し、旧Generatorの既定経路は実機検証が完了するまで切り替えない。
