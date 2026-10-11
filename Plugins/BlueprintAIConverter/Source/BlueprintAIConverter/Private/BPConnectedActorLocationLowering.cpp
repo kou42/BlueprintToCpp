@@ -1,6 +1,7 @@
 #include "BPConnectedActorLocationLowering.h"
 
 #include "BPActorLocationLowering.h"
+#include "BPActorLocationExpressionEmitter.h"
 #include "BPDataLinkResolver.h"
 
 bool FBPConnectedActorLocationLowering::LowerInput(const FBPGraphIR& GraphIR,
@@ -99,5 +100,36 @@ bool FBPConnectedActorLocationLowering::LowerInput(const FBPGraphIR& GraphIR,
         return false;
     }
     OutExpression = MoveTemp(Candidate);
+    return true;
+}
+
+bool FBPConnectedActorLocationLowering::EmitInputCpp(const FBPGraphIR& GraphIR,
+    const FGuid& TargetNodeId, const FGuid& TargetPinId,
+    FString& OutCpp, TArray<FBPSemanticDiagnostic>& OutDiagnostics)
+{
+    OutCpp.Reset();
+    FBPSemanticExpression Expression;
+    if (LowerInput(GraphIR, TargetNodeId, TargetPinId, Expression, OutDiagnostics) == false)
+    {
+        return false;
+    }
+
+    TArray<FString> Messages;
+    FString Candidate;
+    if (FBPActorLocationExpressionEmitter::Emit(Expression, Candidate, Messages) == false)
+    {
+        for (const FString& Message : Messages)
+        {
+            FBPSemanticDiagnostic Diagnostic;
+            Diagnostic.NodeId = TargetNodeId;
+            Diagnostic.PinId = TargetPinId;
+            Diagnostic.Message = Message;
+            OutDiagnostics.Add(MoveTemp(Diagnostic));
+        }
+        return false;
+    }
+
+    // 全段階の検証が成功した場合だけ呼び出し側へ式を公開する。
+    OutCpp = MoveTemp(Candidate);
     return true;
 }
