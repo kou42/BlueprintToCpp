@@ -136,6 +136,93 @@ struct FBPOutputPinBindingPlan
         return true;
     }
 
+    // 実際のExecチェーンから同一文ブロックに配置するノード順序を構築する。
+    // グラフのNodes配列順は実行順ではないため、ExecEdgesだけをたどる。
+    // 分岐・合流・循環・欠落した接続先は、順序を確定できないので拒否する。
+    static bool BuildStatementOrder(const FBPIRGraph& Graph,
+        const FBPOutputPinBinding& Binding, TArray<FGuid>& OutNodeIds,
+        FString& OutError)
+    {
+        OutNodeIds.Reset();
+        OutError.Reset();
+        if (Binding.SourceNodeId.IsValid() == false ||
+            Binding.ConsumerNodeIds.IsEmpty() ||
+            Binding.ConsumerNodeIds.Num() != Binding.ConsumerPinIds.Num())
+        {
+            OutError = TEXT("Invalid binding for statement order");
+            return false;
+        }
+        TArray<FGuid> Ordered;
+        FGuid Current = Binding.SourceNodeId;
+        while (true)
+        {
+            if (Ordered.Contains(Current))
+            {
+                OutError = TEXT("Exec cycle in output statement order");
+                return false;
+            }
+            int32 NodeMatches = 0;
+            for (const FBPIRNode& Node : Graph.Nodes)
+            {
+                if (Node.Id == Current)
+                {
+                    ++NodeMatches;
+                }
+            }
+            if (NodeMatches != 1)
+            {
+                OutError = TEXT("Exec statement node missing or ambiguous");
+                return false;
+            }
+            Ordered.Add(Current);
+            bool bAllConsumersReached = true;
+            for (const FGuid& ConsumerId : Binding.ConsumerNodeIds)
+            {
+                if (Ordered.Contains(ConsumerId) == false)
+                {
+                    bAllConsumersReached = false;
+                    break;
+                }
+            }
+            if (bAllConsumersReached)
+            {
+                break;
+            }
+            int32 Outgoing = 0;
+            FGuid Next;
+            for (const FBPIRLink& Edge : Graph.ExecEdges)
+            {
+                if (Edge.SourceNode == Current)
+                {
+                    ++Outgoing;
+                    Next = Edge.TargetNode;
+                }
+            }
+            int32 Incoming = 0;
+            for (const FBPIRLink& Edge : Graph.ExecEdges)
+            {
+                if (Edge.TargetNode == Next)
+                {
+                    ++Incoming;
+                }
+            }
+            if (Outgoing != 1 || Incoming != 1)
+            {
+                OutError = TEXT("Output statement order requires a unique Exec chain");
+                return false;
+            }
+            Current = Next;
+        }
+        // 出力変数の宣言と利用先が同じ文ブロック内で順序を守るか確認する。
+        if (ValidateExecOrder(Graph, Binding, OutError) == false ||
+            ValidateVariableScope(Binding, Ordered, OutError) == false)
+        {
+            return false;
+        }
+        OutNodeIds = MoveTemp(Ordered);
+        return true;
+    }
+
     // 後続入力ピンをC++変数参照に解決する際は、ピンIDだけでなく
     // 所属ノード・Exec順序・宣言スコープをまとめて検証する。
     // 不正なIRで誤った変数名を返さないよう、失敗時の出力は必ず空にする。
