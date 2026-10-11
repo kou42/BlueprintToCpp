@@ -23,6 +23,7 @@ bool FBPFunctionCallValidatorTest::RunTest(const FString& Parameters)
     ReturnPin.Name = TEXT("ReturnValue");
     ReturnPin.Direction = EGPD_Output;
     ReturnPin.Category = TEXT("struct");
+    ReturnPin.SubCategoryObjectPath = TEXT("/Script/CoreUObject.Vector");
     Node.Pins.Add(ReturnPin);
 
     FBPResolvedFunctionSignature Signature;
@@ -31,6 +32,11 @@ bool FBPFunctionCallValidatorTest::RunTest(const FString& Parameters)
         FBPFunctionCallValidator::Validate(Node, Function, Signature, Diagnostics));
     TestEqual(TEXT("Resolved owner"), Signature.OwnerClassPath, FString(TEXT("/Script/Engine.Actor")));
 
+    Diagnostics.Reset();
+    Node.Pins[0].SubCategoryObjectPath = TEXT("/Script/CoreUObject.Rotator");
+    TestFalse(TEXT("Different struct type rejected"),
+        FBPFunctionCallValidator::Validate(Node, Function, Signature, Diagnostics));
+    Node.Pins[0].SubCategoryObjectPath = TEXT("/Script/CoreUObject.Vector");
     Diagnostics.Reset();
     Node.Pins[0].Direction = EGPD_Input;
     TestFalse(TEXT("Wrong return pin direction rejected"),
