@@ -22,8 +22,8 @@ def get_review_statistics() -> dict:
     個別レポートと同じ判定ロジックを使用し、イベントの重複計上を防ぐ。
     """
     records = list_records()
-    summaries = _summarize(records)
     event_index = index_verification_events(records)
+    summaries = _summarize(records, event_index)
     reviews = {
         item["id"]: item for item in records if item.get("type") == "recomparison"
     }

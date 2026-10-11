@@ -50,9 +50,9 @@ def get_review_trends(
         raise HTTPException(status_code=422, detail="start_date must not exceed end_date")
 
     records = list_records()
-    summaries = _summarize(records)
     reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
     event_index = index_verification_events(records)
+    summaries = _summarize(records, event_index)
     buckets: dict[str, dict] = {}
     included = 0
 
