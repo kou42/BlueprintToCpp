@@ -108,3 +108,20 @@ for generated_file in result["files"]:
 - UEのワイルドカード型、オブジェクト／クラスの継承関係、real/floatのサブカテゴリ、コンテナ型はまだ解決しません。カテゴリの検証は意図的に基本的なものに限定しています。
 - Blueprintコンパイラ相当の意味解析、構造化制御フロー、純粋ノードの評価、遅延アクション、マクロ、C++生成はこの解析器の対象外です。
 - HTTPエンドポイントはローカル開発用です。認証やレート制限はないため、信頼できないネットワークには公開しないでください。
+
+## Semantic JSON v2（J1・試験実装）
+
+既存のSnapshot JSON v1とは独立して、UE側の `FBPSemanticJsonSerializer::Serialize(IR, EngineVersion, OutJson)` でSemantic IRをJSON v2に変換できます。**現時点ではEditorのメニューや保存先への接続は未実装**です。
+
+Python側では以下のようにスキーマ検証できます。
+
+```python
+import json
+from app.semantic_json import parse_semantic_json
+
+with open("semantic.json", encoding="utf-8") as file:
+    semantic = parse_semantic_json(json.load(file))
+print(semantic["semantic_status"])
+```
+
+この検証はJSONの構造確認であり、C++生成やBlueprintとの動作一致を保証しません。現行IRでは解析範囲の網羅性が不明なため、診断がない場合も `semantic_status=partial` として出力します。未対応・診断ありの場合は `unsupported` です。詳細は `docs/SEMANTIC_JSON_V2_DESIGN.md` を参照してください。
