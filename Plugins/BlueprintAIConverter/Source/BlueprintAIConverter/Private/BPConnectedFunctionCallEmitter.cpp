@@ -248,6 +248,23 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
                 OutDiagnostics.Add(MoveTemp(Diagnostic));
                 return false;
             }
+            // 実際のConsumerピンごとに参照解決を実行し、後続Loweringが
+            // 変数名を安全に受け取れることまで確認する。
+            for (int32 ConsumerIndex = 0; ConsumerIndex < Binding.ConsumerPinIds.Num(); ++ConsumerIndex)
+            {
+                FString ConsumerVariable;
+                if (FBPOutputPinBindingPlan::ResolveConsumerVariable(
+                    *CallGraph, Binding, Binding.ConsumerNodeIds[ConsumerIndex],
+                    Binding.ConsumerPinIds[ConsumerIndex], StatementOrder,
+                    ConsumerVariable, BindingError) == false)
+                {
+                    Diagnostic.Message = FString::Printf(
+                        TEXT("Invalid output consumer variable: %s (%s)"),
+                        *ParameterName.ToString(), *BindingError);
+                    OutDiagnostics.Add(MoveTemp(Diagnostic));
+                    return false;
+                }
+            }
             Diagnostic.Message = FString::Printf(
                 TEXT("Connected output parameter requires data-flow lowering: %s (%d edges)"),
                 *ParameterName.ToString(), ConnectedEdges);
