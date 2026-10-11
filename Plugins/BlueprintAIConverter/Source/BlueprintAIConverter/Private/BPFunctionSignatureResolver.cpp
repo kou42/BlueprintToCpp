@@ -69,7 +69,8 @@ bool ValidateMetadata(const UFunction* Function, TArray<FString>& Diagnostics)
             bValid = false;
         }
     }
-    if (Function->HasAnyFunctionFlags(FUNC_CustomThunk | FUNC_Net | FUNC_Delegate | FUNC_MulticastDelegate))
+    if (Function->HasMetaData(TEXT("CustomThunk")) ||
+        Function->HasAnyFunctionFlags(FUNC_Net | FUNC_Delegate | FUNC_MulticastDelegate))
     {
         Diagnostics.Add(TEXT("Unsupported custom thunk, network, or delegate function flags"));
         bValid = false;
