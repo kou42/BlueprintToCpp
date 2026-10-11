@@ -208,3 +208,10 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 `POST /review/records/{id}/decision` には `reviewer`、`decision`（`approved` / `rejected`）、`reason`、`expected_revised_fingerprint` を指定します。判定は元のレビュー記録を上書きせず、独立したイベントとして保存されます。元のレビュー記録は `pending` のままです。**承認は人間の明示的な入力のみ**であり、UHT/UBT・Blueprint動作検証は別途必要です。
 
 現段階のAPIには認証・アクセス制御・判定イベントの一覧取得・単一の最新承認状態集約・複数プロセス間の整合性保証はありません。**信頼できるローカル環境に限定**し、外部公開しないでください。
+
+
+## D4: レビュー一覧と最新の判定
+
+`GET /review/records?limit=50&offset=0` は保存済みレビューの概要を新しい順に返し、`latest_decision`（`pending` / `approved` / `rejected`）と判定件数を含みます。コード本体は一覧には含めません。`GET /review/records/{id}/status` は、そのレビューに紐づく承認・却下イベントを時系列で返します。最新判定は保存イベントの作成時刻とIDに基づき集約し、元のレビューJSONは変更しません。
+
+ファイル数に比例して読み込みコストが増えるため、小規模なローカル利用向けです。認証・アクセス制御・複数プロセスでの厳密な順序保証はまだありません。外部公開しないでください。
