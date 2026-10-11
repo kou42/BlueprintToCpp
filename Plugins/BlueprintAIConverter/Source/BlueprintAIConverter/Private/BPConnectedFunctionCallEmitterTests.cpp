@@ -50,6 +50,20 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Missing parameter pin is identified"),
             Diagnostics[0].Message.Contains(TEXT("parameter pin")));
     }
+    // 関数名が一致してもCallFunction以外のノードは受理しない。
+    IR.Graphs[0].Nodes[0].ClassPath = TEXT("/Script/BlueprintGraph.K2Node_VariableGet");
+    Diagnostics.Reset();
+    Statement = TEXT("stale");
+    TestFalse(TEXT("Wrong node class rejected"),
+        FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+    TestTrue(TEXT("Wrong node class clears statement"), Statement.IsEmpty());
+    if (Diagnostics.IsEmpty() == false)
+    {
+        TestTrue(TEXT("Wrong node class diagnostic"),
+            Diagnostics[0].Message.Contains(TEXT("K2Node_CallFunction")));
+    }
+    IR.Graphs[0].Nodes[0].ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+
     // 同じGUIDのノードが複数存在する場合も安全に拒否する。
     IR.Graphs[0].Nodes.Add(Call);
     Diagnostics.Reset();
