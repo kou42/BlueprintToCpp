@@ -12,6 +12,7 @@ from .ai_generate_api import router as ai_generate_router
 from .compare_api import router as compare_router
 from .review_api import router as review_router
 from .review_history_api import router as review_history_router
+from .verification_api import router as verification_router
 
 app = FastAPI(title="BlueprintToCpp Analyzer", version="0.2.0")
 
@@ -21,6 +22,7 @@ app.include_router(ai_generate_router)
 app.include_router(compare_router)
 app.include_router(review_router)
 app.include_router(review_history_router)
+app.include_router(verification_router)
 
 
 class AnalyzeRequest(BaseModel):
