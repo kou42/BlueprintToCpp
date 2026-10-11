@@ -47,7 +47,7 @@ def _print_string(ctx: ConversionContext) -> str:
         raise UnsupportedNodeError(f"{node['id']}: unsupported function {node.get('function_name')}")
     pins = node["pins"]
     allowed = {"execute", "then", "InString", "bPrintToScreen", "bPrintToLog",
-               "TextColor", "Duration", "Key", "self"}
+               "TextColor", "Duration", "Key", "self", "WorldContextObject"}
     unsupported_pins = [
         p["name"]
         for p in pins
@@ -59,7 +59,14 @@ def _print_string(ctx: ConversionContext) -> str:
             f"{node['id']}: unsupported PrintString pins: "
             f"{unsupported_pins}"
         )
-    
+
+    # UEのWorldContextObjectは、Actorのthisを渡すことで解決できる。
+    # 明示的な指定は意味が変わり得るため、未接続・未設定の場合だけ許可する。
+    context_pins = [p for p in pins if p["name"] == "WorldContextObject"]
+    for context_pin in context_pins:
+        if context_pin["direction"] != "input" or context_pin.get("links") or context_pin.get("default_value") not in ("", None):
+            raise UnsupportedNodeError(
+                f"{node['id']}: explicit WorldContextObject is unsupported")
     text = _pin(node, "InString", "input")
     if text["type"]["category"] != "string":
         raise GenerationError(f"{node['id']}: InString is not string")

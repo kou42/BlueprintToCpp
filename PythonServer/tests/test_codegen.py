@@ -89,3 +89,40 @@ def test_additional_empty_function_graph_is_analyzed():
     })
     result = generate_cpp(parse_snapshot(raw))
     assert result["status"] == "generated"
+
+
+def test_print_string_accepts_unconnected_world_context():
+    raw = begin_play_snapshot()
+    event = raw["graphs"][0]["nodes"][0]
+    event["pins"][0]["links"] = [{"node_id": "print", "pin_id": "execute"}]
+    raw["graphs"][0]["nodes"].append({
+        "id": "print", "class": "/Script/BlueprintGraph.K2Node_CallFunction",
+        "title": "Print String", "function_name": "PrintString",
+        "pins": [
+            pin("execute", "input", "exec", [("begin", "then")]),
+            pin("then", "output", "exec"),
+            pin("InString", "input", "string"),
+            pin("WorldContextObject", "input", "object"),
+        ],
+    })
+    cpp = generate_cpp(parse_snapshot(raw))["files"][1]["content"]
+    assert "UKismetSystemLibrary::PrintString(this," in cpp
+
+
+def test_print_string_rejects_explicit_world_context():
+    raw = begin_play_snapshot()
+    event = raw["graphs"][0]["nodes"][0]
+    event["pins"][0]["links"] = [{"node_id": "print", "pin_id": "execute"}]
+    raw["graphs"][0]["nodes"].append({
+        "id": "print", "class": "/Script/BlueprintGraph.K2Node_CallFunction",
+        "title": "Print String", "function_name": "PrintString",
+        "pins": [
+            pin("execute", "input", "exec", [("begin", "then")]),
+            pin("then", "output", "exec"),
+            pin("InString", "input", "string"),
+            pin("WorldContextObject", "input", "object"),
+        ],
+    })
+    raw["graphs"][0]["nodes"][1]["pins"][3]["default_value"] = "ExplicitContext"
+    with pytest.raises(UnsupportedNodeError, match="explicit WorldContextObject"):
+        generate_cpp(parse_snapshot(raw))
