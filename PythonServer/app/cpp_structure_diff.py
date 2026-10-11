@@ -39,12 +39,15 @@ def extract_declarations(content: str) -> dict[str, list[str]]:
         function_match = _FUNCTION.match(line)
         if function_match is not None:
             return_type, name, args = function_match.groups()
-            functions.add(f"{name}({re.sub(r'\s+', ' ', args.strip())}): {re.sub(r'\s+', ' ', return_type.strip())}")
+            normalized_args = re.sub(r"\\s+", " ", args.strip())
+            normalized_type = re.sub(r"\\s+", " ", return_type.strip())
+            functions.add(f"{name}({normalized_args}): {normalized_type}")
             continue
         variable_match = _VARIABLE.match(line)
         if variable_match is not None:
             var_type, name = variable_match.groups()
-            variables.add(f"{name}: {re.sub(r'\s+', ' ', var_type.strip())}")
+            normalized_type = re.sub(r"\\s+", " ", var_type.strip())
+            variables.add(f"{name}: {normalized_type}")
     return {
         "classes": sorted(classes),
         "functions": sorted(functions),
