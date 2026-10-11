@@ -29,7 +29,7 @@ private:
     void RegisterMenus()
     {
         FToolMenuOwnerScoped Owner(this);
-        UToolMenu* Menu = UToolMenus::ExtendMenu(TEXT("ContentBrowser.AssetContextMenu"));
+        UToolMenu* Menu = UToolMenus::Get()->ExtendMenu(TEXT("ContentBrowser.AssetContextMenu"));
         if (!Menu) return;
         FToolMenuSection& Section = Menu->FindOrAddSection(TEXT("BlueprintAIConverter"));
         Section.AddDynamicEntry(TEXT("ExportBlueprintSnapshot"), FNewToolMenuSectionDelegate::CreateLambda(
