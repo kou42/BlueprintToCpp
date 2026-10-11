@@ -118,6 +118,29 @@ def parse_semantic_json(raw: Any) -> dict:
     _string(source["parent_class_path"], "source.parent_class_path")
     if type(source["snapshot_schema_version"]) is not int or source["snapshot_schema_version"] != 1:
         raise SemanticJsonError("source.snapshot_schema_version: expected 1")
+    # 旧v2 JSONにはvariablesが存在しないため、省略を許容する。
+    variable_names: set[str] = set()
+    for i, raw_variable in enumerate(_array(root.get("variables", []), "variables")):
+        path = f"variables[{i}]"
+        variable = _object(raw_variable, path)
+        _required(variable, ("name", "guid", "type", "pin_category", "type_path",
+                             "property_flags", "source", "default_value_available",
+                             "default_value"), path)
+        name = _string(variable["name"], path + ".name")
+        if not name or name in variable_names:
+            raise SemanticJsonError(f"{path}: empty or duplicate variable name")
+        variable_names.add(name)
+        _guid(variable["guid"], path + ".guid")
+        _type(variable["type"], path + ".type")
+        for key in ("pin_category", "type_path", "property_flags", "source"):
+            _string(variable[key], path + "." + key)
+        if variable["source"] != "blueprint_new_variables":
+            raise SemanticJsonError(f"{path}.source: unsupported source")
+        available = _bool(variable["default_value_available"], path + ".default_value_available")
+        if available:
+            _string(variable["default_value"], path + ".default_value")
+        elif variable["default_value"] is not None:
+            raise SemanticJsonError(f"{path}.default_value: expected null when unavailable")
     status = _enum(root["semantic_status"], STATUSES, "semantic_status")
     function_names: set[str] = set()
     for fi, function in enumerate(_array(root["functions"], "functions")):
