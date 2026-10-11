@@ -148,7 +148,8 @@ void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files,
                         FPaths::NormalizeDirectoryName(ModuleRoot);
                         const FString ModuleName = FPaths::GetCleanFilename(ModuleRoot);
                         const FString ProjectSource = FPaths::ConvertRelativePathToFull(FPaths::ProjectSourceDir());
-                        const FString Root = FPaths::ConvertRelativePathToFull(ModuleRoot);
+                        FString Root = FPaths::ConvertRelativePathToFull(ModuleRoot);
+                        FPaths::NormalizeDirectoryName(Root);
                         // 選択されたパスを必ずProject/Source配下に限定する。
                         FString Prefix = ProjectSource;
                         FPaths::NormalizeDirectoryName(Prefix);
@@ -160,6 +161,7 @@ void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files,
                                 FText::FromString(TEXT("Select an existing module under Project/Source.")));
                             return FReply::Handled();
                         }
+                        // 公開ヘッダーの参照関係を保つため、両ディレクトリは既存のみ許可する。
                         const FString HeaderDir = FPaths::Combine(Root, TEXT("Public"));
                         const FString SourceDir = FPaths::Combine(Root, TEXT("Private"));
                         FBPGeneratedActorFiles ModuleFiles;
