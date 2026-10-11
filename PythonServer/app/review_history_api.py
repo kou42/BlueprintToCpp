@@ -126,6 +126,7 @@ def get_review_records(
     records = list_records()
     summaries = _summarize(records)
     reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
+    event_index = index_verification_events(records)
     filtered: list[dict] = []
 
     for item in summaries:
