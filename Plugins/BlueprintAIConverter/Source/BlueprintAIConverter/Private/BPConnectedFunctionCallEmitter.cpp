@@ -5,6 +5,7 @@
 #include "BPFunctionCallValidator.h"
 #include "BPFunctionPinTypeMatcher.h"
 #include "BPOutputParameterStorage.h"
+#include "BPOutputPinBindingPlan.h"
 #include "BPSetActorLocationCallArguments.h"
 #include "BPConnectedActorLocationLowering.h"
 #include "BPBooleanPinDefaultEmitter.h"
@@ -203,7 +204,27 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             OutDiagnostics.Add(MoveTemp(Diagnostic));
             return false;
         }
-        if (ConnectedEdges > 0)
+        // 出力ピンと後続入力ピンの対応をBindingPlanに集約する。
+        // 変数の寿命とExec順序が保証されるまでは接続済み出力を生成しない。
+        FBPOutputPinBinding Binding;
+        FString BindingError;
+        if (FBPOutputPinBindingPlan::Build(*CallGraph, CallNodeId,
+            OutputPin->Id, StorageName, Signature.ParameterTypes[Index],
+            Binding, BindingError) == false)
+        {
+            Diagnostic.Message = FString::Printf(
+                TEXT("Invalid output binding plan: %s (%s)"),
+                *ParameterName.ToString(), *BindingError);
+            OutDiagnostics.Add(MoveTemp(Diagnostic));
+            return false;
+        }
+        if (ConnectedEdges != Binding.ConsumerPinIds.Num())
+        {
+            Diagnostic.Message = TEXT("Output binding edge count mismatch");
+            OutDiagnostics.Add(MoveTemp(Diagnostic));
+            return false;
+        }
+        if (Binding.ConsumerPinIds.IsEmpty() == false)
         {
             Diagnostic.Message = FString::Printf(
                 TEXT("Connected output parameter requires data-flow lowering: %s (%d edges)"),
