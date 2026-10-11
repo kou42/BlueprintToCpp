@@ -18,7 +18,26 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     const FGuid& CallNodeId, const UFunction* Function, FString& OutStatement,
     TArray<FBPSemanticDiagnostic>& OutDiagnostics)
 {
+    // 従来の呼び出し元はActorの反射情報を用いる。Blueprint固有変数の
+    // 変換時には生成対象クラスを明示する新しいオーバーロードを使う。
+    return Emit(GraphIR, CallNodeId, Function, AActor::StaticClass(),
+        OutStatement, OutDiagnostics);
+}
+
+bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
+    const FGuid& CallNodeId, const UFunction* Function,
+    const UClass* OwnerClass, FString& OutStatement,
+    TArray<FBPSemanticDiagnostic>& OutDiagnostics)
+{
     OutStatement.Reset();
+    if (OwnerClass == nullptr || OwnerClass->IsChildOf(AActor::StaticClass()) == false)
+    {
+        FBPSemanticDiagnostic Diagnostic;
+        Diagnostic.NodeId = CallNodeId;
+        Diagnostic.Message = TEXT("Invalid generated Actor owner class");
+        OutDiagnostics.Add(MoveTemp(Diagnostic));
+        return false;
+    }
 
     // 任意の反射名をそのままC++へ出力せず、変換規約が確認済みのAPIに限定する。
     if (Function == nullptr ||
@@ -279,7 +298,7 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             FString ConsumerStatement;
             if (FBPOutputConsumerAssignmentEmitter::Emit(
                 *CallGraph, Binding, Binding.ConsumerNodeIds[0],
-                Binding.ConsumerPinIds[0], AActor::StaticClass(),
+                Binding.ConsumerPinIds[0], OwnerClass,
                 ConsumerStatement, BindingError) == false)
             {
                 Diagnostic.Message = FString::Printf(
