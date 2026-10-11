@@ -60,6 +60,23 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         return false;
     }
 
+    // 引数の接続を調べる前に、ノードのピン方向と型を署名と照合する。
+    FBPResolvedFunctionSignature ValidatedSignature;
+    TArray<FString> ValidationMessages;
+    if (FBPFunctionCallValidator::Validate(*CallNode, Function,
+        ValidatedSignature, ValidationMessages) == false)
+    {
+        for (const FString& Message : ValidationMessages)
+        {
+            FBPSemanticDiagnostic Diagnostic;
+            Diagnostic.GraphName = CallGraphName;
+            Diagnostic.NodeId = CallNodeId;
+            Diagnostic.Message = Message;
+            OutDiagnostics.Add(MoveTemp(Diagnostic));
+        }
+        return false;
+    }
+
     // 出力パラメータに対応するピンの接続先を検証するまでは生成しない。
     // 引数数と型を事前に確認し、エラーメッセージを明確にする。
     if (Signature.ParameterNames.Num() != Signature.ParameterTypes.Num() ||
