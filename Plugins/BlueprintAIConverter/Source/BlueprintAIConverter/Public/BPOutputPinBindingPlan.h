@@ -54,6 +54,13 @@ struct FBPOutputPinBindingPlan
             OutError = TEXT("Output source pin missing or ambiguous");
             return false;
         }
+        // 出力側の型も確認する。接続先だけが正しくても、
+        // ソースピンの型が変更されていれば不正な変数宣言につながる。
+        if (FBPFunctionPinTypeMatcher::Matches(*SourcePin, Type) == false)
+        {
+            OutError = TEXT("Output source pin type mismatch");
+            return false;
+        }
         TArray<FGuid> Consumers;
         TArray<FGuid> ConsumerNodes;
         for (const FBPIRLink& Edge : Graph.DataEdges)
