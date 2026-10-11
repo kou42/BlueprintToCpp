@@ -8,6 +8,11 @@
 class FBPGeneratedCodeSaver
 {
 public:
+    // プロジェクト名と同名のゲームモジュールに限り、Public/Privateへ分割保存する。
+    // モジュール名が異なるプロジェクトは明示的に失敗させる。
+    static bool SaveToProjectModule(const FBPGraphIR& IR, const FString& ClassName,
+        FString& OutError);
+
     static bool SaveNewFiles(const FBPGeneratedActorFiles& Files,
         const FString& Directory, FString& OutError);
 };
