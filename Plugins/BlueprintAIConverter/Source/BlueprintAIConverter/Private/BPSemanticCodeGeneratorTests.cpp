@@ -126,7 +126,7 @@ bool FBPSemanticGeneratorOptionsParityTest::RunTest(const FString& Parameters)
     FBPIRNode& Print = Graph.Graphs[0].Nodes[1];
 
     // エスケープ文字と既定値以外のオプションを旧経路と比較する。
-    Print.Pins[0].DefaultValue = TEXT("Line 1\\nLine 2\\t\\\\ \\"quote\\"");
+    Print.Pins[0].DefaultValue = TEXT("Line 1\nLine 2\t\\ \"quote\"");
     FBPIRPin Screen;
     Screen.Name = TEXT("bPrintToScreen");
     Screen.Direction = EGPD_Input;
