@@ -65,4 +65,8 @@ class MockAIProvider:
 def get_ai_provider(name: str) -> AIProvider:
     if name == "mock":
         return MockAIProvider()
+    if name == "openai":
+        # 循環importを避けるため、実Providerを選択した場合のみ読み込む。
+        from .openai_provider import OpenAIProvider
+        return OpenAIProvider()
     raise AIProviderError(f"Unknown or unconfigured AI provider: {name}")
