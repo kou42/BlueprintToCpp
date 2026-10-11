@@ -91,27 +91,72 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         return false;
     }
 
-    // 出力ピンはC++呼び出しの参照引数に対応するため、
-    // 現時点では名前を診断して生成を止める。
+    // 出力引数はC++側で書き込み可能な変数を必要とする。
+    // 接続先がある場合は後続のデータフローと変数寿命の解決が必要なため、
+    // 未接続の場合と区別して診断する。どちらも現段階では安全に拒否する。
     for (int32 Index = 0; Index < Signature.OutputParameters.Num(); ++Index)
     {
-        if (Signature.OutputParameters[Index])
+        if (Signature.OutputParameters[Index] == false)
+        {
+            continue;
+        }
+
+        const FName ParameterName = Signature.ParameterNames[Index];
+        const FBPIRPin* OutputPin = nullptr;
+        for (const FBPIRPin& Pin : CallNode->Pins)
+        {
+            if (Pin.Name == ParameterName && Pin.Direction == EGPD_Output)
+            {
+                OutputPin = &Pin;
+                break;
+            }
+        }
+
+        // Validatorが成功した場合、出力ピンは必ず一つ存在する。
+        // IRが不整合でも誤ったC++を出さないよう再確認する。
+        if (OutputPin == nullptr || CallGraph == nullptr)
         {
             FBPSemanticDiagnostic Diagnostic;
+            Diagnostic.GraphName = CallGraphName;
             Diagnostic.NodeId = CallNodeId;
-            Diagnostic.Message = FString::Printf(TEXT("Unsupported output parameter: %s"),
-                *Signature.ParameterNames[Index].ToString());
-            for (const FBPIRPin& Pin : CallNode->Pins)
-            {
-                if (Pin.Name == Signature.ParameterNames[Index] && Pin.Direction == EGPD_Output)
-                {
-                    Diagnostic.PinId = Pin.Id;
-                    break;
-                }
-            }
+            Diagnostic.Message = FString::Printf(TEXT("Output parameter pin missing: %s"),
+                *ParameterName.ToString());
             OutDiagnostics.Add(MoveTemp(Diagnostic));
             return false;
         }
+
+        int32 ConnectedEdges = 0;
+        for (const FBPIRLink& Edge : CallGraph->DataEdges)
+        {
+            if (Edge.SourceNode == CallNodeId && Edge.SourcePin == OutputPin->Id)
+            {
+                ++ConnectedEdges;
+            }
+            // 逆方向のリンクも不正なIRとして拒否する。
+            if (Edge.TargetNode == CallNodeId && Edge.TargetPin == OutputPin->Id)
+            {
+                FBPSemanticDiagnostic Diagnostic;
+                Diagnostic.GraphName = CallGraphName;
+                Diagnostic.NodeId = CallNodeId;
+                Diagnostic.PinId = OutputPin->Id;
+                Diagnostic.Message = FString::Printf(TEXT("Invalid incoming data edge on output parameter: %s"),
+                    *ParameterName.ToString());
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
+        }
+
+        FBPSemanticDiagnostic Diagnostic;
+        Diagnostic.GraphName = CallGraphName;
+        Diagnostic.NodeId = CallNodeId;
+        Diagnostic.PinId = OutputPin->Id;
+        Diagnostic.Message = ConnectedEdges > 0
+            ? FString::Printf(TEXT("Connected output parameter requires data-flow lowering: %s (%d edges)"),
+                *ParameterName.ToString(), ConnectedEdges)
+            : FString::Printf(TEXT("Unconnected output parameter requires writable C++ storage: %s"),
+                *ParameterName.ToString());
+        OutDiagnostics.Add(MoveTemp(Diagnostic));
+        return false;
     }
 
     FString Arguments;
