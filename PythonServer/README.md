@@ -259,3 +259,10 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 `GET /review/statistics` は保存された全レビューの最新状態をレビュー単位で集計します。返却項目は `total_reviews`、`decisions`（承認・却下・保留）、`targets`、`build`（UHT/UBTの各状態）、`behavior`、`evidence_complete`、`evidence_incomplete`、`blockers` です。過去イベントは二重計上せず、最新の判定を使用します。
 
 **注意:** この集計は外部から申告された証跡に基づき、サーバー自身がUHT/UBTやBlueprint動作を検証したことを意味しません。コード本文は返しません。
+
+
+## V2: 期間別レビュー推移
+
+`GET /review/statistics/trends?interval=week&start_date=2026-01-01&end_date=2026-12-31` はレビュー作成日（UTC）に基づく日別・週別（月曜日始まり）・月別の集計を返します。`interval` は `day` / `week` / `month`、日付範囲は両端を含み、省略可能です。
+
+各期間の `created`、現在の `decisions`、`evidence_complete` / `evidence_incomplete`、`build_failed`、`behavior_mismatched` を返します。**これはレビュー作成時点の状態を再現する履歴ではありません。** 各期間に作成されたレビューの**現時点での最新申告状態**を集計します。未提出・失敗などは外部申告に基づき、実ビルドや意味的同値性の保証ではありません。
