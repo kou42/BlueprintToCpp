@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "BPOutputPinBindingPlan.h"
+#include "EdGraphSchema_K2.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPOutputPinBindingPlanTest,
     "BlueprintAIConverter.SemanticIR.OutputPinBindingPlan",
@@ -15,12 +16,16 @@ bool FBPOutputPinBindingPlanTest::RunTest(const FString& Parameters)
     Output.Id = FGuid::NewGuid();
     Output.Name = TEXT("SweepHitResult");
     Output.Direction = EGPD_Output;
+    Output.Category = UEdGraphSchema_K2::PC_Struct;
+    Output.SubCategoryObjectPath = TEXT("/Script/Engine.HitResult");
     Source.Pins.Add(Output);
     FBPIRNode Target;
     Target.Id = FGuid::NewGuid();
     FBPIRPin Input;
     Input.Id = FGuid::NewGuid();
     Input.Direction = EGPD_Input;
+    Input.Category = UEdGraphSchema_K2::PC_Struct;
+    Input.SubCategoryObjectPath = TEXT("/Script/Engine.HitResult");
     Target.Pins.Add(Input);
     Graph.Nodes.Add(Source);
     Graph.Nodes.Add(Target);
