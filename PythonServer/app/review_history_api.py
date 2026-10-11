@@ -75,7 +75,10 @@ def create_review_decision(record_id: str, request: ReviewDecisionRequest) -> di
 
 
 
-def _summarize(records: list[dict]) -> list[dict]:
+def _summarize(
+    records: list[dict],
+    event_index: dict[tuple[str, str], list[dict]] | None = None,
+) -> list[dict]:
     """レビュー単位に最新の人間の判断を集約する。
 
     イベント作成時刻で並べ、同時刻ならIDを使って順序を安定させる。
@@ -83,7 +86,8 @@ def _summarize(records: list[dict]) -> list[dict]:
     """
     reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
     # 指紋の異なる判定を混ぜないよう、レビューごとの正しい証跡だけを参照する。
-    event_index = index_verification_events(records)
+    if event_index is None:
+        event_index = index_verification_events(records)
 
     summaries: list[dict] = []
     for record_id, review in reviews.items():
@@ -125,9 +129,9 @@ def get_review_records(
         raise HTTPException(status_code=422, detail="reviewer must be 1..120 characters")
 
     records = list_records()
-    summaries = _summarize(records)
-    reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
     event_index = index_verification_events(records)
+    summaries = _summarize(records, event_index)
+    reviews = {item["id"]: item for item in records if item.get("type") == "recomparison"}
     filtered: list[dict] = []
 
     for item in summaries:
