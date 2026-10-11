@@ -30,6 +30,13 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+    Diagnostics.Reset();
+    Statement = TEXT("stale");
+    TestFalse(TEXT("Null generated owner class rejected"),
+        FBPConnectedFunctionCallEmitter::Emit(
+            IR, CallId, Function, nullptr, Statement, Diagnostics));
+    TestTrue(TEXT("Null owner clears statement"), Statement.IsEmpty());
+    TestTrue(TEXT("Null owner reports diagnostic"), Diagnostics.IsEmpty() == false);
     TestFalse(TEXT("Missing call node rejected"),
         FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
     TestTrue(TEXT("Missing call node reports diagnostic"), Diagnostics.IsEmpty() == false);
