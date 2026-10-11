@@ -220,6 +220,34 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             DeclarationPos != INDEX_NONE && CallPos > DeclarationPos &&
             AssignmentPos > CallPos);
         TestTrue(TEXT("Positive lowering has no diagnostics"), Diagnostics.IsEmpty());
+        // 未接続selfは現在のActorへの代入なので許可する。
+        FBPIRPin SelfPin;
+        SelfPin.Id = FGuid::NewGuid();
+        SelfPin.Name = TEXT("self");
+        SelfPin.Direction = EGPD_Input;
+        SelfPin.Category = UEdGraphSchema_K2::PC_Object;
+        IR.Graphs[0].Nodes.Last().Pins.Add(SelfPin);
+        Diagnostics.Reset();
+        TestTrue(TEXT("Unconnected self variable set emitted"),
+            FBPConnectedFunctionCallEmitter::Emit(
+                IR, CallId, Function, ABPEmitterTestActor::StaticClass(),
+                Statement, Diagnostics));
+        // 接続されたselfは別インスタンスを指す可能性があり、
+        // 単純なメンバー代入へ変換してはいけない。
+        FBPIRLink ConnectedSelf;
+        ConnectedSelf.SourceNode = LocationSource.Id;
+        ConnectedSelf.SourcePin = LocationReturn.Id;
+        ConnectedSelf.TargetNode = PositiveConsumer.Id;
+        ConnectedSelf.TargetPin = SelfPin.Id;
+        IR.Graphs[0].DataEdges.Add(ConnectedSelf);
+        Diagnostics.Reset();
+        Statement = TEXT("stale");
+        TestFalse(TEXT("Connected self variable set rejected"),
+            FBPConnectedFunctionCallEmitter::Emit(
+                IR, CallId, Function, ABPEmitterTestActor::StaticClass(),
+                Statement, Diagnostics));
+        TestTrue(TEXT("Connected self rejection clears statement"), Statement.IsEmpty());
+        IR.Graphs[0].DataEdges.Pop();
         IR.Graphs[0].ExecEdges.Pop();
         IR.Graphs[0].DataEdges.Pop();
         IR.Graphs[0].Nodes.Pop();
