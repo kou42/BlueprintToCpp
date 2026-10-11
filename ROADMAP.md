@@ -258,8 +258,29 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 7. **UEバージョン依存性**: Blueprintコンパイラ内部APIを活用する場合はUE 5.7.4での公開範囲・安定性を確認する。
 8. **コード規約**: C++のifは波括弧を必須とし、null判定を明示する。重要な設計判断は日本語コメントで説明する。
 
-## 次の着手対象
+## 次の着手対象（2026-10-12更新）
 
-**直近はD1（Direct/AI共通生成結果）とD2（ファイル・行Diff）を最優先とする。Direct側はM0/M1の実機検証とPhase 2の正常系完成を並行する。PR #43〜#48はmainへ統合済みで、PR #49のCIは社内運用に必須ではない。** まず `docs/SEMANTIC_IR_VERIFICATION.md` に従い、Automation Test・生成ActorのUHT/UBT・Blueprintとの実行結果を確認する。その後、Phase 2のOwnerClass統合と限定Loweringの検証を進め、Variable IR・CDO初期値の最小縦断実装に着手する。Actor以外への対応は共通変数生成を確立したうえで段階的に行う。
+**優先方針: レビュー・統計APIの拡張をいったん区切り、Blueprint → Semantic JSON v2 の生成情報を強化する。** D1〜D4・V2のレビュー基盤は維持し、今後の追加実装は実際のBlueprint情報をAI/Directへ渡す品質向上に集中する。
+
+### JSON生成強化ロードマップ
+
+| 順序 | ID | 内容 | 完了条件 |
+| --- | --- | --- | --- |
+| 1 | J2-1: 変数の意味情報 | Semantic JSON v2にBlueprint定義の変数名・型・型パス・属性・出典を追加。CDO由来の初期値は出典と取得可否を区別 | 既存SerializerとPython validatorを同時更新し、bool・数値・文字列の代表ケース、未対応型の診断、安定した順序をテスト |
+| 2 | J2-2: 初期値の表現 | bool/int/float/double/FString/FName/FTextから着手し、構造体・列挙型・参照型は段階対応 | 値の欠落・未取得・明示的な空値を区別。CDO取得値とBlueprint宣言の差異を診断し、往復テストを追加 |
+| 3 | J2-3: 関数シグネチャ | 関数引数・戻り値・参照/const・所有クラス情報をv2に追加 | UFunction/FPropertyの反射情報との対応、未解決型の診断、複数関数のテスト |
+| 4 | J2-4: グラフ追跡情報 | Graph IRとの参照、元ノード/ピンGUID、Exec/Data接続、未対応ノードの出典を補強 | Snapshot v1のリンク情報を消さず、v2の意味情報と区別して照合可能にする |
+| 5 | J2-5: Editor往復検証 | UEのJSON保存・コピー → Python validator → AI Provider入力まで検証 | UE 5.7.4 Automation Test、Golden JSON、Python側の不正入力・互換性テストを実行 |
+| 6 | J2-6: C++生成連携 | 拡張JSONをDirect/AI比較・診断・生成結果追跡へ接続 | 未解決情報を自動補完せず、UHT/UBTとBlueprint動作比較を別途検証 |
+
+**直近の実装単位はJ2-1**。最初に `FBPSemanticIR`、`FBPSemanticJsonSerializer`、`FBPSnapshotExporter`、`PythonServer/app/semantic_json.py` と既存テストを確認し、必要な型と出典を最小限のスキーマ拡張として設計する。既存Snapshot v1は変更しない。Semantic JSON v2の互換性が崩れる変更は明示的にバージョン管理し、旧JSONの扱いをテストで固定する。
+
+### レビュー基盤の到達点と残課題
+
+- PR #43〜#48: Semantic JSON v2 Serializer/Validator、Editor出力、AI Providerと出力検証の基盤を統合済み。UE実機・実AI疎通は未検証。
+- PR #49〜#70: Direct/AI差分、構造比較、レビュー記録、外部UHT/UBT・動作証跡、統計・推移・ダッシュボード、索引共有と回帰テストを段階的に統合済み。
+- PR #70: GitHub Actions成功後にmainへマージ済み。レビュー要約と検証レポートの証跡索引を共有。
+- 残課題: 実際のUE 5.7.4ビルド・Automation Test、生成C++のUHT/UBT、Blueprintとの実行結果一致、実AI疎通。GitHub ActionsのPythonテスト成功はこれらの実機検証の代替ではない。
+- 集計性能の実測・表示UI・Editor統合は継続課題とするが、JSON生成強化より優先しない。
 
 Semantic Previewは実験的な経路として維持し、旧Generatorの既定経路は実機検証が完了するまで切り替えない。
