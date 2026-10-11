@@ -237,6 +237,17 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
                 OutDiagnostics.Add(MoveTemp(Diagnostic));
                 return false;
             }
+            // Exec由来の文配置順を確定し、出力変数の宣言順を検証する。
+            TArray<FGuid> StatementOrder;
+            if (FBPOutputPinBindingPlan::BuildStatementOrder(
+                *CallGraph, Binding, StatementOrder, BindingError) == false)
+            {
+                Diagnostic.Message = FString::Printf(
+                    TEXT("Invalid output statement order: %s"),
+                    *BindingError);
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
             Diagnostic.Message = FString::Printf(
                 TEXT("Connected output parameter requires data-flow lowering: %s (%d edges)"),
                 *ParameterName.ToString(), ConnectedEdges);
