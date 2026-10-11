@@ -252,3 +252,10 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 `GET /review/records` は次のクエリパラメータを受け付けます: `reviewer`（大文字小文字を区別しない部分一致）、`target`（`direct` / `ai`）、`decision`（`pending` / `approved` / `rejected`）、`uht` / `ubt`（`not_recorded` / `passed` / `failed` / `not_run`）、`behavior`（`not_recorded` / `matched` / `mismatched` / `not_run`）、`evidence_complete`（真偽値）。複数指定時はAND条件で絞り込みます。
 
 `total` は絞り込み後の件数です。絞り込み後に `offset` / `limit` を適用します。例: `/review/records?decision=pending&ubt=failed&limit=20`。証跡は外部申告に基づくため、検証完了の表示は意味的同値性を保証しません。
+
+
+## V2: レビュー統計
+
+`GET /review/statistics` は保存された全レビューの最新状態をレビュー単位で集計します。返却項目は `total_reviews`、`decisions`（承認・却下・保留）、`targets`、`build`（UHT/UBTの各状態）、`behavior`、`evidence_complete`、`evidence_incomplete`、`blockers` です。過去イベントは二重計上せず、最新の判定を使用します。
+
+**注意:** この集計は外部から申告された証跡に基づき、サーバー自身がUHT/UBTやBlueprint動作を検証したことを意味しません。コード本文は返しません。
