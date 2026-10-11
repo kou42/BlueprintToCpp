@@ -266,3 +266,12 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 `GET /review/statistics/trends?interval=week&start_date=2026-01-01&end_date=2026-12-31` はレビュー作成日（UTC）に基づく日別・週別（月曜日始まり）・月別の集計を返します。`interval` は `day` / `week` / `month`、日付範囲は両端を含み、省略可能です。
 
 各期間の `created`、現在の `decisions`、`evidence_complete` / `evidence_incomplete`、`build_failed`、`behavior_mismatched` を返します。**これはレビュー作成時点の状態を再現する履歴ではありません。** 各期間に作成されたレビューの**現時点での最新申告状態**を集計します。未提出・失敗などは外部申告に基づき、実ビルドや意味的同値性の保証ではありません。
+
+
+## V2: 承認・検証イベントの期間別推移
+
+`GET /review/statistics/event-trends?interval=week&start_date=2026-01-01&end_date=2026-12-31` は、保存された承認・UHT/UBT・動作比較**イベントの記録時刻（UTC）**を基準に日別・週別（月曜日始まり）・月別で集計します。期間は両端を含みます。
+
+`total_events`、`decisions`、ツール別の `build`、`behavior` を返し、同じレビューへの再提出も別イベントとして計上します。動作比較はケース数ではなく提出1回を1件とし、不一致優先、次に未実施、すべて一致の順で分類します。元レビューID・修正後指紋が一致する証跡だけを対象とします。
+
+`/review/statistics/trends` はレビュー**作成日**を基準に現在の状態を集計する別のAPIです。本APIのイベント時刻はサーバーへの**記録時刻**であり、外部で実際にビルドやテストを実施した日時ではありません。証跡の真正性・意味的同値性は保証しません。
