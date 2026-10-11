@@ -146,3 +146,13 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 `app.generated_output_validator` は `/generate` と `/ai/generate` のレスポンスを返す前にファイルパス・内容・状態を検証します。相対パスのみ許可し、拡張子は `.h`、`.hpp`、`.cpp` に限定します。ファイル数は最大32、各ファイルの文字数は最大2,000,000、パス長は最大240文字です。
 
 これは保存前の入力検証であり、C++コードの安全性、UHT/UBTビルド、Blueprintとの意味一致、保存時のシンボリックリンク対策は保証しません。保存機能の実装時には保存先ディレクトリを固定し、書き込み直前にもパス検証が必要です。
+
+## A1: OpenAI Provider（実験的）
+
+`POST /ai/generate` の `provider` に `openai` を指定すると、OpenAI Chat Completions APIを使用します。利用前にPythonServerのプロセス環境変数へ `OPENAI_API_KEY` と `BLUEPRINT_TO_CPP_OPENAI_MODEL` を設定してください。キーをリポジトリへコミットしないでください。モデルはJSON object形式の応答に対応している必要があります。
+
+```json
+{"semantic": {"schema_version": 2, "format": "blueprint_semantic_ir", "producer": {"name": "BlueprintAIConverter", "engine_version": "5.7.4"}, "source": {"asset_path": "/Game/Test.Test", "parent_class_path": "/Script/Engine.Actor", "snapshot_schema_version": 1}, "semantic_status": "partial", "functions": [], "diagnostics": []}, "provider": "openai"}
+```
+
+この例はAPI形式の説明用であり、実際の変換にはUEからエクスポートした意味情報を使用してください。応答は既存の共通Validatorで検証されます。現段階ではC++のコンパイル、意味一致、APIの実通信は未検証です。特に `partial` は未解析領域を含むため、生成結果を自動適用しないでください。認証のないローカルAPIを外部ネットワークに公開しないでください。
