@@ -47,6 +47,14 @@ struct FBPOutputConsumerAssignmentEmitter
             OutError = TEXT("Output consumer property type mismatch");
             return false;
         }
+        // 生成されるC++からアクセスできないプロパティや静的でない通常の
+        // インスタンス変数以外は、この単純代入Loweringの対象にしない。
+        if (Property->HasAnyPropertyFlags(CPF_BlueprintReadOnly | CPF_EditorOnly |
+            CPF_Deprecated | CPF_DisableEditOnInstance))
+        {
+            OutError = TEXT("Output consumer property is not writable in generated code");
+            return false;
+        }
         int32 InputMatches = 0;
         for (const FBPIRPin& Pin : Consumer->Pins)
         {
