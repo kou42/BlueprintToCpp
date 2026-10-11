@@ -2,6 +2,8 @@
 #include "Misc/AutomationTest.h"
 #include "BPConnectedFunctionCallEmitter.h"
 #include "GameFramework/Actor.h"
+#include "EdGraphSchema_K2.h"
+#include "UObject/UnrealType.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPConnectedFunctionCallEmitterTest,
     "BlueprintAIConverter.SemanticIR.Emitter.ConnectedFunctionCall",
@@ -63,6 +65,68 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             Diagnostics[0].Message.Contains(TEXT("K2Node_CallFunction")));
     }
     IR.Graphs[0].Nodes[0].ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+
+    // 正しい出力ピンが存在する場合、未接続と接続済みを区別して診断する。
+    // 入力引数も揃えたノードを作成し、出力引数の検証経路まで到達させる。
+    IR.Graphs[0].Nodes[0].Pins.Reset();
+    for (TFieldIterator<FProperty> It(Function); It; ++It)
+    {
+        const FProperty* Property = *It;
+        if (Property->HasAnyPropertyFlags(CPF_Parm) == false)
+        {
+            continue;
+        }
+        if (Property->HasAnyPropertyFlags(CPF_ReturnParm))
+        {
+            continue;
+        }
+        FBPIRPin Pin;
+        Pin.Id = FGuid::NewGuid();
+        Pin.Name = Property->GetFName();
+        const bool bOutput = Property->HasAnyPropertyFlags(CPF_OutParm) &&
+            Property->HasAnyPropertyFlags(CPF_ConstParm) == false;
+        Pin.Direction = bOutput ? EGPD_Output : EGPD_Input;
+        if (CastField<FBoolProperty>(Property) != nullptr)
+        {
+            Pin.Category = UEdGraphSchema_K2::PC_Boolean;
+        }
+        else if (CastField<FStructProperty>(Property) != nullptr)
+        {
+            Pin.Category = UEdGraphSchema_K2::PC_Struct;
+            Pin.SubCategoryObjectPath = CastField<FStructProperty>(Property)->Struct->GetPathName();
+        }
+        IR.Graphs[0].Nodes[0].Pins.Add(Pin);
+    }
+    const FBPIRPin* OutputPin = IR.Graphs[0].Nodes[0].Pins.FindByPredicate(
+        [](const FBPIRPin& Pin) { return Pin.Name == TEXT("SweepHitResult"); });
+    if (TestNotNull(TEXT("SweepHitResult output pin"), OutputPin))
+    {
+        const FGuid OutputPinId = OutputPin->Id;
+        Diagnostics.Reset();
+        TestFalse(TEXT("Unconnected output rejected"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        if (Diagnostics.IsEmpty() == false)
+        {
+            TestTrue(TEXT("Unconnected output diagnostic"),
+                Diagnostics.Last().Message.Contains(TEXT("Unconnected output parameter")));
+        }
+
+        FBPIRLink Link;
+        Link.SourceNode = CallId;
+        Link.SourcePin = OutputPinId;
+        Link.TargetNode = FGuid::NewGuid();
+        Link.TargetPin = FGuid::NewGuid();
+        IR.Graphs[0].DataEdges.Add(Link);
+        Diagnostics.Reset();
+        TestFalse(TEXT("Connected output rejected"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        if (Diagnostics.IsEmpty() == false)
+        {
+            TestTrue(TEXT("Connected output diagnostic"),
+                Diagnostics.Last().Message.Contains(TEXT("Connected output parameter")));
+        }
+        IR.Graphs[0].DataEdges.Reset();
+    }
 
     // 同じGUIDのノードが複数存在する場合も安全に拒否する。
     IR.Graphs[0].Nodes.Add(Call);
