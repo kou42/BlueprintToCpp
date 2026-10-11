@@ -40,6 +40,13 @@ bool FBPConnectedFunctionArgumentsTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Missing node has diagnostics"), Diagnostics.IsEmpty() == false);
 
     Diagnostics.Reset();
+    IR.ParentClassPath = TEXT("/Script/Engine.Pawn");
+    TestFalse(TEXT("Non-Actor parent rejected"),
+        FBPConnectedFunctionArguments::Emit(IR, Call.Id, nullptr, Output, Diagnostics));
+    TestTrue(TEXT("Unsupported parent has diagnostics"), Diagnostics.IsEmpty() == false);
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+
+    Diagnostics.Reset();
     IR.Graphs[0].Nodes.Add(Call);
     TestFalse(TEXT("Duplicate call node GUID rejected"),
         FBPConnectedFunctionArguments::Emit(IR, Call.Id, nullptr, Output, Diagnostics));
