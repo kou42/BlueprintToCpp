@@ -4,6 +4,7 @@
 #include "BPOutputPinBindingPlan.h"
 #include "BPOutputConsumerAssignmentEmitter.h"
 #include "GameFramework/Actor.h"
+#include "Components/ActorComponent.h"
 #include "EdGraphSchema_K2.h"
 #include "UObject/UnrealType.h"
 
@@ -37,6 +38,18 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             IR, CallId, Function, nullptr, Statement, Diagnostics));
     TestTrue(TEXT("Null owner clears statement"), Statement.IsEmpty());
     TestTrue(TEXT("Null owner reports diagnostic"), Diagnostics.IsEmpty() == false);
+    Diagnostics.Reset();
+    Statement = TEXT("stale");
+    TestFalse(TEXT("Non Actor generated owner class rejected"),
+        FBPConnectedFunctionCallEmitter::Emit(
+            IR, CallId, Function, UActorComponent::StaticClass(),
+            Statement, Diagnostics));
+    TestTrue(TEXT("Invalid owner clears statement"), Statement.IsEmpty());
+    if (Diagnostics.IsEmpty() == false)
+    {
+        TestTrue(TEXT("Invalid owner diagnostic"),
+            Diagnostics.Last().Message.Contains(TEXT("Invalid generated Actor owner class")));
+    }
     TestFalse(TEXT("Missing call node rejected"),
         FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
     TestTrue(TEXT("Missing call node reports diagnostic"), Diagnostics.IsEmpty() == false);
