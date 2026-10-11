@@ -5,6 +5,9 @@
 #include "BPFunctionCallValidator.h"
 #include "BPFunctionPinTypeMatcher.h"
 #include "BPOutputParameterStorage.h"
+#include "BPSetActorLocationCallArguments.h"
+#include "BPConnectedActorLocationLowering.h"
+#include "BPBooleanPinDefaultEmitter.h"
 #include "GameFramework/Actor.h"
 #include "EdGraphSchema_K2.h"
 #include "UObject/Class.h"
@@ -200,24 +203,159 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             OutDiagnostics.Add(MoveTemp(Diagnostic));
             return false;
         }
-        Diagnostic.Message = ConnectedEdges > 0
-            ? FString::Printf(TEXT("Connected output parameter requires data-flow lowering: %s (%d edges)"),
-                *ParameterName.ToString(), ConnectedEdges)
-            : FString::Printf(TEXT("Unconnected output parameter storage prepared; call lowering pending: %s"),
-                *ParameterName.ToString());
+        if (ConnectedEdges > 0)
+        {
+            Diagnostic.Message = FString::Printf(
+                TEXT("Connected output parameter requires data-flow lowering: %s (%d edges)"),
+                *ParameterName.ToString(), ConnectedEdges);
+            OutDiagnostics.Add(MoveTemp(Diagnostic));
+            return false;
+        }
+        // 未接続の出力のみ、後段で宣言と呼び出しを同時に生成する。
+
+    }
+
+    // 戻り値が使われている場合、呼び出し結果を捨てると意味が変わる。
+    // また外部self参照の変換は未対応なので明示的に拒否する。
+    if (GraphIR.Diagnostics.IsEmpty() == false ||
+        GraphIR.ParentClassPath != TEXT("/Script/Engine.Actor"))
+    {
+        FBPSemanticDiagnostic Diagnostic;
+        Diagnostic.NodeId = CallNodeId;
+        Diagnostic.Message = TEXT("Unsupported graph diagnostics or Actor parent");
         OutDiagnostics.Add(MoveTemp(Diagnostic));
         return false;
     }
-
-    FString Arguments;
-    if (FBPConnectedFunctionArguments::Emit(GraphIR, CallNodeId, Function,
-        Arguments, OutDiagnostics) == false)
+    for (const FBPIRLink& Edge : CallGraph->DataEdges)
     {
-        return false;
+        if (Edge.SourceNode == CallNodeId)
+        {
+            for (const FBPIRPin& Pin : CallNode->Pins)
+            {
+                if (Pin.Id == Edge.SourcePin && Pin.Name == TEXT("ReturnValue"))
+                {
+                    FBPSemanticDiagnostic Diagnostic;
+                    Diagnostic.NodeId = CallNodeId;
+                    Diagnostic.Message = TEXT("Connected return value requires data-flow lowering");
+                    OutDiagnostics.Add(MoveTemp(Diagnostic));
+                    return false;
+                }
+            }
+        }
+    }
+    for (const FBPIRPin& Pin : CallNode->Pins)
+    {
+        if (Pin.Name == TEXT("self"))
+        {
+            for (const FBPIRLink& Edge : CallGraph->DataEdges)
+            {
+                if (Edge.TargetNode == CallNodeId && Edge.TargetPin == Pin.Id)
+                {
+                    FBPSemanticDiagnostic Diagnostic;
+                    Diagnostic.NodeId = CallNodeId;
+                    Diagnostic.Message = TEXT("Connected self target is unsupported");
+                    OutDiagnostics.Add(MoveTemp(Diagnostic));
+                    return false;
+                }
+            }
+        }
     }
 
-    // K2_SetActorLocationにはSweepHitResultなどの出力引数があり、
-    // 現在の引数Emitterでは未対応のため安全に拒否される。
-    OutStatement = FString::Printf(TEXT("SetActorLocation(%s);"), *Arguments);
+    FString Location;
+    FString Sweep;
+    FString Teleport;
+    FString StorageName;
+    FString StorageDeclaration;
+    for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
+    {
+        const FName Name = Signature.ParameterNames[Index];
+        const FBPIRPin* Pin = CallNode->Pins.FindByPredicate(
+            [Name](const FBPIRPin& Candidate) { return Candidate.Name == Name; });
+        if (Pin == nullptr)
+        {
+            return false;
+        }
+        if (Name == TEXT("NewLocation") && Signature.OutputParameters[Index] == false)
+        {
+            if (FBPConnectedActorLocationLowering::EmitInputCpp(
+                GraphIR, CallNodeId, Pin->Id, Location, OutDiagnostics) == false)
+            {
+                return false;
+            }
+        }
+        else if (Name == TEXT("bSweep") && Signature.OutputParameters[Index] == false)
+        {
+            if (FBPBooleanPinDefaultEmitter::Emit(*Pin, Sweep) == false)
+            {
+                FBPSemanticDiagnostic Diagnostic;
+                Diagnostic.NodeId = CallNodeId;
+                Diagnostic.PinId = Pin->Id;
+                Diagnostic.Message = TEXT("Unsupported bSweep default");
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
+        }
+        else if (Name == TEXT("bTeleport") && Signature.OutputParameters[Index] == false)
+        {
+            if (FBPBooleanPinDefaultEmitter::Emit(*Pin, Teleport) == false)
+            {
+                FBPSemanticDiagnostic Diagnostic;
+                Diagnostic.NodeId = CallNodeId;
+                Diagnostic.PinId = Pin->Id;
+                Diagnostic.Message = TEXT("Unsupported bTeleport default");
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
+        }
+        else if (Name == TEXT("SweepHitResult") && Signature.OutputParameters[Index])
+        {
+            if (FBPOutputParameterStorage::Emit(Signature.ParameterTypes[Index],
+                CallNodeId, StorageName, StorageDeclaration) == false)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            FBPSemanticDiagnostic Diagnostic;
+            Diagnostic.NodeId = CallNodeId;
+            Diagnostic.Message = TEXT("Unsupported SetActorLocation parameter layout");
+            OutDiagnostics.Add(MoveTemp(Diagnostic));
+            return false;
+        }
+    }
+    // bool入力の接続を既定値に置き換えてはいけない。
+    for (const FBPIRLink& Edge : CallGraph->DataEdges)
+    {
+        if (Edge.TargetNode == CallNodeId)
+        {
+            for (const FBPIRPin& Pin : CallNode->Pins)
+            {
+                if (Pin.Id == Edge.TargetPin &&
+                    (Pin.Name == TEXT("bSweep") || Pin.Name == TEXT("bTeleport")))
+                {
+                    FBPSemanticDiagnostic Diagnostic;
+                    Diagnostic.NodeId = CallNodeId;
+                    Diagnostic.PinId = Pin.Id;
+                    Diagnostic.Message = TEXT("Connected bool input is unsupported");
+                    OutDiagnostics.Add(MoveTemp(Diagnostic));
+                    return false;
+                }
+            }
+        }
+    }
+    FString Arguments;
+    if (FBPSetActorLocationCallArguments::Emit(
+        Location, Sweep, StorageName, Teleport, Arguments) == false)
+    {
+        FBPSemanticDiagnostic Diagnostic;
+        Diagnostic.NodeId = CallNodeId;
+        Diagnostic.Message = TEXT("Cannot assemble K2_SetActorLocation arguments");
+        OutDiagnostics.Add(MoveTemp(Diagnostic));
+        return false;
+    }
+    // 変数宣言と呼び出しを同じ文スコープにまとめる。
+    OutStatement = FString::Printf(TEXT("%s\nK2_SetActorLocation(%s);"),
+        *StorageDeclaration, *Arguments);
     return true;
 }
