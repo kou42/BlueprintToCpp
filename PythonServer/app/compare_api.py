@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .generated_output_validator import GeneratedOutputError
 from .output_comparison import compare_artifacts, normalize_artifact
 from .cpp_structure_diff import compare_declarations
+from .ue_reflection_diff import compare_reflection
 
 router = APIRouter()
 
@@ -42,4 +43,5 @@ def compare_generated(request: CompareRequest) -> dict:
         "direct_fingerprint": direct.fingerprint,
         "ai_fingerprint": ai.fingerprint,
         "structure": compare_declarations(direct, ai),
+        "reflection": compare_reflection(direct, ai),
     }
