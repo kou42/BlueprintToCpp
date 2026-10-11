@@ -1,4 +1,5 @@
 #include "BPFunctionCallValidator.h"
+#include "BPFunctionPinTypeMatcher.h"
 
 #include "EdGraphSchema_K2.h"
 #include "UObject/Class.h"
@@ -43,9 +44,9 @@ bool FBPFunctionCallValidator::Validate(const FBPIRNode& Node, const UFunction* 
                     return false;
                 }
                 // 実行ピンをデータ引数として受理しない。
-                if (Pin.Category == UEdGraphSchema_K2::PC_Exec)
+                if (FBPFunctionPinTypeMatcher::Matches(Pin, Candidate.ParameterTypes[Index]) == false)
                 {
-                    OutDiagnostics.Add(FString::Printf(TEXT("Parameter uses exec pin: %s"), *Name.ToString()));
+                    OutDiagnostics.Add(FString::Printf(TEXT("Parameter pin type mismatch: %s"), *Name.ToString()));
                     return false;
                 }
             }
@@ -66,7 +67,8 @@ bool FBPFunctionCallValidator::Validate(const FBPIRNode& Node, const UFunction* 
             if (Pin.Name == TEXT("ReturnValue"))
             {
                 ++ReturnPins;
-                if (Pin.Direction != EGPD_Output || Pin.Category == UEdGraphSchema_K2::PC_Exec)
+                if (Pin.Direction != EGPD_Output ||
+                    FBPFunctionPinTypeMatcher::Matches(Pin, Candidate.ReturnType) == false)
                 {
                     OutDiagnostics.Add(TEXT("Invalid ReturnValue pin"));
                     return false;
