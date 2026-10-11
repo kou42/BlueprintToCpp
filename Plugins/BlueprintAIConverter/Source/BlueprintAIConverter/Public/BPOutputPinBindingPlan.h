@@ -183,6 +183,38 @@ struct FBPOutputPinBindingPlan
             OutError = TEXT("Output consumer data edge is missing or duplicated");
             return false;
         }
+        // DataEdgeが残っていても、接続先ピンが削除・方向変更されていれば
+        // 保存済みBindingを利用できない。ノードと入力ピンの一意性を再確認する。
+        int32 TargetMatches = 0;
+        const FBPIRPin* TargetPin = nullptr;
+        for (const FBPIRNode& Node : Graph.Nodes)
+        {
+            if (Node.Id == ConsumerNodeId)
+            {
+                for (const FBPIRPin& Pin : Node.Pins)
+                {
+                    if (Pin.Id == ConsumerPinId)
+                    {
+                        ++TargetMatches;
+                        TargetPin = &Pin;
+                    }
+                }
+            }
+        }
+        if (TargetMatches != 1 || TargetPin == nullptr ||
+            TargetPin->Direction != EGPD_Input)
+        {
+            OutError = TEXT("Output consumer input pin is missing or ambiguous");
+            return false;
+        }
+        FBPSemanticType ExpectedType;
+        ExpectedType.Kind = Binding.TypeKind;
+        ExpectedType.TypePath = Binding.TypePath;
+        if (FBPFunctionPinTypeMatcher::Matches(*TargetPin, ExpectedType) == false)
+        {
+            OutError = TEXT("Output consumer input pin type has changed");
+            return false;
+        }
         if (ValidateExecOrder(Graph, Binding, OutError) == false ||
             ValidateVariableScope(Binding, EmittedStatementNodeIds, OutError) == false)
         {
