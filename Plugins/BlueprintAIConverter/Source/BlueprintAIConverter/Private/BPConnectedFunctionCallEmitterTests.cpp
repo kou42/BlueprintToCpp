@@ -265,6 +265,16 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         IR.Graphs[0].ExecEdges.Add(ExecLink);
         TestTrue(TEXT("Unique downstream Exec chain accepted"),
             FBPOutputPinBindingPlan::ValidateExecOrder(IR.Graphs[0], Binding, BindingError));
+        TArray<FGuid> DerivedOrder;
+        TestTrue(TEXT("Statement order derived from unique Exec chain"),
+            FBPOutputPinBindingPlan::BuildStatementOrder(
+                IR.Graphs[0], Binding, DerivedOrder, BindingError));
+        TestEqual(TEXT("Derived statement count"), DerivedOrder.Num(), 2);
+        if (DerivedOrder.Num() == 2)
+        {
+            TestEqual(TEXT("Source statement precedes consumer"), DerivedOrder[0], CallId);
+            TestEqual(TEXT("Consumer statement follows source"), DerivedOrder[1], Consumer.Id);
+        }
         TArray<FGuid> ValidStatementOrder;
         ValidStatementOrder.Add(CallId);
         ValidStatementOrder.Add(Consumer.Id);
@@ -326,6 +336,11 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         FBPIRLink AlternateExec = ExecLink;
         AlternateExec.SourceNode = LocationSource.Id;
         IR.Graphs[0].ExecEdges.Add(AlternateExec);
+        DerivedOrder.Reset();
+        TestFalse(TEXT("Merged Exec statement order rejected"),
+            FBPOutputPinBindingPlan::BuildStatementOrder(
+                IR.Graphs[0], Binding, DerivedOrder, BindingError));
+        TestTrue(TEXT("Failed statement order clears output"), DerivedOrder.IsEmpty());
         TestFalse(TEXT("Merged Exec path rejected"),
             FBPOutputPinBindingPlan::ValidateExecOrder(IR.Graphs[0], Binding, BindingError));
         IR.Graphs[0].ExecEdges.Pop();
