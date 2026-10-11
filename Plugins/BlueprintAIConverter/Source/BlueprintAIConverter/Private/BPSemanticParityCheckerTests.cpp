@@ -78,4 +78,31 @@ bool FBPSemanticParityMismatchTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("差異を診断"), Diagnostics.Contains(TEXT("Source content differs")));
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticParityFailureIsolationTest,
+    "BlueprintAIConverter.SemanticIR.Parity.FailureIsolation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticParityFailureIsolationTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR Graph = MakeParityGraph();
+    FBPGeneratedActorFiles Legacy;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("旧経路の生成成功"), FBPActorCodeGenerator::Generate(
+        Graph, TEXT("AShadowActor"), FString(), Legacy, Diagnostics)) == false)
+    {
+        return false;
+    }
+    const FString OriginalHeader = Legacy.HeaderContent;
+    const FString OriginalSource = Legacy.SourceContent;
+
+    // Shadow経路が失敗してもプレビュー・保存に使う旧経路の出力を変更しない。
+    Graph.BlueprintVariableCount = 1;
+    TestFalse(TEXT("Semantic経路の拒否を検出"), FBPSemanticParityChecker::Compare(
+        Graph, TEXT("AShadowActor"), FString(), Legacy, Diagnostics));
+    TestTrue(TEXT("比較診断を返す"), Diagnostics.IsEmpty() == false);
+    TestEqual(TEXT("旧ヘッダーを維持"), Legacy.HeaderContent, OriginalHeader);
+    TestEqual(TEXT("旧ソースを維持"), Legacy.SourceContent, OriginalSource);
+    return true;
+}
+
 #endif
