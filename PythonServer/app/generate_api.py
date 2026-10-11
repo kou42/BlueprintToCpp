@@ -4,7 +4,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .schemas import SnapshotError, parse_snapshot
-from .code_generator import GenerationError, generate_cpp
+from .code_generator import GenerationError
+from .generator_dispatch import generate_supported_cpp
 from .node_registry import UnsupportedNodeError
 
 router = APIRouter()
@@ -18,6 +19,6 @@ class GenerateRequest(BaseModel):
 @router.post("/generate")
 def generate(request: GenerateRequest) -> dict:
     try:
-        return generate_cpp(parse_snapshot(request.snapshot), request.class_name)
+        return generate_supported_cpp(parse_snapshot(request.snapshot), request.class_name)
     except (SnapshotError, GenerationError, UnsupportedNodeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
