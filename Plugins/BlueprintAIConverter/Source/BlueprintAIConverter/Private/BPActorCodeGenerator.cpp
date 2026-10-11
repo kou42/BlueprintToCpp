@@ -83,14 +83,47 @@ bool FBPActorCodeGenerator::Generate(const FBPGraphIR& IR, const FString& ClassN
         OutDiagnostics.Add(TEXT("MVP cannot generate Blueprint member variables"));
         return false;
     }
-    if (IR.Graphs.Num() != 1 || IR.Graphs[0].Kind != TEXT("event"))
+    // Actor Blueprintにはユーザーが関数を作成していなくても
+    // Construction Scriptが標準グラフとして含まれる場合がある。
+    // 実行接続や関数呼び出しがある場合は動作を失うため、必ず変換を拒否する。
+    FBPGraphIR ConversionIR = IR;
+    ConversionIR.Graphs.Reset();
+    for (const FBPIRGraph& Graph : IR.Graphs)
     {
-        OutDiagnostics.Add(TEXT("MVP requires exactly one event graph and no function or macro graphs"));
+        if (Graph.Kind == TEXT("function") && Graph.Name == TEXT("UserConstructionScript"))
+        {
+            bool bHasExecutableNodes = false;
+            for (const FBPIRNode& Node : Graph.Nodes)
+            {
+                if (Node.FunctionName.IsNone() == false || Node.VariableName.IsNone() == false)
+                {
+                    bHasExecutableNodes = true;
+                    break;
+                }
+            }
+            if (Graph.ExecEdges.IsEmpty() && Graph.DataEdges.IsEmpty() && bHasExecutableNodes == false)
+            {
+                // 未接続の標準Construction Scriptのみ変換対象から除外する。
+                continue;
+            }
+        }
+        ConversionIR.Graphs.Add(Graph);
+    }
+    if (ConversionIR.Graphs.Num() != 1 || ConversionIR.Graphs[0].Kind != TEXT("event"))
+    {
+        OutDiagnostics.Add(FString::Printf(
+            TEXT("MVP requires exactly one event graph; found %d graph(s) after ignoring an empty Construction Script"),
+            ConversionIR.Graphs.Num()));
+        for (const FBPIRGraph& Graph : IR.Graphs)
+        {
+            OutDiagnostics.Add(FString::Printf(TEXT("Graph: %s (kind=%s, nodes=%d, exec edges=%d, data edges=%d)"),
+                *Graph.Name, *Graph.Kind, Graph.Nodes.Num(), Graph.ExecEdges.Num(), Graph.DataEdges.Num()));
+        }
         return false;
     }
 
     FBPPrintStringCall Call;
-    if (FBPPrintStringAnalyzer::Analyze(IR, Call, OutDiagnostics) == false)
+    if (FBPPrintStringAnalyzer::Analyze(ConversionIR, Call, OutDiagnostics) == false)
     {
         return false;
     }
