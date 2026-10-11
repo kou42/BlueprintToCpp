@@ -108,6 +108,8 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         [](const FBPIRPin& Pin) { return Pin.Name == TEXT("SweepHitResult"); });
     if (TestNotNull(TEXT("SweepHitResult output pin"), OutputPin))
     {
+        const FGuid OutputPinId = OutputPin->Id;
+        const FString OutputTypePath = OutputPin->SubCategoryObjectPath;
         // 正常系: GetActorLocationの戻り値をNewLocationへ接続する。
         // 出力HitResultと戻り値は未接続のままにし、生成文を厳密に検証する。
         FBPIRNode LocationSource;
@@ -186,7 +188,6 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
         TestTrue(TEXT("Connected bool clears output"), Statement.IsEmpty());
         IR.Graphs[0].DataEdges.Pop();
-        const FGuid OutputPinId = OutputPin->Id;
         Diagnostics.Reset();
         TestTrue(TEXT("Unconnected output accepted"),
             FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
@@ -215,7 +216,7 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         ConsumerInput.Name = TEXT("Input");
         ConsumerInput.Direction = EGPD_Input;
         ConsumerInput.Category = UEdGraphSchema_K2::PC_Struct;
-        ConsumerInput.SubCategoryObjectPath = OutputPin->SubCategoryObjectPath;
+        ConsumerInput.SubCategoryObjectPath = OutputTypePath;
         Consumer.Pins.Add(ConsumerInput);
         IR.Graphs[0].Nodes.Add(Consumer);
         Diagnostics.Reset();
@@ -236,7 +237,7 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Mismatched struct destination diagnostic"),
                 Diagnostics.Last().Message.Contains(TEXT("Invalid output parameter data edge target or type")));
         }
-        IR.Graphs[0].Nodes.Last().Pins[0].SubCategoryObjectPath = OutputPin->SubCategoryObjectPath;
+        IR.Graphs[0].Nodes.Last().Pins[0].SubCategoryObjectPath = OutputTypePath;
         // Execピンをデータ接続先として使う不正なIRも拒否する。
         IR.Graphs[0].Nodes.Last().Pins[0].Category = UEdGraphSchema_K2::PC_Exec;
         Diagnostics.Reset();
