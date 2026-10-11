@@ -27,19 +27,37 @@ def get_verification_report(record_id: str) -> dict:
     return summarize_verification(review, list_records())
 
 
-def summarize_verification(review: dict, records: list[dict]) -> dict:
+def index_verification_events(records: list[dict]) -> dict[tuple[str, str], list[dict]]:
+    """証跡をレビューID・指紋で一度だけ分類する。
+
+    レビュー数ごとに全証跡を再走査する二乗の処理を避ける。
+    """
+    index: dict[tuple[str, str], list[dict]] = {}
+    for item in records:
+        if item.get("type") not in ("decision", "verification", "behavior"):
+            continue
+        source_id = item.get("source_record_id")
+        fingerprint = item.get("revised_fingerprint")
+        if isinstance(source_id, str) is False or isinstance(fingerprint, str) is False:
+            continue
+        index.setdefault((source_id, fingerprint), []).append(item)
+    return index
+
+
+def summarize_verification(
+    review: dict,
+    records: list[dict],
+    event_index: dict[tuple[str, str], list[dict]] | None = None,
+) -> dict:
     """読み込み済みレコードから総合状態を構築する。
 
     一覧APIからも同じ判定を再利用し、レコード数分のディスク再走査を避ける。
     """
     record_id = review["id"]
     fingerprint = review["result"]["review"]["revised_fingerprint"]
-    related = [
-        item for item in records
-        if item.get("source_record_id") == record_id
-        and item.get("revised_fingerprint") == fingerprint
-        and item.get("type") in ("decision", "verification", "behavior")
-    ]
+    if event_index is None:
+        event_index = index_verification_events(records)
+    related = event_index.get((record_id, fingerprint), [])
     decision = _latest([item for item in related if item["type"] == "decision"])
     build: dict[str, dict | None] = {}
     for tool in ("uht", "ubt"):
