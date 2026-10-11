@@ -33,19 +33,32 @@ private:
     {
         FToolMenuOwnerScoped Owner(this);
         UToolMenu* Menu = UToolMenus::Get()->ExtendMenu(TEXT("ContentBrowser.AssetContextMenu"));
-        if (!Menu) return;
+        if (Menu == nullptr)
+        {
+            return;
+        }
         FToolMenuSection& Section = Menu->FindOrAddSection(TEXT("BlueprintAIConverter"));
         Section.AddDynamicEntry(TEXT("ExportBlueprintSnapshot"), FNewToolMenuSectionDelegate::CreateLambda(
             [](FToolMenuSection& InSection)
             {
                 const auto* Context = InSection.FindContext<UContentBrowserAssetContextMenuContext>();
-                if (!Context) return;
+                if (Context == nullptr)
+                {
+                    return;
+                }
                 bool bHasBlueprint = false;
                 for (const FAssetData& Asset : Context->SelectedAssets)
                 {
-                    if (Cast<UBlueprint>(Asset.GetAsset())) { bHasBlueprint = true; break; }
+                    if (Cast<UBlueprint>(Asset.GetAsset()) != nullptr)
+                    {
+                        bHasBlueprint = true;
+                        break;
+                    }
                 }
-                if (!bHasBlueprint) return;
+                if (bHasBlueprint == false)
+                {
+                    return;
+                }
                 // 既存のJSON Exportとは独立した、C++直接解析の最小Editor導線。
                 // ファイルへの書き込みは行わず、生成結果をクリップボードに渡す。
                 InSection.AddMenuEntry(
@@ -119,12 +132,18 @@ private:
                     FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
                     {
                         const auto* Ctx = MenuContext.FindContext<UContentBrowserAssetContextMenuContext>();
-                        if (!Ctx) return;
+                        if (Ctx == nullptr)
+                        {
+                            return;
+                        }
                         int32 Success = 0, Failure = 0;
                         for (const FAssetData& Asset : Ctx->SelectedAssets)
                         {
                             UBlueprint* BP = Cast<UBlueprint>(Asset.GetAsset());
-                            if (!BP) continue;
+                            if (BP == nullptr)
+                            {
+                                continue;
+                            }
                             FString Path, Error;
                             if (FBPSnapshotExporter::Export(BP, Path, Error))
                             {
