@@ -1,0 +1,10 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "Blueprint AI Converter",
+  "Description": "Exports Blueprint graph snapshots as JSON for offline analysis.",
+  "Category": "Editor",
+  "CanContainContent": false,
+  "Modules": [{"Name": "BlueprintAIConverter", "Type": "Editor", "LoadingPhase": "Default"}]
+}
