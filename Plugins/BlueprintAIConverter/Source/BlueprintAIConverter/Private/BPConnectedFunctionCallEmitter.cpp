@@ -253,9 +253,9 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             for (int32 ConsumerIndex = 0; ConsumerIndex < Binding.ConsumerPinIds.Num(); ++ConsumerIndex)
             {
                 FString ConsumerVariable;
-                if (FBPOutputPinBindingPlan::ResolveConsumerVariable(
+                if (FBPOutputPinBindingPlan::ResolveConsumerVariableFromExec(
                     *CallGraph, Binding, Binding.ConsumerNodeIds[ConsumerIndex],
-                    Binding.ConsumerPinIds[ConsumerIndex], StatementOrder,
+                    Binding.ConsumerPinIds[ConsumerIndex],
                     ConsumerVariable, BindingError) == false)
                 {
                     Diagnostic.Message = FString::Printf(
