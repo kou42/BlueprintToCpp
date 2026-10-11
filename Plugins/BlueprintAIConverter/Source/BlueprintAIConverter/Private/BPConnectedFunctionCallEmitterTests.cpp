@@ -227,6 +227,19 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Connected output diagnostic"),
                 Diagnostics.Last().Message.Contains(TEXT("Connected output parameter")));
         }
+        // 同じ出力ピンから同一入力ピンへの重複リンクはBindingPlanで拒否する。
+        IR.Graphs[0].DataEdges.Add(Link);
+        Diagnostics.Reset();
+        Statement = TEXT("stale");
+        TestFalse(TEXT("Duplicate output consumer rejected"),
+            FBPConnectedFunctionCallEmitter::Emit(IR, CallId, Function, Statement, Diagnostics));
+        TestTrue(TEXT("Duplicate output consumer clears statement"), Statement.IsEmpty());
+        if (Diagnostics.IsEmpty() == false)
+        {
+            TestTrue(TEXT("Duplicate output consumer diagnostic"),
+                Diagnostics.Last().Message.Contains(TEXT("Invalid output binding plan")));
+        }
+        IR.Graphs[0].DataEdges.Pop();
         // ピンのカテゴリが同じでも構造体型が異なる接続は拒否する。
         IR.Graphs[0].Nodes.Last().Pins[0].SubCategoryObjectPath = TEXT("/Script/CoreUObject.Vector");
         Diagnostics.Reset();
