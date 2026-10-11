@@ -3,6 +3,7 @@
 #include "BPConnectedActorLocationLowering.h"
 #include "BPFunctionArgumentEmitter.h"
 #include "BPFunctionCallValidator.h"
+#include "BPBooleanPinDefaultEmitter.h"
 
 bool FBPConnectedFunctionArguments::Emit(const FBPGraphIR& GraphIR,
     const FGuid& CallNodeId, const UFunction* Function, FString& OutArguments,
@@ -106,7 +107,38 @@ bool FBPConnectedFunctionArguments::Emit(const FBPGraphIR& GraphIR,
         }
 
         FBPSemanticExpression Expression;
-        if (FBPConnectedActorLocationLowering::LowerInput(GraphIR, CallNodeId,
+        if (Signature.ParameterTypes[Index].Kind == EBPSemanticTypeKind::Bool)
+        {
+            // 接続済み入力を既定値に置き換えると意味が変わるため、必ず拒否する。
+            bool bConnected = false;
+            for (const FBPIRGraph& Graph : GraphIR.Graphs)
+            {
+                for (const FBPIRLink& Link : Graph.DataEdges)
+                {
+                    if (Link.TargetNode == CallNodeId && Link.TargetPin == Input->Id)
+                    {
+                        bConnected = true;
+                    }
+                }
+            }
+            FString Literal;
+            if (bConnected || FBPBooleanPinDefaultEmitter::Emit(*Input, Literal) == false)
+            {
+                FBPSemanticDiagnostic Diagnostic;
+                Diagnostic.GraphName = GraphName;
+                Diagnostic.NodeId = CallNodeId;
+                Diagnostic.PinId = Input->Id;
+                Diagnostic.Message = TEXT("Unsupported connected or invalid bool default input");
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
+            }
+            Expression.Kind = EBPSemanticExpressionKind::Literal;
+            Expression.Type = Signature.ParameterTypes[Index];
+            Expression.LiteralValue = MoveTemp(Literal);
+            Expression.SourceNodeId = CallNodeId;
+            Expression.SourcePinId = Input->Id;
+        }
+        else if (FBPConnectedActorLocationLowering::LowerInput(GraphIR, CallNodeId,
             Input->Id, Expression, OutDiagnostics) == false)
         {
             return false;
