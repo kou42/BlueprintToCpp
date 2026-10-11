@@ -244,6 +244,8 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Connected output diagnostic"),
                 Diagnostics.Last().Message.Contains(TEXT("Connected output parameter")));
         }
+        // 以下は独立した順序検証テストのため、EmitterテストのExecリンクを除去する。
+        IR.Graphs[0].ExecEdges.Reset();
         // 接続先の実行順序が保証されるか、生成前に独立して検証する。
         FBPOutputPinBinding Binding;
         FString BindingError;
@@ -263,6 +265,29 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         IR.Graphs[0].ExecEdges.Add(ExecLink);
         TestTrue(TEXT("Unique downstream Exec chain accepted"),
             FBPOutputPinBindingPlan::ValidateExecOrder(IR.Graphs[0], Binding, BindingError));
+        TArray<FGuid> ValidStatementOrder;
+        ValidStatementOrder.Add(CallId);
+        ValidStatementOrder.Add(Consumer.Id);
+        FString ResolvedVariable = TEXT("stale");
+        TestTrue(TEXT("Consumer variable resolved with valid Exec and scope"),
+            FBPOutputPinBindingPlan::ResolveConsumerVariable(
+                IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
+                ValidStatementOrder, ResolvedVariable, BindingError));
+        TestEqual(TEXT("Resolved variable matches binding"), ResolvedVariable, Binding.VariableName);
+        ResolvedVariable = TEXT("stale");
+        TestFalse(TEXT("Unknown consumer pin rejected"),
+            FBPOutputPinBindingPlan::ResolveConsumerVariable(
+                IR.Graphs[0], Binding, Consumer.Id, FGuid::NewGuid(),
+                ValidStatementOrder, ResolvedVariable, BindingError));
+        TestTrue(TEXT("Failed variable resolution clears output"), ResolvedVariable.IsEmpty());
+        TArray<FGuid> InvalidStatementOrder;
+        InvalidStatementOrder.Add(Consumer.Id);
+        InvalidStatementOrder.Add(CallId);
+        TestFalse(TEXT("Consumer variable rejected before declaration"),
+            FBPOutputPinBindingPlan::ResolveConsumerVariable(
+                IR.Graphs[0], Binding, Consumer.Id, ConsumerInput.Id,
+                InvalidStatementOrder, ResolvedVariable, BindingError));
+        TestTrue(TEXT("Scope failure clears resolved variable"), ResolvedVariable.IsEmpty());
         FBPIRLink AlternateExec = ExecLink;
         AlternateExec.SourceNode = LocationSource.Id;
         IR.Graphs[0].ExecEdges.Add(AlternateExec);
