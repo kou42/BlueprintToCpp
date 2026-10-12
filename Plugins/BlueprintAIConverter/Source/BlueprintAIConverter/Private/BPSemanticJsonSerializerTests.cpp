@@ -61,6 +61,8 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     const TArray<TSharedPtr<FJsonValue>>& Variables = Root->GetArrayField(TEXT("variables"));
     TestEqual(TEXT("変数数"), Variables.Num(), 1);
     TestEqual(TEXT("変数名"), Variables[0]->AsObject()->GetStringField(TEXT("name")), FString(TEXT("Health")));
+    TestEqual(TEXT("初期値の出典"), Variables[0]->AsObject()->GetStringField(TEXT("default_value_source")),
+        FString(TEXT("unavailable")));
     TestFalse(TEXT("CDO初期値は未取得"), Variables[0]->AsObject()->GetBoolField(TEXT("default_value_available")));
     TestTrue(TEXT("未取得値はnull"), Variables[0]->AsObject()->GetField(TEXT("default_value"))->IsNull());
 
