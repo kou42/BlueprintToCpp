@@ -72,6 +72,15 @@ struct FBPSemanticBasicBlock
     TArray<FBPSemanticStatement> Statements;
 };
 
+// UFunctionの引数と戻り値の型・方向・所有クラスを明示する。
+struct FBPSemanticParameter
+{
+    FName Name;
+    FBPSemanticType Type;
+    bool bIsOut = false;
+    bool bIsReturn = false;
+};
+
 struct FBPSemanticFunction
 {
     FName Name;
