@@ -180,3 +180,33 @@ def test_cdo_default_provenance_consistency():
             bad["variables"][0]["default_value"] = None
         with pytest.raises(SemanticJsonError):
             parse_semantic_json(bad)
+
+
+def test_reflected_function_signature_and_legacy():
+    data = sample()
+    # 旧形式はシグネチャの追加なしでも引き続き受理する。
+    assert parse_semantic_json(data) is data
+    signature = {
+        "signature_source": "generated_class_reflection",
+        "owner_class_path": "/Game/BP_Test.BP_Test_C",
+        "parameters": [
+            {"name": "Amount", "type": {"kind": "int32", "type_path": "",
+             "is_reference": False, "is_const": False}, "is_out": False, "is_return": False},
+            {"name": "ReturnValue", "type": {"kind": "bool", "type_path": "",
+             "is_reference": False, "is_const": False}, "is_out": True, "is_return": True},
+        ],
+    }
+    data["functions"][0].update(signature)
+    assert parse_semantic_json(data) is data
+    bad = copy.deepcopy(data)
+    bad["functions"][0]["parameters"].append(copy.deepcopy(signature["parameters"][0]))
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(bad)
+    bad = copy.deepcopy(data)
+    bad["functions"][0]["parameters"][0]["type"]["kind"] = "invalid"
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(bad)
+    bad = copy.deepcopy(data)
+    del bad["functions"][0]["owner_class_path"]
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(bad)
