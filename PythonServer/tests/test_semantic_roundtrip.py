@@ -53,7 +53,7 @@ def test_cli_exit_codes_and_multiple_files(tmp_path, capsys):
 
 def test_utf8_bom_and_missing_file(tmp_path):
     target = tmp_path / "export.json"
-    target.write_bytes(b"\\xef\\xbb\\xbf" + GOLDEN.read_bytes())
+    target.write_bytes(bytes((0xEF, 0xBB, 0xBF)) + GOLDEN.read_bytes())
     assert validate_file(target)["variables"] == 2
     with pytest.raises(SemanticJsonError):
         validate_file(tmp_path / "missing.json")
