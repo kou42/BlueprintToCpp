@@ -59,3 +59,47 @@ def test_compare_api_includes_header_structure_diff():
     response = client.post("/compare", json=request)
     assert response.status_code == 200
     assert response.json()["structure"]["status"] == "different"
+
+
+def test_compare_with_semantic_trace_keeps_existing_diff():
+    import json
+    from pathlib import Path
+    golden = Path(__file__).parent / "golden" / "semantic_j2_roundtrip.json"
+    request = payload()
+    request["semantic"] = json.loads(golden.read_text(encoding="utf-8"))
+    response = client.post("/compare", json=request)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "different"
+    assert data["equivalent"] is None
+    assert data["semantic_trace"]["source_asset_path"] == "/Game/BP_Roundtrip.BP_Roundtrip"
+    assert data["semantic_trace"]["exec_edge_count"] == 1
+    assert data["semantic_trace"]["unresolved_types"] == []
+
+
+def test_compare_legacy_request_has_no_semantic_trace():
+    response = client.post("/compare", json=payload())
+    assert response.status_code == 200
+    assert response.json()["semantic_trace"] is None
+
+
+def test_compare_rejects_invalid_semantic_trace():
+    request = payload()
+    request["semantic"] = {"schema_version": 1}
+    response = client.post("/compare", json=request)
+    assert response.status_code == 422
+
+
+def test_compare_mock_preserves_trace_without_claiming_equivalence():
+    import json
+    from pathlib import Path
+    golden = Path(__file__).parent / "golden" / "semantic_j2_roundtrip.json"
+    request = payload()
+    request["ai"] = {"status": "mocked", "files": [], "diagnostics": ["Mock only"]}
+    request["semantic"] = json.loads(golden.read_text(encoding="utf-8"))
+    response = client.post("/compare", json=request)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "unavailable"
+    assert data["equivalent"] is None
+    assert data["semantic_trace"]["graph_count"] == 1
