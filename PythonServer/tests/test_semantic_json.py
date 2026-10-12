@@ -50,6 +50,25 @@ def sample():
     }
 
 
+def test_variable_metadata_and_legacy_compatibility():
+    old = sample()
+    parse_semantic_json(old)
+    data = sample()
+    data["variables"] = [{
+        "name": "Health", "guid": None,
+        "type": {"kind": "int32", "type_path": "", "is_reference": False, "is_const": False},
+        "pin_category": "int", "type_path": "", "property_flags": "0",
+        "source": "blueprint_new_variables",
+        "default_value_available": False, "default_value": None,
+    }]
+    assert parse_semantic_json(data) is data
+    for invalid in ("", 0):
+        bad = copy.deepcopy(data)
+        bad["variables"][0]["default_value"] = invalid
+        with pytest.raises(SemanticJsonError):
+            parse_semantic_json(bad)
+
+
 def test_valid_nested_expression():
     data = sample()
     assert parse_semantic_json(data) is data
@@ -90,3 +109,53 @@ def test_diagnostics_allow_unsupported():
         "node_id": None, "pin_id": None, "message": "unsupported",
     })
     parse_semantic_json(data)
+
+
+@pytest.mark.parametrize("kind,category", [
+    ("bool", "bool"), ("int32", "int"), ("int64", "int64"),
+    ("float", "real"), ("double", "real"),
+    ("string", "string"), ("name", "name"), ("text", "text"),
+])
+def test_variable_supported_scalar_kinds(kind, category):
+    data = sample()
+    data["variables"] = [{
+        "name": "Value", "guid": None,
+        "type": {"kind": kind, "type_path": "", "is_reference": False, "is_const": False},
+        "pin_category": category, "type_path": "", "property_flags": "0",
+        "source": "blueprint_new_variables",
+        "default_value_available": False, "default_value": None,
+    }]
+    assert parse_semantic_json(data) is data
+
+
+def test_variable_duplicate_and_invalid_type():
+    data = sample()
+    data["variables"] = [{
+        "name": "Value", "guid": None,
+        "type": {"kind": "unresolved", "type_path": "", "is_reference": False, "is_const": False},
+        "pin_category": "unknown", "type_path": "", "property_flags": "0",
+        "source": "blueprint_new_variables",
+        "default_value_available": False, "default_value": None,
+    }]
+    assert parse_semantic_json(data) is data
+    duplicate = copy.deepcopy(data)
+    duplicate["variables"].append(copy.deepcopy(duplicate["variables"][0]))
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(duplicate)
+    invalid = copy.deepcopy(data)
+    invalid["variables"][0]["type"]["kind"] = "not_a_kind"
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(invalid)
+
+
+def test_variable_explicit_empty_default():
+    data = sample()
+    data["variables"] = [{
+        "name": "Title", "guid": None,
+        "type": {"kind": "string", "type_path": "", "is_reference": False, "is_const": False},
+        "pin_category": "string", "type_path": "", "property_flags": "0",
+        "source": "blueprint_new_variables",
+        "default_value_available": True, "default_value": "",
+    }]
+    assert parse_semantic_json(data) is data
+

@@ -161,6 +161,31 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
     }
     Root->SetArrayField(TEXT("functions"), Functions);
 
+    // 変数名でソートし、Blueprint内部配列の順序に依存しないJSONを生成する。
+    TArray<FBPSemanticVariable> SortedVariables = IR.Variables;
+    SortedVariables.Sort([](const FBPSemanticVariable& A, const FBPSemanticVariable& B)
+    {
+        return A.Name.ToString() < B.Name.ToString();
+    });
+    TArray<TSharedPtr<FJsonValue>> Variables;
+    for (const FBPSemanticVariable& Variable : SortedVariables)
+    {
+        TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        Json->SetStringField(TEXT("name"), Variable.Name.ToString());
+        Json->SetField(TEXT("guid"), GuidValue(Variable.Guid));
+        Json->SetObjectField(TEXT("type"), TypeToJson(Variable.Type));
+        Json->SetStringField(TEXT("pin_category"), Variable.PinCategory);
+        Json->SetStringField(TEXT("type_path"), Variable.TypePath);
+        Json->SetStringField(TEXT("property_flags"), Variable.PropertyFlags);
+        Json->SetStringField(TEXT("source"), Variable.Source);
+        Json->SetBoolField(TEXT("default_value_available"), Variable.bDefaultValueAvailable);
+        Json->SetField(TEXT("default_value"), Variable.bDefaultValueAvailable
+            ? MakeShared<FJsonValueString>(Variable.DefaultValue)
+            : MakeShared<FJsonValueNull>());
+        Variables.Add(MakeShared<FJsonValueObject>(Json));
+    }
+    Root->SetArrayField(TEXT("variables"), Variables);
+
     TArray<TSharedPtr<FJsonValue>> Diagnostics;
     for (const FBPSemanticDiagnostic& Diagnostic : IR.Diagnostics)
     {

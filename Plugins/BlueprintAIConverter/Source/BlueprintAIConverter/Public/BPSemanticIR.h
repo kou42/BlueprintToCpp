@@ -87,11 +87,26 @@ struct FBPSemanticDiagnostic
     FString Message;
 };
 
+// Blueprint宣言の情報を保持する。CDOの値は未取得でも空文字と混同しない。
+struct FBPSemanticVariable
+{
+    FName Name;
+    FGuid Guid;
+    FBPSemanticType Type;
+    FString PinCategory;
+    FString TypePath;
+    FString PropertyFlags;
+    FString Source = TEXT("blueprint_new_variables");
+    bool bDefaultValueAvailable = false;
+    FString DefaultValue;
+};
+
 struct FBPSemanticIR
 {
     FString AssetPath;
     FString ParentClassPath;
     TArray<FBPSemanticFunction> Functions;
+    TArray<FBPSemanticVariable> Variables;
     TArray<FBPSemanticDiagnostic> Diagnostics;
 
     bool HasErrors() const
