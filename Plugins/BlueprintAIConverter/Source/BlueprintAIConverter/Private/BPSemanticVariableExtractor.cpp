@@ -109,7 +109,7 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
     }
 
     // GeneratedClassがない未コンパイルBlueprintでは取得不可として記録する。
-    const UClass* GeneratedClass = Blueprint->GeneratedClass;
+    UClass* GeneratedClass = Blueprint->GeneratedClass;
     const UObject* CDO = GeneratedClass != nullptr ? GeneratedClass->GetDefaultObject() : nullptr;
 
     for (const FBPVariableDescription& Description : Blueprint->NewVariables)
