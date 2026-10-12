@@ -85,6 +85,9 @@ struct FBPSemanticFunction
 {
     FName Name;
     FBPSemanticType ReturnType;
+    FString OwnerClassPath;
+    FString SignatureSource;
+    TArray<FBPSemanticParameter> Parameters;
     TArray<FBPSemanticBasicBlock> Blocks;
 };
 
