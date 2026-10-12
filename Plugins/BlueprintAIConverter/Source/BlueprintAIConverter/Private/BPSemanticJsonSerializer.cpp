@@ -178,6 +178,7 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
         Json->SetStringField(TEXT("type_path"), Variable.TypePath);
         Json->SetStringField(TEXT("property_flags"), Variable.PropertyFlags);
         Json->SetStringField(TEXT("source"), Variable.Source);
+        Json->SetStringField(TEXT("default_value_source"), Variable.DefaultValueSource);
         Json->SetBoolField(TEXT("default_value_available"), Variable.bDefaultValueAvailable);
         Json->SetField(TEXT("default_value"), Variable.bDefaultValueAvailable
             ? MakeShared<FJsonValueString>(Variable.DefaultValue)
