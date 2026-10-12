@@ -103,3 +103,33 @@ def test_compare_mock_preserves_trace_without_claiming_equivalence():
     assert data["status"] == "unavailable"
     assert data["equivalent"] is None
     assert data["semantic_trace"]["graph_count"] == 1
+
+
+def test_compare_semantic_trace_optional_and_consistent():
+    import json
+    from pathlib import Path
+
+    golden = Path(__file__).parent / "golden" / "semantic_j2_roundtrip.json"
+    request = payload()
+    # 旧リクエストでは追跡情報が存在しなくても比較可能。
+    old_response = client.post("/compare", json=request)
+    assert old_response.status_code == 200
+    assert old_response.json()["semantic_trace"] is None
+
+    request["semantic"] = json.loads(golden.read_text(encoding="utf-8"))
+    response = client.post("/compare", json=request)
+    assert response.status_code == 200
+    trace = response.json()["semantic_trace"]
+    assert trace["source_asset_path"] == "/Game/BP_Roundtrip.BP_Roundtrip"
+    assert trace["variable_count"] == 2
+    assert trace["exec_edge_count"] == 1
+    # 比較結果の判定はSemantic情報を付加しても変わらない。
+    assert response.json()["status"] == old_response.json()["status"]
+    assert response.json()["equivalent"] is None
+
+
+def test_compare_rejects_invalid_semantic_trace():
+    request = payload()
+    request["semantic"] = {"schema_version": 1}
+    response = client.post("/compare", json=request)
+    assert response.status_code == 422
