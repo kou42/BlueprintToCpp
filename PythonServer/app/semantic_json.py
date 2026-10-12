@@ -136,12 +136,15 @@ def parse_semantic_json(raw: Any) -> dict:
             _string(variable[key], path + "." + key)
         if variable["source"] != "blueprint_new_variables":
             raise SemanticJsonError(f"{path}.source: unsupported source")
-        default_source = variable.get("default_value_source", "unavailable")
-        if default_source not in ("unavailable", "cdo"):
-            raise SemanticJsonError(f"{path}.default_value_source: invalid source")
+        # J2-1のJSONには出典フィールドが存在しないため、旧形式は受け付ける。
+        # J2-2以降の明示的な出典がある場合のみ、取得可否との整合性を強制する。
         available = _bool(variable["default_value_available"], path + ".default_value_available")
-        if ("cdo" if available else "unavailable") != default_source:
-            raise SemanticJsonError(f"{path}: inconsistent default value provenance")
+        if "default_value_source" in variable:
+            default_source = _string(variable["default_value_source"], path + ".default_value_source")
+            if default_source not in ("unavailable", "cdo"):
+                raise SemanticJsonError(f"{path}.default_value_source: invalid source")
+            if ("cdo" if available else "unavailable") != default_source:
+                raise SemanticJsonError(f"{path}: inconsistent default value provenance")
         if available:
             _string(variable["default_value"], path + ".default_value")
         elif variable["default_value"] is not None:
