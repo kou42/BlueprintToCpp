@@ -18,7 +18,19 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
 
     FBPSemanticFunction Function;
     Function.Name = TEXT("BeginPlay");
-    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Bool;
+    Function.OwnerClassPath = TEXT("/Game/BP_Test.BP_Test_C");
+    Function.SignatureSource = TEXT("generated_class_reflection");
+    FBPSemanticParameter Input;
+    Input.Name = TEXT("Amount");
+    Input.Type.Kind = EBPSemanticTypeKind::Int32;
+    Function.Parameters.Add(Input);
+    FBPSemanticParameter Output;
+    Output.Name = TEXT("ReturnValue");
+    Output.Type.Kind = EBPSemanticTypeKind::Bool;
+    Output.bIsOut = true;
+    Output.bIsReturn = true;
+    Function.Parameters.Add(Output);
     FBPSemanticBasicBlock Block;
     Block.SourceEntryNodeId = FGuid(1, 2, 3, 4);
     FBPSemanticStatement Statement;
@@ -75,6 +87,14 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
 
     const TArray<TSharedPtr<FJsonValue>>& Functions = Root->GetArrayField(TEXT("functions"));
     TestEqual(TEXT("関数数"), Functions.Num(), 1);
+    const TSharedPtr<FJsonObject> FunctionJson = Functions[0]->AsObject();
+    TestEqual(TEXT("所有クラス"), FunctionJson->GetStringField(TEXT("owner_class_path")),
+        FString(TEXT("/Game/BP_Test.BP_Test_C")));
+    const TArray<TSharedPtr<FJsonValue>>& Parameters = FunctionJson->GetArrayField(TEXT("parameters"));
+    TestEqual(TEXT("引数と戻り値"), Parameters.Num(), 2);
+    TestEqual(TEXT("入力型"), Parameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
+        FString(TEXT("int32")));
+    TestTrue(TEXT("戻り値フラグ"), Parameters[1]->AsObject()->GetBoolField(TEXT("is_return")));
     const TSharedPtr<FJsonObject> Expression = Functions[0]->AsObject()
         ->GetArrayField(TEXT("blocks"))[0]->AsObject()
         ->GetArrayField(TEXT("statements"))[0]->AsObject()
