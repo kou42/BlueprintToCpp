@@ -203,6 +203,46 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
     }
     Root->SetArrayField(TEXT("variables"), Variables);
 
+    // Snapshot v1は変更せず、Graph IR由来の接続をv2の独立した追跡領域に記録する。
+    TArray<TSharedPtr<FJsonValue>> GraphTraces;
+    for (const FBPSemanticGraphTrace& Trace : IR.GraphTraces)
+    {
+        TSharedRef<FJsonObject> GraphJson = MakeShared<FJsonObject>();
+        GraphJson->SetStringField(TEXT("name"), Trace.Name);
+        GraphJson->SetStringField(TEXT("path"), Trace.Path);
+        GraphJson->SetStringField(TEXT("kind"), Trace.Kind);
+        TArray<TSharedPtr<FJsonValue>> NodeIds;
+        for (const FGuid& Id : Trace.NodeIds)
+        {
+            NodeIds.Add(GuidValue(Id));
+        }
+        GraphJson->SetArrayField(TEXT("node_ids"), NodeIds);
+        TArray<TSharedPtr<FJsonValue>> PinIds;
+        for (const FGuid& Id : Trace.PinIds)
+        {
+            PinIds.Add(GuidValue(Id));
+        }
+        GraphJson->SetArrayField(TEXT("pin_ids"), PinIds);
+        const auto LinksToJson = [](const TArray<FBPIRLink>& Links)
+        {
+            TArray<TSharedPtr<FJsonValue>> Result;
+            for (const FBPIRLink& Link : Links)
+            {
+                TSharedRef<FJsonObject> LinkJson = MakeShared<FJsonObject>();
+                LinkJson->SetField(TEXT("source_node_id"), GuidValue(Link.SourceNode));
+                LinkJson->SetField(TEXT("source_pin_id"), GuidValue(Link.SourcePin));
+                LinkJson->SetField(TEXT("target_node_id"), GuidValue(Link.TargetNode));
+                LinkJson->SetField(TEXT("target_pin_id"), GuidValue(Link.TargetPin));
+                Result.Add(MakeShared<FJsonValueObject>(LinkJson));
+            }
+            return Result;
+        };
+        GraphJson->SetArrayField(TEXT("exec_edges"), LinksToJson(Trace.ExecEdges));
+        GraphJson->SetArrayField(TEXT("data_edges"), LinksToJson(Trace.DataEdges));
+        GraphTraces.Add(MakeShared<FJsonValueObject>(GraphJson));
+    }
+    Root->SetArrayField(TEXT("graph_traces"), GraphTraces);
+
     TArray<TSharedPtr<FJsonValue>> Diagnostics;
     for (const FBPSemanticDiagnostic& Diagnostic : IR.Diagnostics)
     {

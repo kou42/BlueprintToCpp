@@ -114,12 +114,25 @@ struct FBPSemanticVariable
     FString DefaultValue;
 };
 
+// Graph IRの元GUIDを保持する追跡情報。意味解析結果とは独立して記録する。
+struct FBPSemanticGraphTrace
+{
+    FString Name;
+    FString Path;
+    FString Kind;
+    TArray<FGuid> NodeIds;
+    TArray<FGuid> PinIds;
+    TArray<FBPIRLink> ExecEdges;
+    TArray<FBPIRLink> DataEdges;
+};
+
 struct FBPSemanticIR
 {
     FString AssetPath;
     FString ParentClassPath;
     TArray<FBPSemanticFunction> Functions;
     TArray<FBPSemanticVariable> Variables;
+    TArray<FBPSemanticGraphTrace> GraphTraces;
     TArray<FBPSemanticDiagnostic> Diagnostics;
 
     bool HasErrors() const
