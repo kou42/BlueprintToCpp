@@ -149,6 +149,37 @@ def parse_semantic_json(raw: Any) -> dict:
             _string(variable["default_value"], path + ".default_value")
         elif variable["default_value"] is not None:
             raise SemanticJsonError(f"{path}.default_value: expected null when unavailable")
+    # Graph IR追跡領域は旧v2にはないため任意。リンク端点は実在GUIDと照合する。
+    for gi, raw_graph in enumerate(_array(root.get("graph_traces", []), "graph_traces")):
+        gp = f"graph_traces[{gi}]"
+        graph = _object(raw_graph, gp)
+        _required(graph, ("name", "path", "kind", "node_ids", "pin_ids",
+                          "exec_edges", "data_edges"), gp)
+        for key in ("name", "path", "kind"):
+            _string(graph[key], gp + "." + key)
+        node_ids = _array(graph["node_ids"], gp + ".node_ids")
+        pin_ids = _array(graph["pin_ids"], gp + ".pin_ids")
+        for key, ids in (("node_ids", node_ids), ("pin_ids", pin_ids)):
+            if len(ids) != len(set(ids)):
+                raise SemanticJsonError(f"{gp}.{key}: duplicate GUID")
+            for index, guid in enumerate(ids):
+                _guid(guid, f"{gp}.{key}[{index}]")
+                if guid is None:
+                    raise SemanticJsonError(f"{gp}.{key}: null GUID")
+        for edge_kind in ("exec_edges", "data_edges"):
+            for ei, raw_edge in enumerate(_array(graph[edge_kind], gp + "." + edge_kind)):
+                ep = f"{gp}.{edge_kind}[{ei}]"
+                edge = _object(raw_edge, ep)
+                fields = ("source_node_id", "source_pin_id", "target_node_id", "target_pin_id")
+                _required(edge, fields, ep)
+                for field in fields:
+                    _guid(edge[field], ep + "." + field)
+                    if edge[field] is None:
+                        raise SemanticJsonError(f"{ep}.{field}: null endpoint")
+                if edge["source_node_id"] not in node_ids or edge["target_node_id"] not in node_ids:
+                    raise SemanticJsonError(f"{ep}: unknown node endpoint")
+                if edge["source_pin_id"] not in pin_ids or edge["target_pin_id"] not in pin_ids:
+                    raise SemanticJsonError(f"{ep}: unknown pin endpoint")
     status = _enum(root["semantic_status"], STATUSES, "semantic_status")
     function_names: set[str] = set()
     for fi, function in enumerate(_array(root["functions"], "functions")):
