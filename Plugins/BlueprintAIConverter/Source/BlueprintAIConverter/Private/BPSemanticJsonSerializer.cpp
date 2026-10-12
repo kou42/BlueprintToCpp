@@ -143,6 +143,22 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
         TSharedRef<FJsonObject> FunctionJson = MakeShared<FJsonObject>();
         FunctionJson->SetStringField(TEXT("name"), Function.Name.ToString());
         FunctionJson->SetObjectField(TEXT("return_type"), TypeToJson(Function.ReturnType));
+        if (Function.SignatureSource.IsEmpty() == false)
+        {
+            FunctionJson->SetStringField(TEXT("owner_class_path"), Function.OwnerClassPath);
+            FunctionJson->SetStringField(TEXT("signature_source"), Function.SignatureSource);
+            TArray<TSharedPtr<FJsonValue>> Parameters;
+            for (const FBPSemanticParameter& Parameter : Function.Parameters)
+            {
+                TSharedRef<FJsonObject> ParamJson = MakeShared<FJsonObject>();
+                ParamJson->SetStringField(TEXT("name"), Parameter.Name.ToString());
+                ParamJson->SetObjectField(TEXT("type"), TypeToJson(Parameter.Type));
+                ParamJson->SetBoolField(TEXT("is_out"), Parameter.bIsOut);
+                ParamJson->SetBoolField(TEXT("is_return"), Parameter.bIsReturn);
+                Parameters.Add(MakeShared<FJsonValueObject>(ParamJson));
+            }
+            FunctionJson->SetArrayField(TEXT("parameters"), Parameters);
+        }
         TArray<TSharedPtr<FJsonValue>> Blocks;
         for (const FBPSemanticBasicBlock& Block : Function.Blocks)
         {

@@ -5,6 +5,7 @@
 #include "BPSnapshotExporter.h"
 #include "BPSemanticJsonSerializer.h"
 #include "BPSemanticVariableExtractor.h"
+#include "BPSemanticFunctionExtractor.h"
 #include "BPSemanticJsonExporter.h"
 #include "Misc/EngineVersion.h"
 #include "BPGraphIR.h"
@@ -272,6 +273,7 @@ private:
                             }
                         }
                         FBPSemanticVariableExtractor::Append(Blueprint, SemanticIR);
+                        FBPSemanticFunctionExtractor::Append(Blueprint, SemanticIR);
                         FString Json;
                         if (FBPSemanticJsonSerializer::Serialize(
                             SemanticIR, FEngineVersion::Current().ToString(), Json) == false)
@@ -339,6 +341,7 @@ private:
                         }
 
                         FBPSemanticVariableExtractor::Append(Blueprint, SemanticIR);
+                        FBPSemanticFunctionExtractor::Append(Blueprint, SemanticIR);
                         FString Path;
                         FString Error;
                         if (FBPSemanticJsonExporter::Export(

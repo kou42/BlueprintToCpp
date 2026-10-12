@@ -160,6 +160,29 @@ def parse_semantic_json(raw: Any) -> dict:
             raise SemanticJsonError(f"{path}: duplicate function {name}")
         function_names.add(name)
         _type(f["return_type"], path + ".return_type")
+        # 旧v2にはシグネチャがない。新形式のフィールドがある場合は一式を検証。
+        if any(key in f for key in ("signature_source", "owner_class_path", "parameters")):
+            _required(f, ("signature_source", "owner_class_path", "parameters"), path)
+            if _string(f["signature_source"], path + ".signature_source") != "generated_class_reflection":
+                raise SemanticJsonError(f"{path}: invalid signature source")
+            _string(f["owner_class_path"], path + ".owner_class_path")
+            names: set[str] = set()
+            return_count = 0
+            for pi, parameter in enumerate(_array(f["parameters"], path + ".parameters")):
+                pp = f"{path}.parameters[{pi}]"
+                p = _object(parameter, pp)
+                _required(p, ("name", "type", "is_out", "is_return"), pp)
+                pname = _string(p["name"], pp + ".name")
+                if not pname or pname in names:
+                    raise SemanticJsonError(f"{pp}: duplicate or empty parameter name")
+                names.add(pname)
+                _type(p["type"], pp + ".type")
+                _bool(p["is_out"], pp + ".is_out")
+                if _bool(p["is_return"], pp + ".is_return"):
+                    return_count += 1
+            if return_count > 1:
+                raise SemanticJsonError(f"{path}: multiple return parameters")
+
         for bi, block in enumerate(_array(f["blocks"], path + ".blocks")):
             bp = f"{path}.blocks[{bi}]"
             b = _object(block, bp)
