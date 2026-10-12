@@ -2,6 +2,7 @@
 
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraphPin.h"
+#include "UObject/UnrealType.h"
 
 namespace
 {
@@ -27,6 +28,77 @@ EBPSemanticTypeKind ResolveType(const FEdGraphPinType& PinType)
     if (Name == TEXT("struct")) { return EBPSemanticTypeKind::Struct; }
     return EBPSemanticTypeKind::Unresolved;
 }
+    
+// リフレクション型とIR型が一致するスカラーだけをCDOから読み取る。
+// ExportTextItemなどの汎用文字列化は型の意味を失うためここでは使用しない。
+bool ReadScalarDefault(const FProperty* Property, const UObject* CDO,
+    EBPSemanticTypeKind Kind, FString& OutValue)
+{
+    if (Property == nullptr || CDO == nullptr)
+    {
+        return false;
+    }
+    const void* Address = Property->ContainerPtrToValuePtr<void>(CDO);
+    if (Address == nullptr)
+    {
+        return false;
+    }
+    switch (Kind)
+    {
+    case EBPSemanticTypeKind::Bool:
+        if (const FBoolProperty* Typed = CastField<FBoolProperty>(Property))
+        {
+            OutValue = Typed->GetPropertyValue(Address) ? TEXT("true") : TEXT("false");
+            return true;
+        }
+        break;
+    case EBPSemanticTypeKind::Int32:
+        if (const FIntProperty* Typed = CastField<FIntProperty>(Property))
+        {
+            OutValue = LexToString(Typed->GetPropertyValue(Address));
+            return true;
+        }
+        break;
+    case EBPSemanticTypeKind::Int64:
+        if (const FInt64Property* Typed = CastField<FInt64Property>(Property))
+        {
+            OutValue = LexToString(Typed->GetPropertyValue(Address));
+            return true;
+        }
+        break;
+    case EBPSemanticTypeKind::Float:
+        if (const FFloatProperty* Typed = CastField<FFloatProperty>(Property))
+        {
+            OutValue = LexToString(Typed->GetPropertyValue(Address));
+            return true;
+        }
+        break;
+    case EBPSemanticTypeKind::Double:
+        if (const FDoubleProperty* Typed = CastField<FDoubleProperty>(Property))
+        {
+            OutValue = LexToString(Typed->GetPropertyValue(Address));
+            return true;
+        }
+        break;
+    case EBPSemanticTypeKind::String:
+        if (const FStrProperty* Typed = CastField<FStrProperty>(Property))
+        {
+            OutValue = Typed->GetPropertyValue(Address);
+            return true;
+        }
+        break;
+    case EBPSemanticTypeKind::Name:
+        if (const FNameProperty* Typed = CastField<FNameProperty>(Property))
+        {
+            OutValue = Typed->GetPropertyValue(Address).ToString();
+            return true;
+        }
+        break;
+    default:
+        break;
+    }
+    return false;
+}
 }
 
 void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemanticIR& IR)
@@ -35,6 +107,10 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
     {
         return;
     }
+
+    // GeneratedClassがない未コンパイルBlueprintでは取得不可として記録する。
+    const UClass* GeneratedClass = Blueprint->GeneratedClass;
+    const UObject* CDO = GeneratedClass != nullptr ? GeneratedClass->GetDefaultObject() : nullptr;
 
     for (const FBPVariableDescription& Description : Blueprint->NewVariables)
     {
@@ -59,6 +135,20 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             Diagnostic.Message = FString::Printf(TEXT("Variable %s requires type resolution: %s"),
                 *Variable.Name.ToString(), *Variable.PinCategory);
             IR.Diagnostics.Add(MoveTemp(Diagnostic));
+        }
+        // 宣言名に対応する生成クラスのPropertyのみ対象とする。
+        // 配列・Map・Set・参照型・未解決型はJ2-2の安全なスカラー対象外。
+        if (CDO != nullptr &&
+            Description.VarType.ContainerType == EPinContainerType::None &&
+            Description.VarType.bIsReference == false &&
+            Variable.Type.Kind != EBPSemanticTypeKind::Unresolved)
+        {
+            const FProperty* Property = FindFProperty<FProperty>(GeneratedClass, Description.VarName);
+            if (ReadScalarDefault(Property, CDO, Variable.Type.Kind, Variable.DefaultValue))
+            {
+                Variable.bDefaultValueAvailable = true;
+                Variable.DefaultValueSource = TEXT("cdo");
+            }
         }
         IR.Variables.Add(MoveTemp(Variable));
     }
