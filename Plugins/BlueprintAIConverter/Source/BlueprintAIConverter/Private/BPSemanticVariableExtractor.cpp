@@ -121,6 +121,11 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         Variable.TypePath = GetPathNameSafe(Description.VarType.PinSubCategoryObject.Get());
         Variable.PropertyFlags = FString::Printf(TEXT("%llu"), static_cast<uint64>(Description.PropertyFlags));
         Variable.Type.Kind = ResolveType(Description.VarType);
+        // コンテナをスカラーとして誤表現しない。IRの型体系にコンテナを追加するまで未解決扱い。
+        if (Description.VarType.ContainerType != EPinContainerType::None)
+        {
+            Variable.Type.Kind = EBPSemanticTypeKind::Unresolved;
+        }
         Variable.Type.TypePath = Variable.TypePath;
         Variable.Type.bIsReference = Description.VarType.bIsReference;
         Variable.Type.bIsConst = Description.VarType.bIsConst;
@@ -128,8 +133,7 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         // J2-2でCDOから型安全に取得するまで、宣言のDefaultValueをCDO値と誤認しない。
         // コンテナやreal型のサブカテゴリなど未解決情報は推測せず診断する。
         if (Description.VarType.ContainerType != EPinContainerType::None ||
-            Variable.Type.Kind == EBPSemanticTypeKind::Unresolved ||
-            (Variable.PinCategory == TEXT("real") && Variable.Type.Kind == EBPSemanticTypeKind::Unresolved))
+            Variable.Type.Kind == EBPSemanticTypeKind::Unresolved)
         {
             FBPSemanticDiagnostic Diagnostic;
             Diagnostic.Message = FString::Printf(TEXT("Variable %s requires type resolution: %s"),
