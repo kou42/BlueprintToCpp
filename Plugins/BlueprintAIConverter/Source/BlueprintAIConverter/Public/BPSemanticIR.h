@@ -72,10 +72,22 @@ struct FBPSemanticBasicBlock
     TArray<FBPSemanticStatement> Statements;
 };
 
+// UFunctionの引数と戻り値の型・方向・所有クラスを明示する。
+struct FBPSemanticParameter
+{
+    FName Name;
+    FBPSemanticType Type;
+    bool bIsOut = false;
+    bool bIsReturn = false;
+};
+
 struct FBPSemanticFunction
 {
     FName Name;
     FBPSemanticType ReturnType;
+    FString OwnerClassPath;
+    FString SignatureSource;
+    TArray<FBPSemanticParameter> Parameters;
     TArray<FBPSemanticBasicBlock> Blocks;
 };
 
@@ -97,8 +109,21 @@ struct FBPSemanticVariable
     FString TypePath;
     FString PropertyFlags;
     FString Source = TEXT("blueprint_new_variables");
+    FString DefaultValueSource = TEXT("unavailable");
     bool bDefaultValueAvailable = false;
     FString DefaultValue;
+};
+
+// Graph IRの元GUIDを保持する追跡情報。意味解析結果とは独立して記録する。
+struct FBPSemanticGraphTrace
+{
+    FString Name;
+    FString Path;
+    FString Kind;
+    TArray<FGuid> NodeIds;
+    TArray<FGuid> PinIds;
+    TArray<FBPIRLink> ExecEdges;
+    TArray<FBPIRLink> DataEdges;
 };
 
 struct FBPSemanticIR
@@ -107,6 +132,7 @@ struct FBPSemanticIR
     FString ParentClassPath;
     TArray<FBPSemanticFunction> Functions;
     TArray<FBPSemanticVariable> Variables;
+    TArray<FBPSemanticGraphTrace> GraphTraces;
     TArray<FBPSemanticDiagnostic> Diagnostics;
 
     bool HasErrors() const

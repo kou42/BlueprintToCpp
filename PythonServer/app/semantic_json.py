@@ -136,11 +136,50 @@ def parse_semantic_json(raw: Any) -> dict:
             _string(variable[key], path + "." + key)
         if variable["source"] != "blueprint_new_variables":
             raise SemanticJsonError(f"{path}.source: unsupported source")
+        # J2-1のJSONには出典フィールドが存在しないため、旧形式は受け付ける。
+        # J2-2以降の明示的な出典がある場合のみ、取得可否との整合性を強制する。
         available = _bool(variable["default_value_available"], path + ".default_value_available")
+        if "default_value_source" in variable:
+            default_source = _string(variable["default_value_source"], path + ".default_value_source")
+            if default_source not in ("unavailable", "cdo"):
+                raise SemanticJsonError(f"{path}.default_value_source: invalid source")
+            if ("cdo" if available else "unavailable") != default_source:
+                raise SemanticJsonError(f"{path}: inconsistent default value provenance")
         if available:
             _string(variable["default_value"], path + ".default_value")
         elif variable["default_value"] is not None:
             raise SemanticJsonError(f"{path}.default_value: expected null when unavailable")
+    # Graph IR追跡領域は旧v2にはないため任意。リンク端点は実在GUIDと照合する。
+    for gi, raw_graph in enumerate(_array(root.get("graph_traces", []), "graph_traces")):
+        gp = f"graph_traces[{gi}]"
+        graph = _object(raw_graph, gp)
+        _required(graph, ("name", "path", "kind", "node_ids", "pin_ids",
+                          "exec_edges", "data_edges"), gp)
+        for key in ("name", "path", "kind"):
+            _string(graph[key], gp + "." + key)
+        node_ids = _array(graph["node_ids"], gp + ".node_ids")
+        pin_ids = _array(graph["pin_ids"], gp + ".pin_ids")
+        for key, ids in (("node_ids", node_ids), ("pin_ids", pin_ids)):
+            if len(ids) != len(set(ids)):
+                raise SemanticJsonError(f"{gp}.{key}: duplicate GUID")
+            for index, guid in enumerate(ids):
+                _guid(guid, f"{gp}.{key}[{index}]")
+                if guid is None:
+                    raise SemanticJsonError(f"{gp}.{key}: null GUID")
+        for edge_kind in ("exec_edges", "data_edges"):
+            for ei, raw_edge in enumerate(_array(graph[edge_kind], gp + "." + edge_kind)):
+                ep = f"{gp}.{edge_kind}[{ei}]"
+                edge = _object(raw_edge, ep)
+                fields = ("source_node_id", "source_pin_id", "target_node_id", "target_pin_id")
+                _required(edge, fields, ep)
+                for field in fields:
+                    _guid(edge[field], ep + "." + field)
+                    if edge[field] is None:
+                        raise SemanticJsonError(f"{ep}.{field}: null endpoint")
+                if edge["source_node_id"] not in node_ids or edge["target_node_id"] not in node_ids:
+                    raise SemanticJsonError(f"{ep}: unknown node endpoint")
+                if edge["source_pin_id"] not in pin_ids or edge["target_pin_id"] not in pin_ids:
+                    raise SemanticJsonError(f"{ep}: unknown pin endpoint")
     status = _enum(root["semantic_status"], STATUSES, "semantic_status")
     function_names: set[str] = set()
     for fi, function in enumerate(_array(root["functions"], "functions")):
@@ -152,6 +191,29 @@ def parse_semantic_json(raw: Any) -> dict:
             raise SemanticJsonError(f"{path}: duplicate function {name}")
         function_names.add(name)
         _type(f["return_type"], path + ".return_type")
+        # 旧v2にはシグネチャがない。新形式のフィールドがある場合は一式を検証。
+        if any(key in f for key in ("signature_source", "owner_class_path", "parameters")):
+            _required(f, ("signature_source", "owner_class_path", "parameters"), path)
+            if _string(f["signature_source"], path + ".signature_source") != "generated_class_reflection":
+                raise SemanticJsonError(f"{path}: invalid signature source")
+            _string(f["owner_class_path"], path + ".owner_class_path")
+            names: set[str] = set()
+            return_count = 0
+            for pi, parameter in enumerate(_array(f["parameters"], path + ".parameters")):
+                pp = f"{path}.parameters[{pi}]"
+                p = _object(parameter, pp)
+                _required(p, ("name", "type", "is_out", "is_return"), pp)
+                pname = _string(p["name"], pp + ".name")
+                if not pname or pname in names:
+                    raise SemanticJsonError(f"{pp}: duplicate or empty parameter name")
+                names.add(pname)
+                _type(p["type"], pp + ".type")
+                _bool(p["is_out"], pp + ".is_out")
+                if _bool(p["is_return"], pp + ".is_return"):
+                    return_count += 1
+            if return_count > 1:
+                raise SemanticJsonError(f"{path}: multiple return parameters")
+
         for bi, block in enumerate(_array(f["blocks"], path + ".blocks")):
             bp = f"{path}.blocks[{bi}]"
             b = _object(block, bp)

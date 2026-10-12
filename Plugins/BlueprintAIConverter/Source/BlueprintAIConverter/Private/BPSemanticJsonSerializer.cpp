@@ -143,6 +143,22 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
         TSharedRef<FJsonObject> FunctionJson = MakeShared<FJsonObject>();
         FunctionJson->SetStringField(TEXT("name"), Function.Name.ToString());
         FunctionJson->SetObjectField(TEXT("return_type"), TypeToJson(Function.ReturnType));
+        if (Function.SignatureSource.IsEmpty() == false)
+        {
+            FunctionJson->SetStringField(TEXT("owner_class_path"), Function.OwnerClassPath);
+            FunctionJson->SetStringField(TEXT("signature_source"), Function.SignatureSource);
+            TArray<TSharedPtr<FJsonValue>> Parameters;
+            for (const FBPSemanticParameter& Parameter : Function.Parameters)
+            {
+                TSharedRef<FJsonObject> ParamJson = MakeShared<FJsonObject>();
+                ParamJson->SetStringField(TEXT("name"), Parameter.Name.ToString());
+                ParamJson->SetObjectField(TEXT("type"), TypeToJson(Parameter.Type));
+                ParamJson->SetBoolField(TEXT("is_out"), Parameter.bIsOut);
+                ParamJson->SetBoolField(TEXT("is_return"), Parameter.bIsReturn);
+                Parameters.Add(MakeShared<FJsonValueObject>(ParamJson));
+            }
+            FunctionJson->SetArrayField(TEXT("parameters"), Parameters);
+        }
         TArray<TSharedPtr<FJsonValue>> Blocks;
         for (const FBPSemanticBasicBlock& Block : Function.Blocks)
         {
@@ -178,6 +194,7 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
         Json->SetStringField(TEXT("type_path"), Variable.TypePath);
         Json->SetStringField(TEXT("property_flags"), Variable.PropertyFlags);
         Json->SetStringField(TEXT("source"), Variable.Source);
+        Json->SetStringField(TEXT("default_value_source"), Variable.DefaultValueSource);
         Json->SetBoolField(TEXT("default_value_available"), Variable.bDefaultValueAvailable);
         Json->SetField(TEXT("default_value"), Variable.bDefaultValueAvailable
             ? MakeShared<FJsonValueString>(Variable.DefaultValue)
@@ -185,6 +202,46 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
         Variables.Add(MakeShared<FJsonValueObject>(Json));
     }
     Root->SetArrayField(TEXT("variables"), Variables);
+
+    // Snapshot v1は変更せず、Graph IR由来の接続をv2の独立した追跡領域に記録する。
+    TArray<TSharedPtr<FJsonValue>> GraphTraces;
+    for (const FBPSemanticGraphTrace& Trace : IR.GraphTraces)
+    {
+        TSharedRef<FJsonObject> GraphJson = MakeShared<FJsonObject>();
+        GraphJson->SetStringField(TEXT("name"), Trace.Name);
+        GraphJson->SetStringField(TEXT("path"), Trace.Path);
+        GraphJson->SetStringField(TEXT("kind"), Trace.Kind);
+        TArray<TSharedPtr<FJsonValue>> NodeIds;
+        for (const FGuid& Id : Trace.NodeIds)
+        {
+            NodeIds.Add(GuidValue(Id));
+        }
+        GraphJson->SetArrayField(TEXT("node_ids"), NodeIds);
+        TArray<TSharedPtr<FJsonValue>> PinIds;
+        for (const FGuid& Id : Trace.PinIds)
+        {
+            PinIds.Add(GuidValue(Id));
+        }
+        GraphJson->SetArrayField(TEXT("pin_ids"), PinIds);
+        const auto LinksToJson = [](const TArray<FBPIRLink>& Links)
+        {
+            TArray<TSharedPtr<FJsonValue>> Result;
+            for (const FBPIRLink& Link : Links)
+            {
+                TSharedRef<FJsonObject> LinkJson = MakeShared<FJsonObject>();
+                LinkJson->SetField(TEXT("source_node_id"), GuidValue(Link.SourceNode));
+                LinkJson->SetField(TEXT("source_pin_id"), GuidValue(Link.SourcePin));
+                LinkJson->SetField(TEXT("target_node_id"), GuidValue(Link.TargetNode));
+                LinkJson->SetField(TEXT("target_pin_id"), GuidValue(Link.TargetPin));
+                Result.Add(MakeShared<FJsonValueObject>(LinkJson));
+            }
+            return Result;
+        };
+        GraphJson->SetArrayField(TEXT("exec_edges"), LinksToJson(Trace.ExecEdges));
+        GraphJson->SetArrayField(TEXT("data_edges"), LinksToJson(Trace.DataEdges));
+        GraphTraces.Add(MakeShared<FJsonValueObject>(GraphJson));
+    }
+    Root->SetArrayField(TEXT("graph_traces"), GraphTraces);
 
     TArray<TSharedPtr<FJsonValue>> Diagnostics;
     for (const FBPSemanticDiagnostic& Diagnostic : IR.Diagnostics)

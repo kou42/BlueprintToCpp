@@ -18,7 +18,19 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
 
     FBPSemanticFunction Function;
     Function.Name = TEXT("BeginPlay");
-    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Bool;
+    Function.OwnerClassPath = TEXT("/Game/BP_Test.BP_Test_C");
+    Function.SignatureSource = TEXT("generated_class_reflection");
+    FBPSemanticParameter Input;
+    Input.Name = TEXT("Amount");
+    Input.Type.Kind = EBPSemanticTypeKind::Int32;
+    Function.Parameters.Add(Input);
+    FBPSemanticParameter Output;
+    Output.Name = TEXT("ReturnValue");
+    Output.Type.Kind = EBPSemanticTypeKind::Bool;
+    Output.bIsOut = true;
+    Output.bIsReturn = true;
+    Function.Parameters.Add(Output);
     FBPSemanticBasicBlock Block;
     Block.SourceEntryNodeId = FGuid(1, 2, 3, 4);
     FBPSemanticStatement Statement;
@@ -44,6 +56,28 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Variable.PinCategory = TEXT("int");
     Variable.PropertyFlags = TEXT("0");
     IR.Variables.Add(Variable);
+    FBPSemanticVariable Earlier;
+    Earlier.Name = TEXT("Ammo");
+    Earlier.Type.Kind = EBPSemanticTypeKind::Bool;
+    Earlier.PinCategory = TEXT("bool");
+    IR.Variables.Add(Earlier);
+
+    FBPSemanticGraphTrace Trace;
+    Trace.Name = TEXT("EventGraph");
+    Trace.Path = TEXT("/Game/BP_Test.EventGraph");
+    Trace.Kind = TEXT("ubergraph");
+    Trace.NodeIds.Add(FGuid(1, 2, 3, 4));
+    Trace.NodeIds.Add(FGuid(5, 6, 7, 8));
+    Trace.PinIds.Add(FGuid(9, 10, 11, 12));
+    Trace.PinIds.Add(FGuid(13, 14, 15, 16));
+    FBPIRLink Link;
+    Link.SourceNode = Trace.NodeIds[0];
+    Link.TargetNode = Trace.NodeIds[1];
+    Link.SourcePin = Trace.PinIds[0];
+    Link.TargetPin = Trace.PinIds[1];
+    Trace.ExecEdges.Add(Link);
+    Trace.DataEdges.Add(Link);
+    IR.GraphTraces.Add(MoveTemp(Trace));
 
     FString JsonText;
     TestTrue(TEXT("JSON v2を生成"), FBPSemanticJsonSerializer::Serialize(IR, TEXT("5.7.4"), JsonText));
@@ -59,13 +93,30 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
         FString(TEXT("partial")));
 
     const TArray<TSharedPtr<FJsonValue>>& Variables = Root->GetArrayField(TEXT("variables"));
-    TestEqual(TEXT("変数数"), Variables.Num(), 1);
-    TestEqual(TEXT("変数名"), Variables[0]->AsObject()->GetStringField(TEXT("name")), FString(TEXT("Health")));
+    TestEqual(TEXT("変数数"), Variables.Num(), 2);
+    TestEqual(TEXT("変数の安定ソート"), Variables[0]->AsObject()->GetStringField(TEXT("name")),
+        FString(TEXT("Ammo")));
+    TestEqual(TEXT("変数名"), Variables[1]->AsObject()->GetStringField(TEXT("name")), FString(TEXT("Health")));
+    TestEqual(TEXT("初期値の出典"), Variables[0]->AsObject()->GetStringField(TEXT("default_value_source")),
+        FString(TEXT("unavailable")));
     TestFalse(TEXT("CDO初期値は未取得"), Variables[0]->AsObject()->GetBoolField(TEXT("default_value_available")));
     TestTrue(TEXT("未取得値はnull"), Variables[0]->AsObject()->GetField(TEXT("default_value"))->IsNull());
 
+    const TArray<TSharedPtr<FJsonValue>>& GraphTraces = Root->GetArrayField(TEXT("graph_traces"));
+    TestEqual(TEXT("グラフ追跡数"), GraphTraces.Num(), 1);
+    TestEqual(TEXT("Exec接続数"), GraphTraces[0]->AsObject()->GetArrayField(TEXT("exec_edges")).Num(), 1);
+    TestEqual(TEXT("Data接続数"), GraphTraces[0]->AsObject()->GetArrayField(TEXT("data_edges")).Num(), 1);
+
     const TArray<TSharedPtr<FJsonValue>>& Functions = Root->GetArrayField(TEXT("functions"));
     TestEqual(TEXT("関数数"), Functions.Num(), 1);
+    const TSharedPtr<FJsonObject> FunctionJson = Functions[0]->AsObject();
+    TestEqual(TEXT("所有クラス"), FunctionJson->GetStringField(TEXT("owner_class_path")),
+        FString(TEXT("/Game/BP_Test.BP_Test_C")));
+    const TArray<TSharedPtr<FJsonValue>>& Parameters = FunctionJson->GetArrayField(TEXT("parameters"));
+    TestEqual(TEXT("引数と戻り値"), Parameters.Num(), 2);
+    TestEqual(TEXT("入力型"), Parameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
+        FString(TEXT("int32")));
+    TestTrue(TEXT("戻り値フラグ"), Parameters[1]->AsObject()->GetBoolField(TEXT("is_return")));
     const TSharedPtr<FJsonObject> Expression = Functions[0]->AsObject()
         ->GetArrayField(TEXT("blocks"))[0]->AsObject()
         ->GetArrayField(TEXT("statements"))[0]->AsObject()

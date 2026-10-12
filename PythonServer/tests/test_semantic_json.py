@@ -159,3 +159,81 @@ def test_variable_explicit_empty_default():
     }]
     assert parse_semantic_json(data) is data
 
+
+
+def test_cdo_default_provenance_consistency():
+    data = sample()
+    data["variables"] = [{
+        "name": "Health", "guid": None,
+        "type": {"kind": "int32", "type_path": "", "is_reference": False, "is_const": False},
+        "pin_category": "int", "type_path": "", "property_flags": "0",
+        "source": "blueprint_new_variables",
+        "default_value_source": "cdo",
+        "default_value_available": True, "default_value": "0",
+    }]
+    assert parse_semantic_json(data) is data
+    for source, available in [("unavailable", True), ("cdo", False), ("invalid", True)]:
+        bad = copy.deepcopy(data)
+        bad["variables"][0]["default_value_source"] = source
+        bad["variables"][0]["default_value_available"] = available
+        if not available:
+            bad["variables"][0]["default_value"] = None
+        with pytest.raises(SemanticJsonError):
+            parse_semantic_json(bad)
+
+
+def test_reflected_function_signature_and_legacy():
+    data = sample()
+    # 旧形式はシグネチャの追加なしでも引き続き受理する。
+    assert parse_semantic_json(data) is data
+    signature = {
+        "signature_source": "generated_class_reflection",
+        "owner_class_path": "/Game/BP_Test.BP_Test_C",
+        "parameters": [
+            {"name": "Amount", "type": {"kind": "int32", "type_path": "",
+             "is_reference": False, "is_const": False}, "is_out": False, "is_return": False},
+            {"name": "ReturnValue", "type": {"kind": "bool", "type_path": "",
+             "is_reference": False, "is_const": False}, "is_out": True, "is_return": True},
+        ],
+    }
+    data["functions"][0].update(signature)
+    assert parse_semantic_json(data) is data
+    bad = copy.deepcopy(data)
+    bad["functions"][0]["parameters"].append(copy.deepcopy(signature["parameters"][0]))
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(bad)
+    bad = copy.deepcopy(data)
+    bad["functions"][0]["parameters"][0]["type"]["kind"] = "invalid"
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(bad)
+    bad = copy.deepcopy(data)
+    del bad["functions"][0]["owner_class_path"]
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(bad)
+
+
+def test_graph_trace_exec_data_edges_and_legacy():
+    data = sample()
+    assert parse_semantic_json(data) is data
+    n1 = "00000000-0000-0000-0000-000000000011"
+    n2 = "00000000-0000-0000-0000-000000000012"
+    p1 = "00000000-0000-0000-0000-000000000021"
+    p2 = "00000000-0000-0000-0000-000000000022"
+    edge = {"source_node_id": n1, "source_pin_id": p1,
+            "target_node_id": n2, "target_pin_id": p2}
+    data["graph_traces"] = [{
+        "name": "EventGraph", "path": "/Game/Test.EventGraph", "kind": "ubergraph",
+        "node_ids": [n1, n2], "pin_ids": [p1, p2],
+        "exec_edges": [edge], "data_edges": [copy.deepcopy(edge)],
+    }]
+    assert parse_semantic_json(data) is data
+    bad = copy.deepcopy(data)
+    bad["graph_traces"][0]["data_edges"][0]["target_pin_id"] = (
+        "00000000-0000-0000-0000-000000000099"
+    )
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(bad)
+    bad = copy.deepcopy(data)
+    bad["graph_traces"][0]["node_ids"].append(n1)
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(bad)
