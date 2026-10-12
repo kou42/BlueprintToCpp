@@ -210,3 +210,30 @@ def test_reflected_function_signature_and_legacy():
     del bad["functions"][0]["owner_class_path"]
     with pytest.raises(SemanticJsonError):
         parse_semantic_json(bad)
+
+
+def test_graph_trace_exec_data_edges_and_legacy():
+    data = sample()
+    assert parse_semantic_json(data) is data
+    n1 = "00000000-0000-0000-0000-000000000011"
+    n2 = "00000000-0000-0000-0000-000000000012"
+    p1 = "00000000-0000-0000-0000-000000000021"
+    p2 = "00000000-0000-0000-0000-000000000022"
+    edge = {"source_node_id": n1, "source_pin_id": p1,
+            "target_node_id": n2, "target_pin_id": p2}
+    data["graph_traces"] = [{
+        "name": "EventGraph", "path": "/Game/Test.EventGraph", "kind": "ubergraph",
+        "node_ids": [n1, n2], "pin_ids": [p1, p2],
+        "exec_edges": [edge], "data_edges": [copy.deepcopy(edge)],
+    }]
+    assert parse_semantic_json(data) is data
+    bad = copy.deepcopy(data)
+    bad["graph_traces"][0]["data_edges"][0]["target_pin_id"] = (
+        "00000000-0000-0000-0000-000000000099"
+    )
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(bad)
+    bad = copy.deepcopy(data)
+    bad["graph_traces"][0]["node_ids"].append(n1)
+    with pytest.raises(SemanticJsonError):
+        parse_semantic_json(bad)
