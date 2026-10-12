@@ -44,7 +44,7 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         return;
     }
     UClass* GeneratedClass = Blueprint->GeneratedClass;
-    for (TFieldIterator<UFunction> Iterator(GeneratedClass, EFieldIterationFlags::ExcludeSuper); Iterator; ++Iterator)
+    for (TFieldIterator<UFunction> Iterator(GeneratedClass, EFieldIterationFlags::None); Iterator; ++Iterator)
     {
         const UFunction* Function = *Iterator;
         if (Function == nullptr)

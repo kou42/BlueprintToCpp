@@ -100,7 +100,8 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("初期値の出典"), Variables[0]->AsObject()->GetStringField(TEXT("default_value_source")),
         FString(TEXT("unavailable")));
     TestFalse(TEXT("CDO初期値は未取得"), Variables[0]->AsObject()->GetBoolField(TEXT("default_value_available")));
-    TestTrue(TEXT("未取得値はnull"), Variables[0]->AsObject()->GetField(TEXT("default_value"))->IsNull());
+    TestTrue(TEXT("未取得値はnull"),
+        Variables[0]->AsObject()->GetField<EJson::Null>(TEXT("default_value"))->IsNull());
 
     const TArray<TSharedPtr<FJsonValue>>& GraphTraces = Root->GetArrayField(TEXT("graph_traces"));
     TestEqual(TEXT("グラフ追跡数"), GraphTraces.Num(), 1);
@@ -112,11 +113,11 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     const TSharedPtr<FJsonObject> FunctionJson = Functions[0]->AsObject();
     TestEqual(TEXT("所有クラス"), FunctionJson->GetStringField(TEXT("owner_class_path")),
         FString(TEXT("/Game/BP_Test.BP_Test_C")));
-    const TArray<TSharedPtr<FJsonValue>>& Parameters = FunctionJson->GetArrayField(TEXT("parameters"));
-    TestEqual(TEXT("引数と戻り値"), Parameters.Num(), 2);
-    TestEqual(TEXT("入力型"), Parameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
+    const TArray<TSharedPtr<FJsonValue>>& JsonParameters = FunctionJson->GetArrayField(TEXT("parameters"));
+    TestEqual(TEXT("引数と戻り値"), JsonParameters.Num(), 2);
+    TestEqual(TEXT("入力型"), JsonParameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
         FString(TEXT("int32")));
-    TestTrue(TEXT("戻り値フラグ"), Parameters[1]->AsObject()->GetBoolField(TEXT("is_return")));
+    TestTrue(TEXT("戻り値フラグ"), JsonParameters[1]->AsObject()->GetBoolField(TEXT("is_return")));
     const TSharedPtr<FJsonObject> Expression = Functions[0]->AsObject()
         ->GetArrayField(TEXT("blocks"))[0]->AsObject()
         ->GetArrayField(TEXT("statements"))[0]->AsObject()
@@ -125,7 +126,8 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("空文字列リテラルを保持"),
         Expression->GetArrayField(TEXT("arguments"))[0]->AsObject()->GetStringField(TEXT("literal_value")),
         FString(TEXT("")));
-    TestTrue(TEXT("無効GUIDはnull"), Expression->GetField(TEXT("source_pin_id"))->IsNull());
+    TestTrue(TEXT("無効GUIDはnull"),
+        Expression->GetField<EJson::Null>(TEXT("source_pin_id"))->IsNull());
 
     FBPSemanticDiagnostic Diagnostic;
     Diagnostic.Message = TEXT("Unsupported node");
