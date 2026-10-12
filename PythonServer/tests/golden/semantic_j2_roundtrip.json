@@ -1,0 +1,134 @@
+{
+  "schema_version": 2,
+  "format": "blueprint_semantic_ir",
+  "producer": {
+    "name": "BlueprintAIConverter",
+    "engine_version": "5.7.4"
+  },
+  "source": {
+    "asset_path": "/Game/BP_Roundtrip.BP_Roundtrip",
+    "parent_class_path": "/Script/Engine.Actor",
+    "snapshot_schema_version": 1
+  },
+  "semantic_status": "partial",
+  "variables": [
+    {
+      "name": "Health",
+      "guid": "00000000-0000-0000-0000-000000000010",
+      "type": {
+        "kind": "int32",
+        "type_path": "",
+        "is_reference": false,
+        "is_const": false
+      },
+      "pin_category": "int",
+      "type_path": "",
+      "property_flags": "0",
+      "source": "blueprint_new_variables",
+      "default_value_source": "cdo",
+      "default_value_available": true,
+      "default_value": "0"
+    },
+    {
+      "name": "Title",
+      "guid": null,
+      "type": {
+        "kind": "string",
+        "type_path": "",
+        "is_reference": false,
+        "is_const": false
+      },
+      "pin_category": "string",
+      "type_path": "",
+      "property_flags": "0",
+      "source": "blueprint_new_variables",
+      "default_value_source": "cdo",
+      "default_value_available": true,
+      "default_value": ""
+    }
+  ],
+  "functions": [
+    {
+      "name": "BeginPlay",
+      "return_type": {
+        "kind": "void",
+        "type_path": "",
+        "is_reference": false,
+        "is_const": false
+      },
+      "owner_class_path": "/Game/BP_Roundtrip.BP_Roundtrip_C",
+      "signature_source": "generated_class_reflection",
+      "parameters": [],
+      "blocks": [
+        {
+          "source_entry_node_id": "00000000-0000-0000-0000-000000000011",
+          "statements": [
+            {
+              "kind": "expression",
+              "source_node_id": "00000000-0000-0000-0000-000000000011",
+              "assignment_target": null,
+              "expression": {
+                "kind": "function_call",
+                "type": {
+                  "kind": "void",
+                  "type_path": "",
+                  "is_reference": false,
+                  "is_const": false
+                },
+                "source_node_id": "00000000-0000-0000-0000-000000000011",
+                "source_pin_id": null,
+                "literal_value": "",
+                "variable_name": null,
+                "function_name": "PrintString",
+                "function_owner_path": "/Script/Engine.KismetSystemLibrary",
+                "arguments": [
+                  {
+                    "kind": "literal",
+                    "type": {
+                      "kind": "string",
+                      "type_path": "",
+                      "is_reference": false,
+                      "is_const": false
+                    },
+                    "source_node_id": "00000000-0000-0000-0000-000000000011",
+                    "source_pin_id": "00000000-0000-0000-0000-000000000021",
+                    "literal_value": "",
+                    "variable_name": null,
+                    "function_name": null,
+                    "function_owner_path": null,
+                    "arguments": []
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "graph_traces": [
+    {
+      "name": "EventGraph",
+      "path": "/Game/BP_Roundtrip.EventGraph",
+      "kind": "ubergraph",
+      "node_ids": [
+        "00000000-0000-0000-0000-000000000011",
+        "00000000-0000-0000-0000-000000000012"
+      ],
+      "pin_ids": [
+        "00000000-0000-0000-0000-000000000021",
+        "00000000-0000-0000-0000-000000000022"
+      ],
+      "exec_edges": [
+        {
+          "source_node_id": "00000000-0000-0000-0000-000000000011",
+          "source_pin_id": "00000000-0000-0000-0000-000000000021",
+          "target_node_id": "00000000-0000-0000-0000-000000000012",
+          "target_pin_id": "00000000-0000-0000-0000-000000000022"
+        }
+      ],
+      "data_edges": []
+    }
+  ],
+  "diagnostics": []
+}
