@@ -10,6 +10,8 @@ from .cpp_structure_diff import compare_declarations
 from .ue_reflection_diff import compare_reflection
 from .cpp_signature_diff import compare_signatures
 from .cpp_effect_diff import compare_effects
+from .generation_trace import summarize_generation_trace
+from .semantic_json import SemanticJsonError
 
 router = APIRouter()
 
@@ -28,6 +30,8 @@ class CompareRequest(BaseModel):
 
     direct: GenerationInput
     ai: GenerationInput
+    # 元Blueprintの意味情報は生成物とは別に検証・保持する。
+    semantic: dict[str, Any] | None = None
 
 
 @router.post("/compare")
@@ -37,7 +41,8 @@ def compare_generated(request: CompareRequest) -> dict:
         direct = normalize_artifact("direct", request.direct.model_dump())
         ai = normalize_artifact("ai", request.ai.model_dump())
         result = compare_artifacts(direct, ai)
-    except GeneratedOutputError as exc:
+        trace = summarize_generation_trace(request.semantic) if request.semantic is not None else None
+    except (GeneratedOutputError, SemanticJsonError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return {
@@ -48,4 +53,5 @@ def compare_generated(request: CompareRequest) -> dict:
         "reflection": compare_reflection(direct, ai),
         "signatures": compare_signatures(direct, ai),
         "effects": compare_effects(direct, ai),
+        "semantic_trace": trace,
     }
