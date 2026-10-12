@@ -159,3 +159,24 @@ def test_variable_explicit_empty_default():
     }]
     assert parse_semantic_json(data) is data
 
+
+
+def test_cdo_default_provenance_consistency():
+    data = sample()
+    data["variables"] = [{
+        "name": "Health", "guid": None,
+        "type": {"kind": "int32", "type_path": "", "is_reference": False, "is_const": False},
+        "pin_category": "int", "type_path": "", "property_flags": "0",
+        "source": "blueprint_new_variables",
+        "default_value_source": "cdo",
+        "default_value_available": True, "default_value": "0",
+    }]
+    assert parse_semantic_json(data) is data
+    for source, available in [("unavailable", True), ("cdo", False), ("invalid", True)]:
+        bad = copy.deepcopy(data)
+        bad["variables"][0]["default_value_source"] = source
+        bad["variables"][0]["default_value_available"] = available
+        if not available:
+            bad["variables"][0]["default_value"] = None
+        with pytest.raises(SemanticJsonError):
+            parse_semantic_json(bad)

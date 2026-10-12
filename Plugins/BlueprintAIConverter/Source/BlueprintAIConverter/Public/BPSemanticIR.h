@@ -97,6 +97,7 @@ struct FBPSemanticVariable
     FString TypePath;
     FString PropertyFlags;
     FString Source = TEXT("blueprint_new_variables");
+    FString DefaultValueSource = TEXT("unavailable");
     bool bDefaultValueAvailable = false;
     FString DefaultValue;
 };
