@@ -44,6 +44,11 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Variable.PinCategory = TEXT("int");
     Variable.PropertyFlags = TEXT("0");
     IR.Variables.Add(Variable);
+    FBPSemanticVariable Earlier;
+    Earlier.Name = TEXT("Ammo");
+    Earlier.Type.Kind = EBPSemanticTypeKind::Bool;
+    Earlier.PinCategory = TEXT("bool");
+    IR.Variables.Add(Earlier);
 
     FString JsonText;
     TestTrue(TEXT("JSON v2を生成"), FBPSemanticJsonSerializer::Serialize(IR, TEXT("5.7.4"), JsonText));
@@ -59,8 +64,10 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
         FString(TEXT("partial")));
 
     const TArray<TSharedPtr<FJsonValue>>& Variables = Root->GetArrayField(TEXT("variables"));
-    TestEqual(TEXT("変数数"), Variables.Num(), 1);
-    TestEqual(TEXT("変数名"), Variables[0]->AsObject()->GetStringField(TEXT("name")), FString(TEXT("Health")));
+    TestEqual(TEXT("変数数"), Variables.Num(), 2);
+    TestEqual(TEXT("変数の安定ソート"), Variables[0]->AsObject()->GetStringField(TEXT("name")),
+        FString(TEXT("Ammo")));
+    TestEqual(TEXT("変数名"), Variables[1]->AsObject()->GetStringField(TEXT("name")), FString(TEXT("Health")));
     TestEqual(TEXT("初期値の出典"), Variables[0]->AsObject()->GetStringField(TEXT("default_value_source")),
         FString(TEXT("unavailable")));
     TestFalse(TEXT("CDO初期値は未取得"), Variables[0]->AsObject()->GetBoolField(TEXT("default_value_available")));
