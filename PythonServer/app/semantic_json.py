@@ -136,7 +136,12 @@ def parse_semantic_json(raw: Any) -> dict:
             _string(variable[key], path + "." + key)
         if variable["source"] != "blueprint_new_variables":
             raise SemanticJsonError(f"{path}.source: unsupported source")
+        default_source = variable.get("default_value_source", "unavailable")
+        if default_source not in ("unavailable", "cdo"):
+            raise SemanticJsonError(f"{path}.default_value_source: invalid source")
         available = _bool(variable["default_value_available"], path + ".default_value_available")
+        if ("cdo" if available else "unavailable") != default_source:
+            raise SemanticJsonError(f"{path}: inconsistent default value provenance")
         if available:
             _string(variable["default_value"], path + ".default_value")
         elif variable["default_value"] is not None:
