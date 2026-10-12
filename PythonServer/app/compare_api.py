@@ -13,6 +13,7 @@ from .cpp_effect_diff import compare_effects
 from .generation_trace import summarize_generation_trace
 from .semantic_json import SemanticJsonError
 from .semantic_declaration_audit import audit_semantic_declarations
+from .semantic_signature_audit import audit_semantic_signatures
 
 router = APIRouter()
 
@@ -55,6 +56,10 @@ def compare_generated(request: CompareRequest) -> dict:
         "signatures": compare_signatures(direct, ai),
         "effects": compare_effects(direct, ai),
         "semantic_trace": trace,
+        "semantic_signature_audit": (
+            {"direct": audit_semantic_signatures(request.semantic, direct),
+             "ai": audit_semantic_signatures(request.semantic, ai)}
+            if request.semantic is not None else None),
         "semantic_declaration_audit": (
             {"direct": audit_semantic_declarations(request.semantic, direct),
              "ai": audit_semantic_declarations(request.semantic, ai)}
