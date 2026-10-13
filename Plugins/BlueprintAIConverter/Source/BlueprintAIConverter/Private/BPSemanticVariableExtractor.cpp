@@ -2,6 +2,7 @@
 
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraphPin.h"
+#include "Internationalization/Text.h"
 #include "UObject/UnrealType.h"
 
 namespace
@@ -53,30 +54,23 @@ bool ReadScalarDefault(const FProperty* Property, const UObject* CDO,
         }
         break;
     case EBPSemanticTypeKind::Int32:
-        if (const FIntProperty* Typed = CastField<FIntProperty>(Property))
-        {
-            OutValue = LexToString(Typed->GetPropertyValue(Address));
-            return true;
-        }
-        break;
     case EBPSemanticTypeKind::Int64:
-        if (const FInt64Property* Typed = CastField<FInt64Property>(Property))
+        if (const FNumericProperty* Typed = CastField<FNumericProperty>(Property);
+            Typed != nullptr && Typed->IsInteger() && Typed->IsEnum() == false)
         {
-            OutValue = LexToString(Typed->GetPropertyValue(Address));
+            OutValue = LexToString(Typed->GetSignedIntPropertyValue(Address));
             return true;
         }
         break;
     case EBPSemanticTypeKind::Float:
-        if (const FFloatProperty* Typed = CastField<FFloatProperty>(Property))
-        {
-            OutValue = LexToString(Typed->GetPropertyValue(Address));
-            return true;
-        }
-        break;
     case EBPSemanticTypeKind::Double:
-        if (const FDoubleProperty* Typed = CastField<FDoubleProperty>(Property))
+        if (const FNumericProperty* Typed = CastField<FNumericProperty>(Property);
+            Typed != nullptr && Typed->IsFloatingPoint())
         {
-            OutValue = LexToString(Typed->GetPropertyValue(Address));
+            const double Value = Typed->GetFloatingPointPropertyValue(Address);
+            OutValue = Kind == EBPSemanticTypeKind::Float
+                ? LexToString(static_cast<float>(Value))
+                : LexToString(Value);
             return true;
         }
         break;
@@ -94,10 +88,143 @@ bool ReadScalarDefault(const FProperty* Property, const UObject* CDO,
             return true;
         }
         break;
+    case EBPSemanticTypeKind::Text:
+        if (const FTextProperty* Typed = CastField<FTextProperty>(Property))
+        {
+            // C2では表示文字列を保持する。名前空間・キーを持つローカライズ済みTextは、
+            // 後続段階で識別情報をIRへ追加するまでGenerator側で明示的に扱う。
+            OutValue = Typed->GetPropertyValue(Address).ToString();
+            return true;
+        }
+        break;
     default:
         break;
     }
     return false;
+}
+
+void ReadTextIdentity(const FProperty* Property, const UObject* CDO, FBPSemanticVariable& Variable)
+{
+    const FTextProperty* TextProperty = CastField<FTextProperty>(Property);
+    if (TextProperty == nullptr || CDO == nullptr)
+    {
+        return;
+    }
+    const void* Address = TextProperty->ContainerPtrToValuePtr<void>(CDO);
+    if (Address == nullptr)
+    {
+        return;
+    }
+    const FText Text = TextProperty->GetPropertyValue(Address);
+    // ローカライズ収集対象でない一時Textは識別情報を持たないため、
+    // 表示文字列をculture-invariant literalとして生成しても翻訳キーを失わない。
+    Variable.bTextCultureInvariant = Text.IsCultureInvariant() ||
+        FTextInspector::ShouldGatherForLocalization(Text) == false;
+    const TOptional<FString> Namespace = FTextInspector::GetNamespace(Text);
+    const TOptional<FString> Key = FTextInspector::GetKey(Text);
+    const FString* Source = FTextInspector::GetSourceString(Text);
+    if (Namespace.IsSet() && Key.IsSet() && Source != nullptr)
+    {
+        Variable.bTextLocalizationIdentityAvailable = true;
+        Variable.TextNamespace = Namespace.GetValue();
+        Variable.TextKey = Key.GetValue();
+        Variable.TextSource = *Source;
+    }
+}
+
+EBPVariableInitializationStrategy ResolveInitializationStrategy(const EBPSemanticTypeKind Kind)
+{
+    switch (Kind)
+    {
+    case EBPSemanticTypeKind::Bool:
+    case EBPSemanticTypeKind::Int32:
+    case EBPSemanticTypeKind::Int64:
+    case EBPSemanticTypeKind::Float:
+    case EBPSemanticTypeKind::Double:
+        return EBPVariableInitializationStrategy::DirectLiteral;
+    case EBPSemanticTypeKind::String:
+        return EBPVariableInitializationStrategy::StringLiteral;
+    case EBPSemanticTypeKind::Name:
+        return EBPVariableInitializationStrategy::NameLiteral;
+    case EBPSemanticTypeKind::Text:
+        return EBPVariableInitializationStrategy::TextLiteral;
+    default:
+        return EBPVariableInitializationStrategy::Unsupported;
+    }
+}
+
+bool IsValueOnlyProperty(const FProperty* Property)
+{
+    if (Property == nullptr)
+    {
+        return false;
+    }
+    if (CastField<FNumericProperty>(Property) != nullptr ||
+        CastField<FBoolProperty>(Property) != nullptr ||
+        CastField<FStrProperty>(Property) != nullptr ||
+        CastField<FNameProperty>(Property) != nullptr ||
+        CastField<FTextProperty>(Property) != nullptr ||
+        CastField<FEnumProperty>(Property) != nullptr)
+    {
+        return true;
+    }
+    if (const FStructProperty* StructProperty = CastField<FStructProperty>(Property))
+    {
+        if (StructProperty->Struct == nullptr)
+        {
+            return false;
+        }
+        for (TFieldIterator<FProperty> It(StructProperty->Struct); It; ++It)
+        {
+            if (IsValueOnlyProperty(*It) == false)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (const FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
+    {
+        return IsValueOnlyProperty(ArrayProperty->Inner);
+    }
+    if (const FSetProperty* SetProperty = CastField<FSetProperty>(Property))
+    {
+        return IsValueOnlyProperty(SetProperty->ElementProp);
+    }
+    if (const FMapProperty* MapProperty = CastField<FMapProperty>(Property))
+    {
+        return IsValueOnlyProperty(MapProperty->KeyProp) &&
+            IsValueOnlyProperty(MapProperty->ValueProp);
+    }
+    return false;
+}
+
+bool VerifyExportTextRoundTrip(const FProperty* Property, const UObject* CDO,
+    const FString& ExportedValue)
+{
+    if (Property == nullptr || CDO == nullptr || IsValueOnlyProperty(Property) == false)
+    {
+        return false;
+    }
+    const void* Original = Property->ContainerPtrToValuePtr<void>(CDO);
+    if (Original == nullptr)
+    {
+        return false;
+    }
+
+    void* Imported = FMemory::Malloc(Property->GetSize(), Property->GetMinAlignment());
+    if (Imported == nullptr)
+    {
+        return false;
+    }
+    Property->InitializeValue(Imported);
+    const TCHAR* End = Property->ImportText_Direct(
+        *ExportedValue, Imported, const_cast<UObject*>(CDO), PPF_None);
+    const bool bConsumed = End != nullptr && FString(End).TrimStartAndEnd().IsEmpty();
+    const bool bIdentical = bConsumed && Property->Identical(Original, Imported, PPF_None);
+    Property->DestroyValue(Imported);
+    FMemory::Free(Imported);
+    return bIdentical;
 }
 }
 
@@ -114,6 +241,17 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
 
     for (const FBPVariableDescription& Description : Blueprint->NewVariables)
     {
+        // Lowering済みIRへJSON追跡情報を追加する呼び出しでも重複させない。
+        const bool bAlreadyPresent = IR.Variables.ContainsByPredicate(
+            [&Description](const FBPSemanticVariable& Existing)
+            {
+                return Existing.Guid == Description.VarGuid && Existing.Name == Description.VarName;
+            });
+        if (bAlreadyPresent)
+        {
+            continue;
+        }
+
         FBPSemanticVariable Variable;
         Variable.Name = Description.VarName;
         Variable.Guid = Description.VarGuid;
@@ -129,6 +267,30 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         Variable.Type.TypePath = Variable.TypePath;
         Variable.Type.bIsReference = Description.VarType.bIsReference;
         Variable.Type.bIsConst = Description.VarType.bIsConst;
+        Variable.InitializationStrategy = ResolveInitializationStrategy(Variable.Type.Kind);
+
+        const FProperty* Property = GeneratedClass != nullptr
+            ? FindFProperty<FProperty>(GeneratedClass, Description.VarName)
+            : nullptr;
+        if (Property != nullptr)
+        {
+            FString ExtendedType;
+            Variable.ReflectedCppType = Property->GetCPPType(&ExtendedType) + ExtendedType;
+            Variable.ReflectedPropertyClass = Property->GetClass()->GetName();
+            if (CDO != nullptr)
+            {
+                const void* Address = Property->ContainerPtrToValuePtr<void>(CDO);
+                if (Address != nullptr)
+                {
+                    Property->ExportTextItem_Direct(
+                        Variable.ExportedDefaultValue, Address, nullptr,
+                        const_cast<UObject*>(CDO), PPF_None);
+                    Variable.bExportedDefaultValueAvailable = true;
+                    Variable.bExportTextRoundTripVerified = VerifyExportTextRoundTrip(
+                        Property, CDO, Variable.ExportedDefaultValue);
+                }
+            }
+        }
 
         // J2-2でCDOから型安全に取得するまで、宣言のDefaultValueをCDO値と誤認しない。
         // コンテナやreal型のサブカテゴリなど未解決情報は推測せず診断する。
@@ -136,6 +298,11 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             Variable.Type.Kind == EBPSemanticTypeKind::Unresolved)
         {
             FBPSemanticDiagnostic Diagnostic;
+            // 反射型が得られた変数はDeclarationOnlyでC++宣言を残せるため、
+            // Lowering全体を止めずGeneratorの方針選択へ委ねる。
+            Diagnostic.Severity = Variable.ReflectedCppType.IsEmpty()
+                ? EBPSemanticDiagnosticSeverity::Error
+                : EBPSemanticDiagnosticSeverity::Warning;
             Diagnostic.Message = FString::Printf(TEXT("Variable %s requires type resolution: %s"),
                 *Variable.Name.ToString(), *Variable.PinCategory);
             IR.Diagnostics.Add(MoveTemp(Diagnostic));
@@ -147,11 +314,14 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             Description.VarType.bIsReference == false &&
             Variable.Type.Kind != EBPSemanticTypeKind::Unresolved)
         {
-            const FProperty* Property = FindFProperty<FProperty>(GeneratedClass, Description.VarName);
             if (ReadScalarDefault(Property, CDO, Variable.Type.Kind, Variable.DefaultValue))
             {
                 Variable.bDefaultValueAvailable = true;
                 Variable.DefaultValueSource = TEXT("cdo");
+                if (Variable.Type.Kind == EBPSemanticTypeKind::Text)
+                {
+                    ReadTextIdentity(Property, CDO, Variable);
+                }
             }
         }
         IR.Variables.Add(MoveTemp(Variable));

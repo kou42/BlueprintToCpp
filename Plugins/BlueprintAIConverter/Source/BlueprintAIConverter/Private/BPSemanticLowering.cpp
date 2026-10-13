@@ -1,6 +1,9 @@
 #include "BPSemanticLowering.h"
 #include "BPParentClassResolver.h"
 #include "BPPrintStringAnalyzer.h"
+#include "BPSemanticVariableExtractor.h"
+
+#include "Engine/Blueprint.h"
 
 namespace
 {
@@ -30,9 +33,9 @@ void AddDiagnostic(FBPSemanticIR& IR, const FString& GraphName, const FGuid& Nod
     Diagnostic.Message = Message;
     IR.Diagnostics.Add(MoveTemp(Diagnostic));
 }
-}
 
-bool FBPSemanticLowering::LowerPrintString(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+bool LowerPrintStringImpl(const FBPGraphIR& GraphIR, const bool bAllowBlueprintVariables,
+    FBPSemanticIR& OutIR)
 {
     OutIR = FBPSemanticIR();
     OutIR.AssetPath = GraphIR.AssetPath;
@@ -49,10 +52,9 @@ bool FBPSemanticLowering::LowerPrintString(const FBPGraphIR& GraphIR, FBPSemanti
         }
         return false;
     }
-    // 変数の宣言・初期値生成が統合されるまでは、意味を落とさないよう拒否を維持する。
-    if (GraphIR.BlueprintVariableCount != 0)
+    if (GraphIR.BlueprintVariableCount != 0 && bAllowBlueprintVariables == false)
     {
-        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("MVP does not yet support Blueprint variables"));
+        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("MVP does not yet support Blueprint variables without a source Blueprint"));
         return false;
     }
 
@@ -157,4 +159,34 @@ bool FBPSemanticLowering::LowerPrintString(const FBPGraphIR& GraphIR, FBPSemanti
     Function.Blocks.Add(MoveTemp(Block));
     OutIR.Functions.Add(MoveTemp(Function));
     return true;
+}
+}
+
+bool FBPSemanticLowering::LowerPrintString(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+{
+    return LowerPrintStringImpl(GraphIR, false, OutIR);
+}
+
+bool FBPSemanticLowering::LowerPrintString(const UBlueprint* Blueprint,
+    const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+{
+    if (Blueprint == nullptr)
+    {
+        OutIR = FBPSemanticIR();
+        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("Blueprint is null"));
+        return false;
+    }
+    if (Blueprint->NewVariables.Num() != GraphIR.BlueprintVariableCount)
+    {
+        OutIR = FBPSemanticIR();
+        AddDiagnostic(OutIR, FString(), FGuid(),
+            TEXT("Blueprint variables changed after Graph IR was built"));
+        return false;
+    }
+    if (LowerPrintStringImpl(GraphIR, true, OutIR) == false)
+    {
+        return false;
+    }
+    FBPSemanticVariableExtractor::Append(Blueprint, OutIR);
+    return OutIR.HasErrors() == false;
 }

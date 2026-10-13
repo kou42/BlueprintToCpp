@@ -189,7 +189,7 @@ private:
                         }
 
                         FBPSemanticIR SemanticIR;
-                        if (FBPSemanticLowering::LowerPrintString(GraphIR, SemanticIR) == false)
+                        if (FBPSemanticLowering::LowerPrintString(Blueprint, GraphIR, SemanticIR) == false)
                         {
                             TArray<FString> Messages;
                             for (const FBPSemanticDiagnostic& Diagnostic : SemanticIR.Diagnostics)
@@ -212,7 +212,8 @@ private:
                         FBPGeneratedActorFiles SemanticFiles;
                         TArray<FString> Diagnostics;
                         if (FBPSemanticCodeGenerator::Generate(
-                            SemanticIR, ClassName, ApiMacro, SemanticFiles, Diagnostics) == false)
+                            SemanticIR, ClassName, ApiMacro, SemanticFiles, Diagnostics,
+                            EBPVariableFallbackMode::DeclarationOnly) == false)
                         {
                             const FString Message = FString::Join(Diagnostics, TEXT("\\n"));
                             UE_LOG(LogBlueprintAIConverter, Warning, TEXT("Semantic preview generation failed: %s"), *Message);
@@ -254,7 +255,7 @@ private:
                         FBPSemanticIR SemanticIR;
                         if (FBPGraphIRBuilder::Build(Blueprint, GraphIR))
                         {
-                            FBPSemanticLowering::LowerPrintString(GraphIR, SemanticIR);
+                            FBPSemanticLowering::LowerPrintString(Blueprint, GraphIR, SemanticIR);
                         }
                         else
                         {
@@ -322,7 +323,7 @@ private:
                         if (FBPGraphIRBuilder::Build(Blueprint, GraphIR))
                         {
                             // 現段階のLoweringはPrintString MVPに限定される。
-                            FBPSemanticLowering::LowerPrintString(GraphIR, SemanticIR);
+                            FBPSemanticLowering::LowerPrintString(Blueprint, GraphIR, SemanticIR);
                         }
                         else
                         {

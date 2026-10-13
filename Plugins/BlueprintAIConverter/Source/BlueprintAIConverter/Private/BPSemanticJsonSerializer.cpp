@@ -252,9 +252,10 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
     for (const FBPSemanticDiagnostic& Diagnostic : IR.Diagnostics)
     {
         TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
-        // 現行IRはseverity/codeを持たず、HasErrorsは全診断をエラーとして扱う。
-        Json->SetStringField(TEXT("severity"), TEXT("error"));
-        Json->SetStringField(TEXT("code"), TEXT("SEMANTIC_LOWERING_ERROR"));
+        const bool bIsError = Diagnostic.Severity == EBPSemanticDiagnosticSeverity::Error;
+        Json->SetStringField(TEXT("severity"), bIsError ? TEXT("error") : TEXT("warning"));
+        Json->SetStringField(TEXT("code"),
+            bIsError ? TEXT("SEMANTIC_LOWERING_ERROR") : TEXT("SEMANTIC_LOWERING_WARNING"));
         Json->SetStringField(TEXT("graph_name"), Diagnostic.GraphName);
         Json->SetField(TEXT("node_id"), GuidValue(Diagnostic.NodeId));
         Json->SetField(TEXT("pin_id"), GuidValue(Diagnostic.PinId));

@@ -224,4 +224,195 @@ bool FBPSemanticGeneratorParentClassTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorVariablesTest,
+    "BlueprintAIConverter.SemanticIR.Generator.MemberVariables",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorVariablesTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("変数テスト用Lowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticVariable Enabled;
+    Enabled.Name = TEXT("Enabled");
+    Enabled.Type.Kind = EBPSemanticTypeKind::Bool;
+    Enabled.ReflectedCppType = TEXT("bool");
+    Enabled.InitializationStrategy = EBPVariableInitializationStrategy::DirectLiteral;
+    Enabled.bDefaultValueAvailable = true;
+    Enabled.DefaultValueSource = TEXT("cdo");
+    Enabled.DefaultValue = TEXT("true");
+    Semantic.Variables.Add(Enabled);
+
+    FBPSemanticVariable Health;
+    Health.Name = TEXT("Health");
+    Health.Type.Kind = EBPSemanticTypeKind::Int32;
+    Health.ReflectedCppType = TEXT("int32");
+    Health.InitializationStrategy = EBPVariableInitializationStrategy::DirectLiteral;
+    Health.bDefaultValueAvailable = true;
+    Health.DefaultValueSource = TEXT("cdo");
+    Health.DefaultValue = TEXT("-17");
+    Semantic.Variables.Add(Health);
+
+    FBPSemanticVariable Title;
+    Title.Name = TEXT("Title");
+    Title.Type.Kind = EBPSemanticTypeKind::String;
+    Title.ReflectedCppType = TEXT("FString");
+    Title.InitializationStrategy = EBPVariableInitializationStrategy::StringLiteral;
+    Title.bDefaultValueAvailable = true;
+    Title.DefaultValueSource = TEXT("cdo");
+    Title.DefaultValue = TEXT("Line 1\n\"Ready\"");
+    Semantic.Variables.Add(Title);
+
+    FBPSemanticVariable LargeCount;
+    LargeCount.Name = TEXT("LargeCount");
+    LargeCount.Type.Kind = EBPSemanticTypeKind::Int64;
+    LargeCount.ReflectedCppType = TEXT("int64");
+    LargeCount.InitializationStrategy = EBPVariableInitializationStrategy::DirectLiteral;
+    LargeCount.bDefaultValueAvailable = true;
+    LargeCount.DefaultValueSource = TEXT("cdo");
+    LargeCount.DefaultValue = TEXT("9000000000");
+    Semantic.Variables.Add(LargeCount);
+
+    FBPSemanticVariable Speed;
+    Speed.Name = TEXT("Speed");
+    Speed.Type.Kind = EBPSemanticTypeKind::Float;
+    Speed.ReflectedCppType = TEXT("float");
+    Speed.InitializationStrategy = EBPVariableInitializationStrategy::DirectLiteral;
+    Speed.bDefaultValueAvailable = true;
+    Speed.DefaultValueSource = TEXT("cdo");
+    Speed.DefaultValue = TEXT("1.25");
+    Semantic.Variables.Add(Speed);
+
+    FBPSemanticVariable Precision;
+    Precision.Name = TEXT("Precision");
+    Precision.Type.Kind = EBPSemanticTypeKind::Double;
+    Precision.ReflectedCppType = TEXT("double");
+    Precision.InitializationStrategy = EBPVariableInitializationStrategy::DirectLiteral;
+    Precision.bDefaultValueAvailable = true;
+    Precision.DefaultValueSource = TEXT("cdo");
+    Precision.DefaultValue = TEXT("2.5");
+    Semantic.Variables.Add(Precision);
+
+    FBPSemanticVariable Tag;
+    Tag.Name = TEXT("Tag");
+    Tag.Type.Kind = EBPSemanticTypeKind::Name;
+    Tag.ReflectedCppType = TEXT("FName");
+    Tag.InitializationStrategy = EBPVariableInitializationStrategy::NameLiteral;
+    Tag.bDefaultValueAvailable = true;
+    Tag.DefaultValueSource = TEXT("cdo");
+    Tag.DefaultValue = TEXT("Runner");
+    Semantic.Variables.Add(Tag);
+
+    FBPSemanticVariable Label;
+    Label.Name = TEXT("Label");
+    Label.Type.Kind = EBPSemanticTypeKind::Text;
+    Label.ReflectedCppType = TEXT("FText");
+    Label.InitializationStrategy = EBPVariableInitializationStrategy::TextLiteral;
+    Label.bDefaultValueAvailable = true;
+    Label.DefaultValueSource = TEXT("cdo");
+    Label.DefaultValue = TEXT("Ready Text");
+    Label.bTextCultureInvariant = true;
+    Semantic.Variables.Add(Label);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("対応済みメンバー変数を生成"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AVariableActor"), FString(), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("bool初期値"), Files.HeaderContent.Contains(TEXT("bool Enabled = true;")));
+    TestTrue(TEXT("int32初期値"), Files.HeaderContent.Contains(TEXT("int32 Health = -17;")));
+    TestTrue(TEXT("FString初期値をエスケープ"), Files.HeaderContent.Contains(
+        TEXT("FString Title = TEXT(\"Line 1\\n\\\"Ready\\\"\");")));
+    TestTrue(TEXT("int64初期値"), Files.HeaderContent.Contains(
+        TEXT("int64 LargeCount = 9000000000LL;")));
+    TestTrue(TEXT("float初期値"), Files.HeaderContent.Contains(TEXT("float Speed = 1.25f;")));
+    TestTrue(TEXT("double初期値"), Files.HeaderContent.Contains(TEXT("double Precision = 2.5")));
+    TestTrue(TEXT("FName初期値"), Files.HeaderContent.Contains(
+        TEXT("FName Tag = FName(TEXT(\"Runner\"));")));
+    TestTrue(TEXT("FText初期値"), Files.HeaderContent.Contains(
+        TEXT("FText Label = FText::AsCultureInvariant(TEXT(\"Ready Text\"));")));
+    FString HeaderWithoutProperties = Files.HeaderContent;
+    TestEqual(TEXT("UPROPERTYを8件生成"),
+        HeaderWithoutProperties.ReplaceInline(TEXT("UPROPERTY()"), TEXT("")), 8);
+
+    Semantic.Variables[0].bDefaultValueAvailable = false;
+    TestFalse(TEXT("CDO値を取得できない変数を拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AVariableActor"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("拒否時に生成物を公開しない"), Files.HeaderContent.IsEmpty());
+
+    Semantic.Variables[0].bDefaultValueAvailable = true;
+    Semantic.Variables[4].DefaultValue = TEXT("nan");
+    TestFalse(TEXT("非有限floatを拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AVariableActor"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("数値拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorVariableFallbackTest,
+    "BlueprintAIConverter.SemanticIR.Generator.VariableDeclarationFallback",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorVariableFallbackTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("フォールバックテスト用Lowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("CustomValue");
+    Variable.Guid = FGuid(1, 2, 3, 4);
+    Variable.Type.Kind = EBPSemanticTypeKind::Unresolved;
+    Variable.ReflectedCppType = TEXT("FCustomValue");
+    Variable.ReflectedPropertyClass = TEXT("StructProperty");
+    Variable.PropertyFlags = TEXT("0");
+    Semantic.Variables.Add(Variable);
+
+    FBPSemanticDiagnostic Warning;
+    Warning.Severity = EBPSemanticDiagnosticSeverity::Warning;
+    Warning.Message = TEXT("CustomValue requires type resolution");
+    Semantic.Diagnostics.Add(Warning);
+    TestFalse(TEXT("警告だけではSemantic IRをエラー扱いしない"), Semantic.HasErrors());
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("Strictでは未対応変数を拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AFallbackActor"), FString(), Files, Diagnostics));
+
+    if (TestTrue(TEXT("DeclarationOnlyでは宣言を生成"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AFallbackActor"), FString(), Files, Diagnostics,
+        EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("既定値欠落コメント"), Files.HeaderContent.Contains(
+        TEXT("部分変換: Blueprintのデフォルト値とプロパティメタデータは保持されていません。")));
+    TestTrue(TEXT("依存関係確認コメント"), Files.HeaderContent.Contains(
+        TEXT("必要なヘッダーとモジュール依存関係を確認してください。")));
+    TestTrue(TEXT("元変数GUIDコメント"), Files.HeaderContent.Contains(
+        TEXT("00000001-0000-0002-0000-000300000004")));
+    TestTrue(TEXT("反射型で値初期化宣言"), Files.HeaderContent.Contains(
+        TEXT("FCustomValue CustomValue{};")));
+    TestTrue(TEXT("partial診断を返す"), Diagnostics.ContainsByPredicate(
+        [](const FString& Diagnostic)
+        {
+            return Diagnostic.Contains(TEXT("Partial variable conversion: CustomValue"));
+        }));
+
+    Semantic.Variables[0].ReflectedCppType = TEXT("FVector; #error unsafe");
+    TestFalse(TEXT("危険な反射型文字列を拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AFallbackActor"), FString(), Files, Diagnostics,
+        EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("危険な型の生成物を公開しない"), Files.HeaderContent.IsEmpty());
+    return true;
+}
+
 #endif

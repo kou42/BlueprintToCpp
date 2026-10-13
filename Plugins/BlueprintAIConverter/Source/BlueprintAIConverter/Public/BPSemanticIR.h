@@ -91,12 +91,31 @@ struct FBPSemanticFunction
     TArray<FBPSemanticBasicBlock> Blocks;
 };
 
+enum class EBPSemanticDiagnosticSeverity : uint8
+{
+    Warning,
+    Error
+};
+
 struct FBPSemanticDiagnostic
 {
+    EBPSemanticDiagnosticSeverity Severity = EBPSemanticDiagnosticSeverity::Error;
     FString GraphName;
     FGuid NodeId;
     FGuid PinId;
     FString Message;
+};
+
+// 変数の型そのものではなく、既定値をどの安全な方式で生成するかを表す。
+// ImportTextは候補として保持するが、往復検証済みPropertyに限定して有効化する。
+enum class EBPVariableInitializationStrategy : uint8
+{
+    Unsupported,
+    DirectLiteral,
+    StringLiteral,
+    NameLiteral,
+    TextLiteral,
+    ImportText
 };
 
 // Blueprint宣言の情報を保持する。CDOの値は未取得でも空文字と混同しない。
@@ -112,6 +131,21 @@ struct FBPSemanticVariable
     FString DefaultValueSource = TEXT("unavailable");
     bool bDefaultValueAvailable = false;
     FString DefaultValue;
+    // GeneratedClassのFPropertyから得た宣言型と標準ExportText表現。
+    // PinCategoryからC++型名を推測せず、今後の再帰Property IRの基礎にする。
+    FString ReflectedCppType;
+    FString ReflectedPropertyClass;
+    bool bExportedDefaultValueAvailable = false;
+    FString ExportedDefaultValue;
+    bool bExportTextRoundTripVerified = false;
+    EBPVariableInitializationStrategy InitializationStrategy =
+        EBPVariableInitializationStrategy::Unsupported;
+    // FTextの表示文字列だけでローカライズ識別情報を失わないために保持する。
+    bool bTextCultureInvariant = false;
+    bool bTextLocalizationIdentityAvailable = false;
+    FString TextNamespace;
+    FString TextKey;
+    FString TextSource;
 };
 
 // Graph IRの元GUIDを保持する追跡情報。意味解析結果とは独立して記録する。
@@ -137,6 +171,10 @@ struct FBPSemanticIR
 
     bool HasErrors() const
     {
-        return Diagnostics.IsEmpty() == false;
+        return Diagnostics.ContainsByPredicate(
+            [](const FBPSemanticDiagnostic& Diagnostic)
+            {
+                return Diagnostic.Severity == EBPSemanticDiagnosticSeverity::Error;
+            });
     }
 };
