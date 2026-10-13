@@ -175,10 +175,35 @@ bool EmitDeclarationOnly(const FBPSemanticVariable& Variable, const FString& Nam
     return true;
 }
 
-bool EmitVariables(const TArray<FBPSemanticVariable>& Variables, FString& Out,
-    TArray<FString>& Diagnostics, const EBPVariableFallbackMode FallbackMode)
+bool CanEmitImportText(const FBPSemanticVariable& Variable, FString& OutReason)
+{
+    if (CanEmitDeclarationOnly(Variable, OutReason) == false)
+    {
+        return false;
+    }
+    if (Variable.bDefaultValueAvailable == false ||
+        Variable.DefaultValueSource != TEXT("cdo_export_text") ||
+        Variable.bExportedDefaultValueAvailable == false ||
+        Variable.bExportTextRoundTripVerified == false ||
+        Variable.DefaultValue != Variable.ExportedDefaultValue)
+    {
+        OutReason = TEXT("ExportText value was not verified against the CDO");
+        return false;
+    }
+    if (Variable.ReflectedPropertyClass.IsEmpty())
+    {
+        OutReason = TEXT("reflected property class is unavailable");
+        return false;
+    }
+    return true;
+}
+
+bool EmitVariables(const TArray<FBPSemanticVariable>& Variables, const FString& ClassName,
+    FString& Out, FString& OutConstructorBody, TArray<FString>& Diagnostics,
+    const EBPVariableFallbackMode FallbackMode)
 {
     Out.Reset();
+    OutConstructorBody.Reset();
     TSet<FName> Names;
     for (const FBPSemanticVariable& Variable : Variables)
     {
@@ -199,6 +224,37 @@ bool EmitVariables(const TArray<FBPSemanticVariable>& Variables, FString& Out,
             Diagnostics.Add(FString::Printf(TEXT("Unsupported Blueprint variable qualifier: %s"), *Name));
             return false;
         }
+
+        if (Variable.InitializationStrategy == EBPVariableInitializationStrategy::ImportText)
+        {
+            FString Reason;
+            if (CanEmitImportText(Variable, Reason) == false)
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Blueprint variable cannot use verified ImportText initialization: %s (%s)"),
+                    *Name, *Reason));
+                return false;
+            }
+            FString EscapedExportText;
+            if (EscapeString(Variable.ExportedDefaultValue, EscapedExportText, Diagnostics) == false)
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Invalid ExportText default for Blueprint variable: %s"), *Name));
+                return false;
+            }
+            Out += FString::Printf(
+                TEXT("    UPROPERTY()\n    %s %s{};\n\n"),
+                *Variable.ReflectedCppType, *Name);
+            OutConstructorBody += FString::Printf(
+                TEXT("    // ExportText/ImportTextの往復検証済み値からBlueprintのデフォルト値を復元します。\n")
+                TEXT("    if (FProperty* Property = FindFProperty<FProperty>(StaticClass(), GET_MEMBER_NAME_CHECKED(%s, %s)))\n")
+                TEXT("    {\n")
+                TEXT("        Property->ImportText_Direct(TEXT(\"%s\"), Property->ContainerPtrToValuePtr<void>(this), this, PPF_None);\n")
+                TEXT("    }\n"),
+                *ClassName, *Name, *EscapedExportText);
+            continue;
+        }
+
         const bool bExactInitializationAvailable =
             Variable.bDefaultValueAvailable && Variable.DefaultValueSource == TEXT("cdo") &&
             Variable.InitializationStrategy != EBPVariableInitializationStrategy::Unsupported;
@@ -487,7 +543,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     }
 
     FString VariableDeclarations;
-    if (EmitVariables(IR.Variables, VariableDeclarations, OutDiagnostics,
+    FString ConstructorBody;
+    if (EmitVariables(IR.Variables, ClassName, VariableDeclarations, ConstructorBody, OutDiagnostics,
         VariableFallbackMode) == false)
     {
         return false;
@@ -495,16 +552,27 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
 
     const FString BaseName = ClassName.Mid(1);
     const FString ApiPrefix = ModuleApiMacro.IsEmpty() ? FString() : ModuleApiMacro + TEXT(" ");
+    const FString ConstructorDeclaration = ConstructorBody.IsEmpty()
+        ? FString()
+        : FString::Printf(TEXT("public:\n    %s();\n\n"), *ClassName);
+    const FString UnrealTypeInclude = ConstructorBody.IsEmpty()
+        ? FString()
+        : TEXT("#include \"UObject/UnrealType.h\"\n");
+    const FString ConstructorDefinition = ConstructorBody.IsEmpty()
+        ? FString()
+        : FString::Printf(TEXT("\n%s::%s()\n{\n%s}\n"),
+            *ClassName, *ClassName, *ConstructorBody);
     FBPGeneratedActorFiles Files;
     Files.HeaderFileName = BaseName + TEXT(".h");
     Files.SourceFileName = BaseName + TEXT(".cpp");
     Files.HeaderContent = FString::Printf(
-        TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%sprotected:\n    virtual void BeginPlay() override;\n};\n"),
+        TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%sprotected:\n    virtual void BeginPlay() override;\n};\n"),
         *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName, *ParentClass.CppClassName,
-        *VariableDeclarations);
+        *VariableDeclarations, *ConstructorDeclaration);
     Files.SourceContent = FString::Printf(
-        TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n}\n"),
-        *BaseName, *ClassName, *EscapedText, *Screen, *Log,
+        TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n}\n"),
+        *BaseName, *UnrealTypeInclude, *ConstructorDefinition,
+        *ClassName, *EscapedText, *Screen, *Log,
         *FloatLiteral(LinearColor.R), *FloatLiteral(LinearColor.G),
         *FloatLiteral(LinearColor.B), *FloatLiteral(LinearColor.A),
         *FloatLiteral(Duration), *EscapedKey);

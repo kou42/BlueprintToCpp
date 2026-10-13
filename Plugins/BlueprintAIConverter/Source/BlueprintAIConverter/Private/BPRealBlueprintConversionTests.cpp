@@ -39,6 +39,15 @@ bool AddScalarVariable(UBlueprint* Blueprint, const FName Name, const FName Cate
     Type.PinSubCategory = SubCategory;
     return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, DefaultValue);
 }
+
+bool AddStructVariable(UBlueprint* Blueprint, const FName Name, UScriptStruct* Struct,
+    const FString& DefaultValue)
+{
+    FEdGraphPinType Type;
+    Type.PinCategory = UEdGraphSchema_K2::PC_Struct;
+    Type.PinSubCategoryObject = Struct;
+    return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, DefaultValue);
+}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealBlueprintPrintStringConversionTest,
@@ -121,6 +130,9 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
         Blueprint, TEXT("Tag"), UEdGraphSchema_K2::PC_Name, TEXT("Runner")));
     TestTrue(TEXT("FTextメンバー変数を追加"), AddScalarVariable(
         Blueprint, TEXT("Label"), UEdGraphSchema_K2::PC_Text, TEXT("INVTEXT(\"Ready Text\")")));
+    TestTrue(TEXT("FVectorメンバー変数を追加"), AddStructVariable(
+        Blueprint, TEXT("SpawnOffset"), TBaseStructure<FVector>::Get(),
+        TEXT("(X=125.0,Y=-50.0,Z=300.0)")));
 
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
     TestNotNull(TEXT("Blueprintをコンパイル"), Blueprint->GeneratedClass.Get());
@@ -129,7 +141,7 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
     TestTrue(TEXT("実BlueprintからGraph IRを生成"), FBPGraphIRBuilder::Build(Blueprint, GraphIR));
     TestEqual(TEXT("Pawn親クラスパスを保持"),
         GraphIR.ParentClassPath, APawn::StaticClass()->GetPathName());
-    TestEqual(TEXT("Blueprintメンバー変数数を保持"), GraphIR.BlueprintVariableCount, 8);
+    TestEqual(TEXT("Blueprintメンバー変数数を保持"), GraphIR.BlueprintVariableCount, 9);
 
     FBPSemanticIR SemanticIR;
     if (TestTrue(TEXT("実GraphをSemantic IRへLowering"),
@@ -171,7 +183,14 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
         Files.HeaderContent.Contains(TEXT("FName Tag = FName(TEXT(\"Runner\"));")));
     TestTrue(TEXT("FText宣言とCDO初期値"),
         Files.HeaderContent.Contains(TEXT("FText Label = ")));
-    TestEqual(TEXT("Variable IRを8件保持"), SemanticIR.Variables.Num(), 8);
+    TestTrue(TEXT("FVector宣言"),
+        Files.HeaderContent.Contains(TEXT("FVector SpawnOffset{};")));
+    TestTrue(TEXT("FVector既定値を汎用ImportTextで復元"),
+        Files.SourceContent.Contains(TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, SpawnOffset)")) &&
+        Files.SourceContent.Contains(TEXT("X=125.000000")) &&
+        Files.SourceContent.Contains(TEXT("Y=-50.000000")) &&
+        Files.SourceContent.Contains(TEXT("Z=300.000000")));
+    TestEqual(TEXT("Variable IRを9件保持"), SemanticIR.Variables.Num(), 9);
     for (const FBPSemanticVariable& Variable : SemanticIR.Variables)
     {
         TestTrue(*FString::Printf(TEXT("%sの反射C++型を保持"), *Variable.Name.ToString()),
@@ -182,6 +201,19 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
             Variable.bExportTextRoundTripVerified);
         TestTrue(*FString::Printf(TEXT("%sの初期化戦略を解決"), *Variable.Name.ToString()),
             Variable.InitializationStrategy != EBPVariableInitializationStrategy::Unsupported);
+    }
+    const FBPSemanticVariable* SpawnOffset = SemanticIR.Variables.FindByPredicate(
+        [](const FBPSemanticVariable& Variable)
+        {
+            return Variable.Name == TEXT("SpawnOffset");
+        });
+    TestNotNull(TEXT("FVector Variable IR"), SpawnOffset);
+    if (SpawnOffset != nullptr)
+    {
+        TestTrue(TEXT("FVectorはImportText初期化"),
+            SpawnOffset->InitializationStrategy == EBPVariableInitializationStrategy::ImportText);
+        TestEqual(TEXT("FVector既定値ソース"), SpawnOffset->DefaultValueSource,
+            FString(TEXT("cdo_export_text")));
     }
 
     const FString OutputDirectory = FPaths::Combine(

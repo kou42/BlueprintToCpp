@@ -125,12 +125,12 @@ C++ Generator（宣言・式・文・関数・クラス）
 | 標準グラフ・イベントの判定 | **限定的に実装済み** | 空Construction Script、未接続Event Tickの一部を許容 |
 | Editorプレビュー・保存 | **実装済み・実機での全面検証は未完** | Convert to C++ (Preview)、プロジェクトSourceへの保存経路 |
 | Snapshot JSON / PythonServer | **既存v1を維持・JSON/AI機能を段階追加** | Semantic JSON v2の設計・Serializer・Validator・Editorコピー/保存、Mock/OpenAI Provider、生成結果ValidatorをPR #43〜#48で実装。実機・実API未検証 |
-| Semantic IR / PrintString変換 | **最小縦断実装済み・実機動作未検証** | 型付きIR、Lowering、C++ Generator、比較テストを追加。汎用UFunction変換は未実装 |
-| Phase 2 UFunction呼び出し基盤 | **限定実装済み・UE実機未検証** | 反射署名・ピン検証、GetActorLocation接続Lowering、bool既定値、未接続HitResultの宣言とK2_SetActorLocation文生成、出力ピンBindingPlanを実装。接続済みHitResultから単一VariableSetへの限定Loweringとテストを追加（UE未検証）。実変換経路への統合は未完了 |
-| Blueprintメンバー変数・初期値 | **未対応** | 現行MVPはBlueprintVariableCount != 0を拒否。変数定義とCDOの値取得、型別C++初期化生成が必要 |
+| Semantic IR / PrintString変換 | **最小縦断実装済み・Automation/UHT/UBT確認済み** | 型付きIR、Lowering、C++ Generator、比較テストを追加。実Generator出力の隔離UHT/UBTまで確認。実行時の意味一致と汎用UFunction変換は未完了 |
+| Phase 2 UFunction呼び出し基盤 | **限定実装済み・Automation確認済み** | 反射署名・ピン検証、GetActorLocation接続Lowering、bool既定値、未接続HitResultの宣言とK2_SetActorLocation文生成、出力ピンBindingPlanを実装。接続済みHitResultから単一VariableSetへの限定Loweringとテストを追加。通常のSemantic変換経路への統合は未完了 |
+| Blueprintメンバー変数・初期値 | **限定実装済み・Automation/UHT/UBT確認済み** | bool、int32、int64、float、double、FString、FName、FTextをCDOから型安全に生成。値型はExportText/ImportTextの往復一致を条件に汎用復元し、FVectorで実Blueprint縦断検証済み。未検証型は日本語コメント付き宣言へフォールバックするが、UPROPERTYメタデータとObject参照等は未対応 |
 | Actor以外のBlueprint | **未対応** | 直接Actor親のMVP制限あり。Component、UObject、Widget、Anim等は段階的に拡張 |
 | Semantic IR Editor統合 | **限定実装・Automation確認済み** | 旧経路Shadow比較と独立したSemantic Previewメニューを追加。実Blueprintからの対応ノード拡張は継続 |
-| UE 5.7での生成C++ビルド・動作一致 | **隔離ビルドを一部確認** | Automation Test 40/40件と最小Actor生成物の隔離UHT/UBTを確認。実Generator出力全体と実行時の一致は未確認 |
+| UE 5.7での生成C++ビルド・動作一致 | **隔離ビルドを一部確認** | Automation Test 47/47件と、FVector汎用初期化を含む実Blueprint由来Generator出力の隔離UHT/UBTを確認。実行時のBlueprintとの意味一致は未確認 |
 
 GitHubへのコミットとUEでのコンパイル成功・動作確認は区別する。ユーザーからのビルド状況の共有は参考情報として記録し、Automation Test・生成C++のUHT/UBT・実行時の意味一致を別途検証する。
 
@@ -155,7 +155,7 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 - [x] UE 5.7でSerializer・Editor Export・Automation Testのコンパイルと動作を確認
 - [x] JSON v2をPython validatorに渡す往復テストと診断ケースを確認
 - [ ] OpenAI Providerの認証・通信失敗・不正応答・出力拒否を実環境で検証
-- [ ] 生成C++のUHT/UBTと元Blueprintの動作一致を確認（最小Actor生成物の隔離UHT/UBTは確認済み。実Generator出力と動作一致は未確認）
+- [ ] 生成C++のUHT/UBTと元Blueprintの動作一致を確認（実Blueprint由来Generator出力の隔離UHT/UBTは確認済み。実行時の動作一致は未確認）
 - [ ] A2・H1に着手する前に、出力保存・レビューの安全境界を明確化
 
 ## 更新版フェーズ
@@ -200,11 +200,11 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 - [x] 既存のPrintString専用Analyzerとの比較テストを追加（テスト実行の合格確認は別途）
 - [x] Semantic IRからActorの.h/.cppを生成する経路と旧経路の比較機構を実装
 - [x] Shadow ModeとSemantic専用Editor Previewを追加
-- [ ] 新旧生成結果のAutomation Test合格を確認
-- [ ] 新Generatorで生成した.h/.cppのUEビルド・実行一致を確認
+- [x] 新旧生成結果のAutomation Test合格を確認
+- [ ] 新Generatorで生成した.h/.cppのUEビルド・実行一致を確認（隔離UHT/UBTは確認済み。実行一致は未確認）
 
 ### M2: 汎用関数呼び出しの実証
-- [x] UFunction/FProperty解決と署名・ピンの限定検証を実装（UEでのテスト合格は未確認）
+- [x] UFunction/FProperty解決と署名・ピンの限定検証を実装し、UE 5.7 Automation Testで確認
 - [ ] 引数の既定値・参照/出力引数・ターゲット/静的呼び出しを処理
 - [ ] GetActorLocation、SetActorLocation等の代表例を検証
 - [x] 未対応メタデータ・特殊関数を限定的に明示拒否（対象拡張とUE検証は継続）
@@ -212,12 +212,14 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 ### M3-V: メンバー変数と初期値の変換（Phase 3の先行縦断実装）
 - [x] Graph IRとは独立したVariable IRに、変数名・FProperty型・Blueprintメタデータ・編集/公開属性・初期値の出典を保持する
 - [x] `UBlueprint::NewVariables` と `GeneratedClass` / Class Default Object（CDO）の対応を実BlueprintのAutomation Testで検証する
-- [ ] bool / 整数 / float / double / FString / FName / FText の既定値を型安全にC++へ出力する
-- [ ] FVector / FRotator / FTransform / FLinearColor、Enumの初期値を対応する型とコンストラクタ表現で生成する
+- [x] bool / 整数 / float / double / FString / FName / FText の既定値を型安全にC++へ出力する
+- [ ] FVector / FRotator / FTransform / FLinearColor、Enumの初期値を生成する（FVectorは往復検証済みExportText/ImportTextによる汎用復元と隔離UHT/UBTを確認済み。他型の実Blueprint検証は未完了）
 - [ ] UPROPERTYの編集・公開・カテゴリ等を実際のメタデータから復元し、ヘッダー宣言とコンストラクタ初期化を必要に応じて使い分ける
-- [ ] 配列・Set・Map・ユーザー定義Struct、Object/アセット参照は依存関係とロード規則を確認して段階対応する
-- [ ] 変換不能な値・未対応の属性・親クラス既定値との差分を黙って破棄せず診断し、Blueprintと生成C++のCDO値を比較するAutomation Testを追加する
-- [ ] 既存の `BlueprintVariableCount != 0` 制限は安全な変数生成経路が完成するまで維持し、限定ケースから解除する
+- [ ] 配列・Set・Map・ユーザー定義Struct、Object/アセット参照は依存関係とロード規則を確認して段階対応する（値型コンテナ向けの往復検証基盤は実装済み。個別の実Blueprint/UHT/UBT検証は未完了）
+- [ ] 変換不能な値・未対応の属性・親クラス既定値との差分を黙って破棄せず診断し、Blueprintと生成C++のCDO値を比較するAutomation Testを追加する（宣言のみフォールバックと診断は実装済み。生成クラスとのCDO比較は未完了）
+- [x] 既存の `BlueprintVariableCount != 0` 一律拒否を解除し、厳密初期化・往復検証済み汎用初期化・診断付き宣言フォールバックへ分岐する
+
+**2026-10-14 C2更新:** 反射C++型、Property種別、ExportText値、初期化戦略をVariable IRへ保持する。専用リテラルを持つ基本型は従来どおり直接初期化し、それ以外の値型は同じFPropertyによるExportText→ImportText→Identicalの往復一致を必須条件として生成クラスのコンストラクタで復元する。Object参照、Delegate、Instanced property、Blueprint定義型、安全でないC++型文字列は汎用初期化の対象外とする。宣言可能だが値を保証できない型は、日本語コメントと診断を付けた `型名 変数名{};` をSemantic Previewで生成し、厳密モードでは引き続き拒否する。
 
 ### M6-C: Actor以外のBlueprint対応（Phase 6）
 - [ ] Actor専用Generator/Emitterの前提を整理し、UObject共通の型解決・変数・初期値生成とクラス別コード生成を分離する

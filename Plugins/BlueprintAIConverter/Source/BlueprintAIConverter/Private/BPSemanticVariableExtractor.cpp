@@ -292,20 +292,37 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             }
         }
 
+        // 専用リテラルを持たない値型は、FPropertyのExportText/ImportTextを利用する。
+        // 同じPropertyで往復して完全一致した値だけをGeneratorへ渡し、Object参照や
+        // DelegateなどIsValueOnlyPropertyで拒否した型には適用しない。
+        if (Variable.InitializationStrategy == EBPVariableInitializationStrategy::Unsupported &&
+            Variable.bExportedDefaultValueAvailable &&
+            Variable.bExportTextRoundTripVerified &&
+            Variable.TypePath.StartsWith(TEXT("/Game/")) == false)
+        {
+            Variable.InitializationStrategy = EBPVariableInitializationStrategy::ImportText;
+            Variable.bDefaultValueAvailable = true;
+            Variable.DefaultValueSource = TEXT("cdo_export_text");
+            Variable.DefaultValue = Variable.ExportedDefaultValue;
+        }
+
         // J2-2でCDOから型安全に取得するまで、宣言のDefaultValueをCDO値と誤認しない。
         // コンテナやreal型のサブカテゴリなど未解決情報は推測せず診断する。
         if (Description.VarType.ContainerType != EPinContainerType::None ||
             Variable.Type.Kind == EBPSemanticTypeKind::Unresolved)
         {
-            FBPSemanticDiagnostic Diagnostic;
-            // 反射型が得られた変数はDeclarationOnlyでC++宣言を残せるため、
-            // Lowering全体を止めずGeneratorの方針選択へ委ねる。
-            Diagnostic.Severity = Variable.ReflectedCppType.IsEmpty()
-                ? EBPSemanticDiagnosticSeverity::Error
-                : EBPSemanticDiagnosticSeverity::Warning;
-            Diagnostic.Message = FString::Printf(TEXT("Variable %s requires type resolution: %s"),
-                *Variable.Name.ToString(), *Variable.PinCategory);
-            IR.Diagnostics.Add(MoveTemp(Diagnostic));
+            if (Variable.InitializationStrategy != EBPVariableInitializationStrategy::ImportText)
+            {
+                FBPSemanticDiagnostic Diagnostic;
+                // 反射型が得られた変数はDeclarationOnlyでC++宣言を残せるため、
+                // Lowering全体を止めずGeneratorの方針選択へ委ねる。
+                Diagnostic.Severity = Variable.ReflectedCppType.IsEmpty()
+                    ? EBPSemanticDiagnosticSeverity::Error
+                    : EBPSemanticDiagnosticSeverity::Warning;
+                Diagnostic.Message = FString::Printf(TEXT("Variable %s requires type resolution: %s"),
+                    *Variable.Name.ToString(), *Variable.PinCategory);
+                IR.Diagnostics.Add(MoveTemp(Diagnostic));
+            }
         }
         // 宣言名に対応する生成クラスのPropertyのみ対象とする。
         // 配列・Map・Set・参照型・未解決型はJ2-2の安全なスカラー対象外。

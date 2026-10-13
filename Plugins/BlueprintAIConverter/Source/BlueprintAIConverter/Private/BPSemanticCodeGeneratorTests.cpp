@@ -415,4 +415,61 @@ bool FBPSemanticGeneratorVariableFallbackTest::RunTest(const FString& Parameters
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorImportTextVariableTest,
+    "BlueprintAIConverter.SemanticIR.Generator.VerifiedImportTextVariable",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorImportTextVariableTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("ImportTextテスト用Lowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("SpawnOffset");
+    Variable.Type.Kind = EBPSemanticTypeKind::Struct;
+    Variable.TypePath = TEXT("/Script/CoreUObject.Vector");
+    Variable.ReflectedCppType = TEXT("FVector");
+    Variable.ReflectedPropertyClass = TEXT("StructProperty");
+    Variable.PropertyFlags = TEXT("0");
+    Variable.InitializationStrategy = EBPVariableInitializationStrategy::ImportText;
+    Variable.bDefaultValueAvailable = true;
+    Variable.DefaultValueSource = TEXT("cdo_export_text");
+    Variable.DefaultValue = TEXT("(X=1.0,Y=2.0,Z=3.0)");
+    Variable.bExportedDefaultValueAvailable = true;
+    Variable.ExportedDefaultValue = Variable.DefaultValue;
+    Variable.bExportTextRoundTripVerified = true;
+    Semantic.Variables.Add(Variable);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("往復検証済みImportText変数を生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AImportTextActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("値初期化した反射型宣言"),
+        Files.HeaderContent.Contains(TEXT("FVector SpawnOffset{};")));
+    TestTrue(TEXT("コンストラクタ宣言"),
+        Files.HeaderContent.Contains(TEXT("AImportTextActor();")));
+    TestTrue(TEXT("UnrealTypeヘッダー"),
+        Files.SourceContent.Contains(TEXT("#include \"UObject/UnrealType.h\"")));
+    TestTrue(TEXT("日本語の復元コメント"), Files.SourceContent.Contains(
+        TEXT("往復検証済み値からBlueprintのデフォルト値を復元します。")));
+    TestTrue(TEXT("反射プロパティを名前で解決"), Files.SourceContent.Contains(
+        TEXT("GET_MEMBER_NAME_CHECKED(AImportTextActor, SpawnOffset)")));
+    TestTrue(TEXT("ExportText値をImportTextへ渡す"), Files.SourceContent.Contains(
+        TEXT("TEXT(\"(X=1.0,Y=2.0,Z=3.0)\")")));
+
+    Semantic.Variables[0].bExportTextRoundTripVerified = false;
+    TestFalse(TEXT("往復未検証値は拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AImportTextActor"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("拒否時に生成物を公開しない"), Files.HeaderContent.IsEmpty());
+    return true;
+}
+
 #endif
