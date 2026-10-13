@@ -1,4 +1,5 @@
 #include "BPActorCodeGenerator.h"
+#include "BPParentClassResolver.h"
 #include "BPPrintStringAnalyzer.h"
 
 namespace
@@ -72,9 +73,10 @@ bool FBPActorCodeGenerator::Generate(const FBPGraphIR& IR, const FString& ClassN
         OutDiagnostics.Add(TEXT("Module API macro must be empty or a valid MODULE_API identifier"));
         return false;
     }
-    if (IR.ParentClassPath != TEXT("/Script/Engine.Actor"))
+    FBPResolvedParentClass ParentClass;
+    if (FBPParentClassResolver::ResolveActorParent(
+        IR.ParentClassPath, ParentClass, OutDiagnostics) == false)
     {
-        OutDiagnostics.Add(TEXT("MVP supports only Blueprint classes directly derived from Actor"));
         return false;
     }
 
@@ -143,8 +145,8 @@ bool FBPActorCodeGenerator::Generate(const FBPGraphIR& IR, const FString& ClassN
 
     const FString ApiPrefix = ModuleApiMacro.IsEmpty() ? FString() : ModuleApiMacro + TEXT(" ");
     OutFiles.HeaderContent = FString::Printf(
-        TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public AActor\n{\n    GENERATED_BODY()\n\nprotected:\n    virtual void BeginPlay() override;\n};\n"),
-        *BaseName, *ApiPrefix, *ClassName);
+        TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\nprotected:\n    virtual void BeginPlay() override;\n};\n"),
+        *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName, *ParentClass.CppClassName);
 
     // PrintStringの引数を省略せず渡し、画面/ログ出力・Duration・Keyを保存する。
     const TCHAR* Screen = Call.bPrintToScreen ? TEXT("true") : TEXT("false");

@@ -13,6 +13,9 @@ dependencies = []
 api = ["fastapi>=0.110", "uvicorn>=0.27"]
 test = ["pytest>=8", "httpx>=0.27,<0.29", "httpx2>=2.0.0"]
 
+[project.scripts]
+blueprint-to-cpp-verify = "app.ubt_verification:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]

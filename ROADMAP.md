@@ -1,7 +1,7 @@
 # BlueprintToCpp 開発ロードマップ
 
 対象: Unreal Engine 5.7.4 / BlueprintAIConverter / PythonServer  
-更新日: 2026-10-13（J2-1〜J2-10の実装状況とUE 5.7実機テスト結果を反映）
+更新日: 2026-10-14（実Blueprintを使うC++変換中心の優先順位へ更新）
 
 ## 最終目標
 
@@ -11,29 +11,24 @@ Unreal Editor上でBlueprintを選択し、グラフの意味を保ちながらC
 
 すべてのBlueprintを一度にサポートすることは目標にしない。変換対象を明示し、意味を保証できない場合は診断付きで拒否する。
 
-## 社内利用を想定した優先ワークフロー（新方針）
+## 実Blueprint変換を中心とする優先ワークフロー（2026-10-14方針）
 
-**中心機能は「DirectとAIによる独立したC++生成 → 差分比較 → 過不足・意味検証 → 人による採用判断」** とする。GitHubでのバージョン管理やGitHub Actionsを利用できない社内環境でも、Unreal Editorとローカルファイル／許可済みAI接続だけで動作する設計とする。開発用GitHub CI（PR #49）は任意の品質保証手段であり、利用時の必須要件ではない。
+**当面の中心作業は、実際のBlueprintアセットを入力にしてDirect C++変換能力を増やすこと** とする。PythonServer、AI比較、レビュー・統計APIは既存機能を維持するが、C++縦断実装やその検証に必要な変更を除き、先行して拡張しない。
+
+各機能は「IRやEmitterの単体実装」だけでは完了としない。実Blueprintの作成または再現用アセット、Editorからの変換、生成 `.h/.cpp`、UHT/UBT、元Blueprintとの動作比較までを1つの縦断単位として扱う。変換不能なBlueprintは黙って簡略化せず、具体的な診断を返す。
 
 ```text
-Blueprint Asset
-  ├─ Graph IR → Semantic IR → Direct Generator → Direct .h/.cpp
-  └─ Semantic JSON v2 → AI Provider → AI .h/.cpp
-                                           |
-                         ファイル対応付け・テキスト差分
-                                           |
-                    宣言・型・処理順・副作用・過不足の意味検証
-                                           |
-                      一致 ──────────────── 差分あり
-                        |                       |
-                 共通検証へ             診断・修正候補を提示
-                        |                       |
-                        |                  人が修正・再比較
-                        └──────────┬────────────┘
-                                   |
-                  C++静的検査・UHT/UBT・BP動作比較
-                                   |
-                      人による承認 → 安全な保存
+実Blueprint Asset
+        |
+Graph IR → Semantic IR → Direct C++ Generator
+        |                         |
+  未対応診断                .h/.cpp生成
+                                  |
+                    隔離UHT/UBT・Editorビルド
+                                  |
+                    元Blueprintとの動作比較
+                                  |
+                       対応ケースとして確定
 ```
 
 - **一致は合格ではない。** テキストが一致しても両経路に共通の欠落や誤りがあり得る。差分ゼロは共通検証に進む条件であり、自動承認条件ではない。
@@ -42,21 +37,21 @@ Blueprint Asset
 - **修正の追跡可能性。** Blueprint識別子、Semantic JSON、両方の生成物、診断、差分、検証結果、採用した修正、実行日時、Provider/モデル情報（秘密情報は除外）をローカル保存できるようにする。機密情報をログへ無断出力しない。
 - **AI利用ポリシー。** 社内Blueprintのアセットパス・型・ロジック等は機密になり得る。外部AIへの送信は組織の承認と利用条件を確認した場合のみ許可し、ローカルLLM・社内承認済みProvider・AI無効の選択肢を確保する。
 - **GitHub Copilot。** 利用可能性は未確認。IDE上での差分レビュー・修正支援候補として調査する。Copilot Chatが利用できても、BlueprintToCppから任意のJSONを送信する正式なProvider APIが利用できるとは限らないため、既存OpenAI APIと同一視しない。組織の契約・利用権限・送信ポリシー・提供APIを確認してから統合を判断する。
-- **Hybridの位置付け。** 当面は自動的なC++の文字列結合ではなく、Direct/AIの比較・修正候補提示を優先する。安全なSemantic IR単位の部分統合は、検証基盤完成後に検討する。
+- **AI/Hybridの位置付け。** Direct C++変換で意味と検証方法を確立したケースを基準に比較する。C++本体より先にProvider、比較API、統計UIを拡張しない。
 
 ### 新しい優先マイルストーン
 
 | 順序 | ID | 実装内容と完了条件 |
 | --- | --- | --- |
-| 1 | D1: 生成結果の共通表現 | Direct/AIのファイル・診断・入力ハッシュ・生成元・失敗状態を同じ形式で保持。変換経路は独立 |
-| 2 | D2: ファイル／行Diff | .h/.cppを対応付け、追加・削除・変更・片側欠落を表示。改行差などを区別し、再現可能な差分レポートを出力 |
-| 3 | D3: 構造・過不足比較 | クラス・関数・変数・型・引数・戻り値・呼び出し・条件・実行順・副作用を比較。判定不能は要確認とし、過剰な同値判定をしない |
-| 4 | D4: 修正とレビュー | 差分の理由・修正候補・人の承認・再比較を記録。生成ファイルの自動上書きを避ける |
-| 5 | V2: 最終検証 | 共通Validator、C++静的検査、UHT/UBT、Blueprintとの実行時比較を段階実装。失敗・未実施を明示 |
-| 6 | E2: Editor統合とローカル履歴 | 2経路の実行・比較画面、差分／診断表示、承認後保存、ローカル監査記録。GitHub不要で利用可能 |
-| 並行 | P1: 社内AI接続調査 | Copilotの利用形態とAPI可否、社内承認済みProvider、ローカルLLM、データ持ち出し制約を調査 |
+| 1 | C1: 実BPベースライン | BeginPlay→PrintStringの実BlueprintをEditorから変換し、生成物のUHT/UBTと実行結果を一致させる |
+| 2 | C2: メンバー変数 | bool、int32、int64、float、double、FString、FNameを宣言・初期化し、対応済みケースだけ一律拒否を解除する |
+| 3 | C3: 汎用関数呼び出し | GetActorLocation→SetActorLocationを実BlueprintからSemantic IRへLoweringし、既存Emitterを通常変換経路へ統合する |
+| 4 | C4: 基本式・制御フロー | 四則演算、比較、Branch、Returnを実Blueprintで変換し、評価順と副作用を保持する |
+| 5 | C5: Blueprint自作関数 | 引数・戻り値・ローカル変数を持つ単純なFunctionGraphを生成クラスのメンバー関数へ変換する |
+| 各段階 | V3: 縦断検証 | Automation Test、生成C++の隔離UHT/UBT、元Blueprintとの実行結果比較を同じケースへ追加する |
+| 保留 | A3/E2: AI比較・UI拡張 | C1〜C3の変換能力を優先し、新しいProvider・統計・レビューUIの追加は必要性が明確になるまで保留する |
 
-**着手順:** D1 → D2 → D3 → D4 → V2 → E2。P1と既存Directの機能拡張・検証は並行。既存J0/J1/A1/A2/H1/E1/V1は履歴と長期計画として維持し、当面の実装優先度は本節を優先する。
+**着手順:** C1 → C2 → C3 → C4 → C5。V3は各段階で同時に行う。既存のD1〜D4、J0〜J2、A1/A2、H1、E1/E2は基盤・履歴・長期計画として維持するが、当面の実装優先度は本節を優先する。
 
 ## 目標アーキテクチャ
 
@@ -118,9 +113,9 @@ C++ Generator（宣言・式・文・関数・クラス）
 | V1: 3モード共通検証 | **継続・並行** | スキーマ検証、生成C++静的検査、UHT/UBT、Blueprintとの実行結果比較、回帰ケースを整備 |
 | E1: Editor UI統合 | **中・検証後** | Direct / AI / Hybridの選択、JSONプレビュー・保存、生成差分・診断表示、安全な保存を追加 |
 
-**従来の実装順（長期計画）:** J0 → J1 → A1 → A2 / H1 → E1。直近は前述のD1→D2→D3→D4→V2→E2を優先し、V1は全段階で継続する。既存Phase 0〜8のDirect変換開発は止めず、JSON/AI系を並行トラックとして扱う。
+**従来の実装順（長期計画）:** J0 → J1 → A1 → A2 / H1 → E1は履歴として維持する。直近はC1→C2→C3→C4→C5を優先し、V3を各段階で実施する。JSON/AI系はC++縦断変換に必要な保守を除いて保留する。
 
-## 現状（2026-10-12時点）
+## 現状（2026-10-14時点）
 
 | 領域 | 状況 | 補足 |
 | --- | --- | --- |
@@ -134,8 +129,8 @@ C++ Generator（宣言・式・文・関数・クラス）
 | Phase 2 UFunction呼び出し基盤 | **限定実装済み・UE実機未検証** | 反射署名・ピン検証、GetActorLocation接続Lowering、bool既定値、未接続HitResultの宣言とK2_SetActorLocation文生成、出力ピンBindingPlanを実装。接続済みHitResultから単一VariableSetへの限定Loweringとテストを追加（UE未検証）。実変換経路への統合は未完了 |
 | Blueprintメンバー変数・初期値 | **未対応** | 現行MVPはBlueprintVariableCount != 0を拒否。変数定義とCDOの値取得、型別C++初期化生成が必要 |
 | Actor以外のBlueprint | **未対応** | 直接Actor親のMVP制限あり。Component、UObject、Widget、Anim等は段階的に拡張 |
-| Semantic IR Editor統合 | **実装済み・実機動作未検証** | 旧経路Shadow比較と独立したSemantic Previewメニューを追加 |
-| UE 5.7.4での生成C++ビルド・動作一致 | **一部未確認** | ユーザーからビルドは問題なさそうとの報告あり。Automation Test結果・生成C++ビルド・実行時の一致は未確認 |
+| Semantic IR Editor統合 | **限定実装・Automation確認済み** | 旧経路Shadow比較と独立したSemantic Previewメニューを追加。実Blueprintからの対応ノード拡張は継続 |
+| UE 5.7での生成C++ビルド・動作一致 | **隔離ビルドを一部確認** | Automation Test 40/40件と最小Actor生成物の隔離UHT/UBTを確認。実Generator出力全体と実行時の一致は未確認 |
 
 GitHubへのコミットとUEでのコンパイル成功・動作確認は区別する。ユーザーからのビルド状況の共有は参考情報として記録し、Automation Test・生成C++のUHT/UBT・実行時の意味一致を別途検証する。
 
@@ -156,11 +151,11 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 **完了判定上の注意:** 「実装済み」はコミットが存在することを示し、機能完成や検証合格を意味しない。Pythonのpytest、UE 5.7.4でのAutomation Test・UHT/UBT、実AI疎通、BlueprintとC++の意味一致は別途確認する。特にSemantic JSONがpartialのときはAI生成結果を自動採用しない。
 
 ### 次の検証ゲート
-- [ ] PythonServerの全pytestを実行し、既存Direct APIの回帰を確認（Python 3.10 / 3.12のGitHub Actionsを追加。初回実行結果待ち）
-- [ ] UE 5.7.4でSerializer・Editor Export・Automation Testのコンパイルと動作を確認
-- [ ] JSON v2をPython validatorに渡す往復テストと診断ケースを確認
+- [x] PythonServerの全pytestを実行し、既存Direct APIの回帰を確認（Python 3.12ローカル。Python 3.10 / 3.12のGitHub Actionsは継続）
+- [x] UE 5.7でSerializer・Editor Export・Automation Testのコンパイルと動作を確認
+- [x] JSON v2をPython validatorに渡す往復テストと診断ケースを確認
 - [ ] OpenAI Providerの認証・通信失敗・不正応答・出力拒否を実環境で検証
-- [ ] 生成C++のUHT/UBTと元Blueprintの動作一致を確認
+- [ ] 生成C++のUHT/UBTと元Blueprintの動作一致を確認（最小Actor生成物の隔離UHT/UBTは確認済み。実Generator出力と動作一致は未確認）
 - [ ] A2・H1に着手する前に、出力保存・レビューの安全境界を明確化
 
 ## 更新版フェーズ
@@ -194,7 +189,7 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 ## 直近のマイルストーン
 
 ### M0: PrintString MVPを実機で安定化
-- [ ] UE 5.7.4で生成したActorの.h/.cppがコンパイルできる
+- [x] UE 5.7で実Blueprintから生成したPawn派生の.h/.cppがUHT/UBTを通過する
 - [ ] BeginPlayの文字列、TextColor、Duration、Key、画面/ログ設定が一致する
 - [ ] 空Construction Script、未接続Tick、接続済み未対応ノードで安全に成功/失敗する
 - [ ] 成功/失敗ケースの自動テストと再現用Blueprintを整備する
@@ -215,8 +210,8 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 - [x] 未対応メタデータ・特殊関数を限定的に明示拒否（対象拡張とUE検証は継続）
 
 ### M3-V: メンバー変数と初期値の変換（Phase 3の先行縦断実装）
-- [ ] Graph IRとは独立したVariable IRに、変数名・FProperty型・Blueprintメタデータ・編集/公開属性・初期値の出典を保持する
-- [ ] `UBlueprint::NewVariables` と `GeneratedClass` / Class Default Object（CDO）の対応を検証し、継承元プロパティとBlueprint定義変数を区別する
+- [x] Graph IRとは独立したVariable IRに、変数名・FProperty型・Blueprintメタデータ・編集/公開属性・初期値の出典を保持する
+- [x] `UBlueprint::NewVariables` と `GeneratedClass` / Class Default Object（CDO）の対応を実BlueprintのAutomation Testで検証する
 - [ ] bool / 整数 / float / double / FString / FName / FText の既定値を型安全にC++へ出力する
 - [ ] FVector / FRotator / FTransform / FLinearColor、Enumの初期値を対応する型とコンストラクタ表現で生成する
 - [ ] UPROPERTYの編集・公開・カテゴリ等を実際のメタデータから復元し、ヘッダー宣言とコンストラクタ初期化を必要に応じて使い分ける
@@ -258,11 +253,11 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 7. **UEバージョン依存性**: Blueprintコンパイラ内部APIを活用する場合はUE 5.7.4での公開範囲・安定性を確認する。
 8. **コード規約**: C++のifは波括弧を必須とし、null判定を明示する。重要な設計判断は日本語コメントで説明する。
 
-## 次の着手対象（2026-10-13更新）
+## 次の着手対象（2026-10-14更新）
 
-**優先方針: レビュー・統計APIの拡張をいったん区切り、Blueprint → Semantic JSON v2 の生成情報を強化する。** D1〜D4・V2のレビュー基盤は維持し、今後の追加実装は実際のBlueprint情報をAI/Directへ渡す品質向上に集中する。
+**優先方針: Python/レビュー基盤の先行拡張を止め、C++プラグイン本体と実Blueprintの縦断変換を進める。** J2-1〜J2-12で得たSemantic JSON、Editor往復、UHT/UBTハーネスは検証手段として利用する。次の主成果物はPython APIではなく、対応Blueprintが増えるC++変更でなければならない。
 
-### JSON生成強化ロードマップ
+### 完了済みのJSON・検証基盤
 
 | 順序 | ID | 内容 | 完了条件 |
 | --- | --- | --- | --- |
@@ -277,16 +272,36 @@ J2-1〜J2-6は実装済み。J2-7でSemantic宣言監査、J2-8で反射関数�
 
 J2-10では検証済みSemantic JSON全体の正規化SHA-256を追加し、Direct/AI比較の前後、レビュー保存、人の判断、外部UHT/UBT証跡、動作比較証跡、総合レポートへ同じ入力識別子を伝播するようにした。ハッシュは追跡用であり、意味的一致やビルド成功の証明には使用しない。
 
-**次の実装単位は実機検証の証跡連携**。UE Editorで保存したSemantic JSON v2をPython validatorとDirect/AI比較へ渡し、入力ハッシュ、生成物、UHT/UBT結果、動作比較を同一レビューに紐付ける。Editor操作や外部検証をサーバーが実施したと偽らず、未実施・外部申告・サーバー実行済みを区別する。
+J2-11ではUE Editor APIから一時Actor Blueprintを生成し、bool・int・FString変数の追加、Blueprintコンパイル、Graph/Semantic IR抽出、JSON保存・再読込までを行うAutomation Testを追加した。実際に保存されたJSONをPython validatorとMock Providerへ渡すローカル往復も確認した。Contentアセットは作成・変更しない。
 
-2026-10-13のローカル検証では、UE 5.7のEditorターゲットがビルド成功し、`BlueprintAIConverter` Automation Testは39/39件成功した。PythonServerはPython 3.12で201件成功した。生成された個別C++クラスのUHT/UBTとBlueprintとの実行時一致は引き続き未確認。
+J2-12では生成アーティファクトを新規の短命プラグインへ配置し、`RunUAT BuildPlugin` でUHT/UBTを実行するローカルCLIを追加した。既存Sourceを変更せず、入力制約、保存先、タイムアウト、ログ、artifact fingerprintを記録する。UE 5.7で最小Actor生成物を実際にビルドし、UHT/UBTの成功証跡を確認した。
+
+### 次のC++実装単位: C1-1 実BlueprintのPrintString縦断
+
+テスト用に手組みしたIRではなく、Editor APIで作成した実BlueprintのBeginPlay→PrintStringを入力にして次を一続きに確認する。
+
+1. Event BeginPlayとPrintStringノードを持つ一時Actor BlueprintをEditor APIで作成・コンパイルする。
+2. 実BlueprintからGraph IRを構築し、Semantic LoweringとC++ Generatorを通常経路と同じ順序で実行する。
+3. 文字列、画面/ログ出力、色、Duration、Keyが生成C++へ保持されることを確認する。
+4. 生成 `.h/.cpp` をJ2-12の隔離プラグインへ渡し、UHT/UBTを成功させる。
+5. Blueprintと生成C++の観測可能な出力を比較できる最小の実行テストを追加する。実行比較を自動化できない部分は、再現手順と未確認状態を明示する。
+
+C1-1完了後はC2-1としてbool、int32、FStringのメンバー宣言とCDO初期値生成へ進む。その後int64、float、double、FName、FTextへ型を拡張し、C3のGetActorLocation→SetActorLocation実Blueprint縦断へ進む。
+
+2026-10-14時点でC1-1の手順1〜4は完了した。`APawn`派生の実Blueprintから生成した `.h/.cpp` を隔離BuildPluginへ渡し、UHT/UBT成功を確認した。手順5のBlueprintと生成C++の実行時出力比較は未完了のため、C1-1の完了判定には含めない。
+
+親クラス解決は `FBPParentClassResolver` へ共通化した。ネイティブの任意の`AActor`派生クラスについて、C++名と公開ヘッダーをリフレクションから取得する。非Actor、解決不能、非公開ヘッダー、Blueprint生成親は診断付きで拒否する。Blueprint生成親をネイティブ祖先へ暗黙置換することは禁止する。
+
+**保留:** 旧J2-13（実生成アーティファクトとレビュー証跡の自動接続）、新しいProvider、レビュー統計・表示UIの拡張。C++縦断検証で直接必要になった場合のみ再開する。
+
+2026-10-14のローカル検証では、UE 5.7のEditorターゲットがビルド成功し、`BlueprintAIConverter` Automation Testは44/44件成功した。PythonServerはPython 3.12で212件成功した。実Pawn BlueprintからGeneratorが出力したC++の隔離UHT/UBTも成功したが、Blueprintとの実行時一致は引き続き未確認。
 
 ### レビュー基盤の到達点と残課題
 
 - PR #43〜#48: Semantic JSON v2 Serializer/Validator、Editor出力、AI Providerと出力検証の基盤を統合済み。UE実機・実AI疎通は未検証。
 - PR #49〜#70: Direct/AI差分、構造比較、レビュー記録、外部UHT/UBT・動作証跡、統計・推移・ダッシュボード、索引共有と回帰テストを段階的に統合済み。
 - PR #70: GitHub Actions成功後にmainへマージ済み。レビュー要約と検証レポートの証跡索引を共有。
-- 残課題: 実際のUE 5.7.4ビルド・Automation Test、生成C++のUHT/UBT、Blueprintとの実行結果一致、実AI疎通。GitHub ActionsのPythonテスト成功はこれらの実機検証の代替ではない。
-- 集計性能の実測・表示UI・Editor統合は継続課題とするが、JSON生成強化より優先しない。
+- 残課題: 実Generator出力のUHT/UBT、Blueprintとの実行結果一致、実AI疎通。ローカルのAutomation Test・隔離UHT/UBT・GitHub ActionsのPythonテストは、これら未検証項目の代替ではない。
+- 集計性能の実測・表示UI・追加Providerは継続課題とするが、C1〜C3のC++変換能力より優先しない。
 
 Semantic Previewは実験的な経路として維持し、旧Generatorの既定経路は実機検証が完了するまで切り替えない。

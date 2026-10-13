@@ -4,6 +4,7 @@
 #include "BPFunctionArgumentEmitter.h"
 #include "BPFunctionCallValidator.h"
 #include "BPBooleanPinDefaultEmitter.h"
+#include "BPParentClassResolver.h"
 
 bool FBPConnectedFunctionArguments::Emit(const FBPGraphIR& GraphIR,
     const FGuid& CallNodeId, const UFunction* Function, FString& OutArguments,
@@ -19,13 +20,19 @@ bool FBPConnectedFunctionArguments::Emit(const FBPGraphIR& GraphIR,
         return false;
     }
 
-    // GetActorLocationをthisに変換するため、直接Actor派生のみを受理する。
-    if (GraphIR.ParentClassPath != TEXT("/Script/Engine.Actor"))
+    // GetActorLocationをthisに変換するため、解決済みのネイティブActor派生のみを受理する。
+    FBPResolvedParentClass ParentClass;
+    TArray<FString> ParentDiagnostics;
+    if (FBPParentClassResolver::ResolveActorParent(
+        GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
     {
-        FBPSemanticDiagnostic Diagnostic;
-        Diagnostic.NodeId = CallNodeId;
-        Diagnostic.Message = TEXT("Only direct Actor parent is supported");
-        OutDiagnostics.Add(MoveTemp(Diagnostic));
+        for (const FString& Message : ParentDiagnostics)
+        {
+            FBPSemanticDiagnostic Diagnostic;
+            Diagnostic.NodeId = CallNodeId;
+            Diagnostic.Message = Message;
+            OutDiagnostics.Add(MoveTemp(Diagnostic));
+        }
         return false;
     }
 

@@ -1,4 +1,5 @@
 #include "BPSemanticLowering.h"
+#include "BPParentClassResolver.h"
 #include "BPPrintStringAnalyzer.h"
 
 namespace
@@ -37,10 +38,21 @@ bool FBPSemanticLowering::LowerPrintString(const FBPGraphIR& GraphIR, FBPSemanti
     OutIR.AssetPath = GraphIR.AssetPath;
     OutIR.ParentClassPath = GraphIR.ParentClassPath;
 
-    // 既存MVPと同じ制限を適用し、未対応の入力を推測で変換しない。
-    if (GraphIR.ParentClassPath != TEXT("/Script/Engine.Actor") || GraphIR.BlueprintVariableCount != 0)
+    FBPResolvedParentClass ParentClass;
+    TArray<FString> ParentDiagnostics;
+    if (FBPParentClassResolver::ResolveActorParent(
+        GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
     {
-        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("MVP requires a direct Actor parent and no Blueprint variables"));
+        for (const FString& Message : ParentDiagnostics)
+        {
+            AddDiagnostic(OutIR, FString(), FGuid(), Message);
+        }
+        return false;
+    }
+    // 変数の宣言・初期値生成が統合されるまでは、意味を落とさないよう拒否を維持する。
+    if (GraphIR.BlueprintVariableCount != 0)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("MVP does not yet support Blueprint variables"));
         return false;
     }
 

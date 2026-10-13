@@ -23,6 +23,21 @@ pytest -q tests/test_semantic_json.py tests/test_semantic_roundtrip.py
 7. コピー版と保存版を比較する際は `source.asset_path`、`variables`、`functions`、`graph_traces`、`diagnostics` を照合する。エンジン側のコンパイルや編集によるGUID・順序変化を考慮し、ファイルの単純なバイト一致だけで判断しない。
 8. 未対応型、空文字列、0、コンテナ型、未コンパイルBlueprint、異なる関数シグネチャも確認する。
 
+## 自動往復確認
+
+`BlueprintAIConverter.SemanticJson.EditorRoundtrip` はUE Editor APIで一時的なActor Blueprintを生成し、bool、int、FString変数を追加してコンパイルする。その実BlueprintをGraph IR、変数・関数・グラフ追跡Extractor、Serializer、Exporterへ通し、`Saved/BlueprintSemanticJson`へ実JSONを出力する。Contentアセットは作成・変更しない。
+
+```powershell
+UnrealEditor-Cmd.exe MyProject.uproject `
+  -ExecCmds="Automation RunTests BlueprintAIConverter.SemanticJson.EditorRoundtrip; Quit" `
+  -unattended -nop4 -nosplash -NullRHI -log
+
+python -m app.semantic_roundtrip --provider mock `
+  <Saved/BlueprintSemanticJsonに出力された*.semantic.json>
+```
+
+Automationログの `SEMANTIC_ROUNDTRIP_ARTIFACT=` がPythonへ渡すファイルを示す。2026-10-13のUE 5.7実測では、変数3件、関数0件、グラフ追跡2件を含むJSONがPython validatorを通過し、Mock Providerは`mocked`を返した。
+
 ## 完了判定
 
 - Python CIでGolden JSON・破損JSON・旧形式互換の検証が成功する。

@@ -1,4 +1,5 @@
 #include "BPSemanticCodeGenerator.h"
+#include "BPParentClassResolver.h"
 
 namespace
 {
@@ -94,9 +95,15 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         OutDiagnostics.Add(TEXT("Module API macro must be empty or a valid MODULE_API identifier"));
         return false;
     }
-    if (IR.ParentClassPath != TEXT("/Script/Engine.Actor") || IR.Functions.Num() != 1)
+    FBPResolvedParentClass ParentClass;
+    if (FBPParentClassResolver::ResolveActorParent(
+        IR.ParentClassPath, ParentClass, OutDiagnostics) == false)
     {
-        OutDiagnostics.Add(TEXT("Semantic MVP requires one function on a direct Actor subclass"));
+        return false;
+    }
+    if (IR.Functions.Num() != 1)
+    {
+        OutDiagnostics.Add(TEXT("Semantic MVP requires one function on an Actor subclass"));
         return false;
     }
     const FBPSemanticFunction& Function = IR.Functions[0];
@@ -122,7 +129,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     if (Context.Kind != EBPSemanticExpressionKind::VariableReference ||
         Context.VariableName != TEXT("this") ||
         Context.Type.Kind != EBPSemanticTypeKind::Object ||
-        Context.Type.TypePath != TEXT("/Script/Engine.Actor"))
+        Context.Type.TypePath != IR.ParentClassPath)
     {
         OutDiagnostics.Add(TEXT("Unsupported PrintString world context"));
         return false;
@@ -168,8 +175,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     Files.HeaderFileName = BaseName + TEXT(".h");
     Files.SourceFileName = BaseName + TEXT(".cpp");
     Files.HeaderContent = FString::Printf(
-        TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public AActor\n{\n    GENERATED_BODY()\n\nprotected:\n    virtual void BeginPlay() override;\n};\n"),
-        *BaseName, *ApiPrefix, *ClassName);
+        TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\nprotected:\n    virtual void BeginPlay() override;\n};\n"),
+        *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName, *ParentClass.CppClassName);
     Files.SourceContent = FString::Printf(
         TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n}\n"),
         *BaseName, *ClassName, *EscapedText, *Screen, *Log,

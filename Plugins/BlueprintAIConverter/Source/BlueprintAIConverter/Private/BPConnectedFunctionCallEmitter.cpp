@@ -10,6 +10,7 @@
 #include "BPSetActorLocationCallArguments.h"
 #include "BPConnectedActorLocationLowering.h"
 #include "BPBooleanPinDefaultEmitter.h"
+#include "BPParentClassResolver.h"
 #include "GameFramework/Actor.h"
 #include "EdGraphSchema_K2.h"
 #include "UObject/Class.h"
@@ -314,13 +315,26 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
 
     // 戻り値が使われている場合、呼び出し結果を捨てると意味が変わる。
     // また外部self参照の変換は未対応なので明示的に拒否する。
-    if (GraphIR.Diagnostics.IsEmpty() == false ||
-        GraphIR.ParentClassPath != TEXT("/Script/Engine.Actor"))
+    if (GraphIR.Diagnostics.IsEmpty() == false)
     {
         FBPSemanticDiagnostic Diagnostic;
         Diagnostic.NodeId = CallNodeId;
-        Diagnostic.Message = TEXT("Unsupported graph diagnostics or Actor parent");
+        Diagnostic.Message = TEXT("Graph IR contains diagnostics");
         OutDiagnostics.Add(MoveTemp(Diagnostic));
+        return false;
+    }
+    FBPResolvedParentClass ParentClass;
+    TArray<FString> ParentDiagnostics;
+    if (FBPParentClassResolver::ResolveActorParent(
+        GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
+    {
+        for (const FString& Message : ParentDiagnostics)
+        {
+            FBPSemanticDiagnostic Diagnostic;
+            Diagnostic.NodeId = CallNodeId;
+            Diagnostic.Message = Message;
+            OutDiagnostics.Add(MoveTemp(Diagnostic));
+        }
         return false;
     }
     for (const FBPIRLink& Edge : CallGraph->DataEdges)

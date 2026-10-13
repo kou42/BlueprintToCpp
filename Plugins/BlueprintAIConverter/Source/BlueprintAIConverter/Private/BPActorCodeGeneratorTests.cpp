@@ -2,6 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 #include "BPActorCodeGenerator.h"
+#include "GameFramework/Pawn.h"
 
 namespace
 {
@@ -80,8 +81,16 @@ bool FBPActorCodeGeneratorRejectTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Invalid API macro rejected"), FBPActorCodeGenerator::Generate(
         IR, TEXT("AGeneratedActor"), TEXT("invalid macro"), Files, Diagnostics));
 
-    IR.ParentClassPath = TEXT("/Script/Engine.Pawn");
-    TestFalse(TEXT("Unsupported parent class rejected"), FBPActorCodeGenerator::Generate(
+    IR.ParentClassPath = APawn::StaticClass()->GetPathName();
+    TestTrue(TEXT("Pawn parent generated"), FBPActorCodeGenerator::Generate(
+        IR, TEXT("AGeneratedPawn"), TEXT(""), Files, Diagnostics));
+    TestTrue(TEXT("Pawn header included"),
+        Files.HeaderContent.Contains(TEXT("#include \"GameFramework/Pawn.h\"")));
+    TestTrue(TEXT("Pawn inheritance generated"),
+        Files.HeaderContent.Contains(TEXT("class AGeneratedPawn : public APawn")));
+
+    IR.ParentClassPath = UObject::StaticClass()->GetPathName();
+    TestFalse(TEXT("Non-Actor parent rejected"), FBPActorCodeGenerator::Generate(
         IR, TEXT("AGeneratedActor"), TEXT(""), Files, Diagnostics));
     return true;
 }

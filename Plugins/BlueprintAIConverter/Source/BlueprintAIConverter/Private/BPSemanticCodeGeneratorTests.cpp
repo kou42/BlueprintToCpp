@@ -4,6 +4,7 @@
 #include "BPActorCodeGenerator.h"
 #include "BPSemanticCodeGenerator.h"
 #include "BPSemanticLowering.h"
+#include "GameFramework/Pawn.h"
 
 namespace
 {
@@ -195,6 +196,31 @@ bool FBPSemanticGeneratorInvalidLiteralTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("未対応式を拒否"), FBPSemanticCodeGenerator::Generate(
         Semantic, TEXT("AInvalidActor"), FString(), Files, Diagnostics));
     TestTrue(TEXT("失敗時はヘッダーも空"), Files.HeaderContent.IsEmpty());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorParentClassTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ParentClass",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorParentClassTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR Graph = MakeGeneratorTestGraph();
+    Graph.ParentClassPath = APawn::StaticClass()->GetPathName();
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("Pawn派生をLowering"),
+        FBPSemanticLowering::LowerPrintString(Graph, Semantic)) == false)
+    {
+        return false;
+    }
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestTrue(TEXT("Pawn派生C++を生成"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AGeneratedPawn"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("Pawnヘッダーを生成"),
+        Files.HeaderContent.Contains(TEXT("#include \"GameFramework/Pawn.h\"")));
+    TestTrue(TEXT("Pawn継承を生成"),
+        Files.HeaderContent.Contains(TEXT("class AGeneratedPawn : public APawn")));
     return true;
 }
 

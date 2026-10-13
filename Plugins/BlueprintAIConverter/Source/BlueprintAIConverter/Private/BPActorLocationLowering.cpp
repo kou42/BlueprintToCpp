@@ -1,6 +1,7 @@
 #include "BPActorLocationLowering.h"
 
 #include "BPFunctionCallValidator.h"
+#include "BPParentClassResolver.h"
 #include "GameFramework/Actor.h"
 
 namespace
@@ -26,9 +27,15 @@ bool FBPActorLocationLowering::LowerGetActorLocation(const FBPGraphIR& GraphIR,
         Report(OutDiagnostics, FString(), CallNodeId, TEXT("Graph IR contains diagnostics"));
         return false;
     }
-    if (GraphIR.ParentClassPath != TEXT("/Script/Engine.Actor"))
+    FBPResolvedParentClass ParentClass;
+    TArray<FString> ParentDiagnostics;
+    if (FBPParentClassResolver::ResolveActorParent(
+        GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
     {
-        Report(OutDiagnostics, FString(), CallNodeId, TEXT("Only direct Actor parent is supported"));
+        for (const FString& Message : ParentDiagnostics)
+        {
+            Report(OutDiagnostics, FString(), CallNodeId, Message);
+        }
         return false;
     }
 
