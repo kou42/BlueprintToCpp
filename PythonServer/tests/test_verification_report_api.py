@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -18,13 +21,16 @@ def test_latest_prefers_server_save_order_when_wall_clock_matches():
     assert _latest(events)["decision"] == "approved"
 
 
-def create_review():
+def create_review(semantic=None):
     direct = {"status": "generated", "files": [{"path": "Example.cpp", "content": "int X = 1;"}]}
     ai = {"status": "generated", "files": [{"path": "Example.cpp", "content": "int X = 2;"}]}
+    original = {"direct": direct, "ai": ai}
+    if semantic is not None:
+        original["semantic"] = semantic
     response = client.post("/review/records", json={
         "reviewer": "tester",
         "request": {
-            "original": {"direct": direct, "ai": ai},
+            "original": original,
             "revision": {
                 "target": "ai", "revised": direct, "note": "修正済み",
                 "expected_direct_fingerprint": normalize_artifact("direct", direct).fingerprint,
@@ -96,3 +102,33 @@ def test_report_aggregates_all_checks(tmp_path, monkeypatch):
 def test_report_missing_review(tmp_path, monkeypatch):
     monkeypatch.setenv("BLUEPRINT_TO_CPP_REVIEW_STORE", str(tmp_path))
     assert client.get("/review/records/" + "0" * 32 + "/report").status_code == 404
+
+
+def test_semantic_fingerprint_is_linked_to_all_evidence(tmp_path, monkeypatch):
+    monkeypatch.setenv("BLUEPRINT_TO_CPP_REVIEW_STORE", str(tmp_path))
+    golden = Path(__file__).parent / "golden" / "semantic_j2_roundtrip.json"
+    record = create_review(json.loads(golden.read_text(encoding="utf-8")))
+    record_id = record["id"]
+    artifact_fingerprint = record["result"]["review"]["revised_fingerprint"]
+    semantic_fingerprint = record["result"]["review"]["semantic_fingerprint"]
+
+    verification = client.post(f"/review/records/{record_id}/verification", json={
+        "reviewer": "tester", "tool": "uht", "outcome": "passed",
+        "evidence_reference": "log", "summary": "external",
+        "expected_revised_fingerprint": artifact_fingerprint,
+    }).json()
+    behavior = client.post(f"/review/records/{record_id}/behavior", json={
+        "reviewer": "tester", "environment": "UE", "evidence_reference": "log",
+        "expected_revised_fingerprint": artifact_fingerprint,
+        "cases": [{"case_id": "one", "description": "compare", "outcome": "matched",
+                   "blueprint_observation": "ok", "cpp_observation": "ok"}],
+    }).json()
+    decision = client.post(f"/review/records/{record_id}/decision", json={
+        "reviewer": "tester", "decision": "approved", "reason": "reviewed",
+        "expected_revised_fingerprint": artifact_fingerprint,
+    }).json()
+
+    assert {verification["semantic_fingerprint"], behavior["semantic_fingerprint"],
+            decision["semantic_fingerprint"]} == {semantic_fingerprint}
+    report = client.get(f"/review/records/{record_id}/report").json()
+    assert report["semantic_fingerprint"] == semantic_fingerprint

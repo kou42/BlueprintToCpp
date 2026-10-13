@@ -48,6 +48,8 @@ def test_save_and_load_and_explicit_decision(tmp_path, monkeypatch):
     assert decision.status_code == 201
     assert decision.json()["decision"] == "approved"
     assert client.get(f"/review/records/{record['id']}").json()["decision"] == "pending"
+    summaries = client.get("/review/records").json()["items"]
+    assert summaries[0]["semantic_fingerprint"] is None
 
 
 def test_stale_decision_rejected(tmp_path, monkeypatch):

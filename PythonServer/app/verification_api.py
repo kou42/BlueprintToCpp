@@ -53,6 +53,7 @@ def create_verification(record_id: str, request: VerificationEvidence) -> dict:
         "type": "verification",
         "source_record_id": record_id,
         "revised_fingerprint": expected,
+        "semantic_fingerprint": record["result"]["review"].get("semantic_fingerprint"),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "reviewer": request.reviewer,
         "tool": request.tool,

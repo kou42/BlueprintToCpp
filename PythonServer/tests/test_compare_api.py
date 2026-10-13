@@ -75,12 +75,14 @@ def test_compare_with_semantic_trace_keeps_existing_diff():
     assert data["semantic_trace"]["source_asset_path"] == "/Game/BP_Roundtrip.BP_Roundtrip"
     assert data["semantic_trace"]["exec_edge_count"] == 1
     assert data["semantic_trace"]["unresolved_types"] == []
+    assert data["semantic_fingerprint"] == data["semantic_trace"]["semantic_fingerprint"]
 
 
 def test_compare_legacy_request_has_no_semantic_trace():
     response = client.post("/compare", json=payload())
     assert response.status_code == 200
     assert response.json()["semantic_trace"] is None
+    assert response.json()["semantic_fingerprint"] is None
 
 
 def test_compare_rejects_invalid_semantic_trace():

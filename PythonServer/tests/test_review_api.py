@@ -2,6 +2,8 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.output_comparison import normalize_artifact
+import json
+from pathlib import Path
 
 client = TestClient(app)
 
@@ -34,6 +36,20 @@ def test_recompare_returns_before_and_after_without_approval():
     assert body["after"]["equivalent"] is None
     assert body["review"]["approved"] is False
     assert body["review"]["original_fingerprint"] != body["review"]["revised_fingerprint"]
+
+
+def test_recompare_preserves_semantic_trace_and_fingerprint():
+    payload = request()
+    golden = Path(__file__).parent / "golden" / "semantic_j2_roundtrip.json"
+    payload["original"]["semantic"] = json.loads(golden.read_text(encoding="utf-8"))
+    response = client.post("/review/recompare", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    fingerprint = body["review"]["semantic_fingerprint"]
+    assert len(fingerprint) == 64
+    assert body["before"]["semantic_fingerprint"] == fingerprint
+    assert body["after"]["semantic_fingerprint"] == fingerprint
+    assert body["after"]["semantic_trace"]["source_asset_path"] == "/Game/BP_Roundtrip.BP_Roundtrip"
 
 
 def test_rejects_stale_fingerprint():

@@ -68,6 +68,7 @@ def create_behavior_evidence(record_id: str, request: BehaviorEvidence) -> dict:
         "type": "behavior",
         "source_record_id": record_id,
         "revised_fingerprint": expected,
+        "semantic_fingerprint": record["result"]["review"].get("semantic_fingerprint"),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "reviewer": request.reviewer,
         "environment": request.environment,

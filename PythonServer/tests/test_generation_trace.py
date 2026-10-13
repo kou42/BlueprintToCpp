@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.generation_trace import summarize_generation_trace
+from app.generation_trace import fingerprint_semantic, summarize_generation_trace
 from app.semantic_json import SemanticJsonError
 
 GOLDEN = Path(__file__).parent / "golden" / "semantic_j2_roundtrip.json"
@@ -27,6 +27,17 @@ def test_trace_preserves_graph_and_default_metadata():
     assert trace["data_edge_count"] == 0
     assert trace["unresolved_types"] == []
     assert data["variables"][1]["default_value"] == ""
+    assert len(trace["semantic_fingerprint"]) == 64
+
+
+def test_semantic_fingerprint_is_canonical_and_content_sensitive():
+    data = golden()
+    reordered = {key: data[key] for key in reversed(data)}
+    assert fingerprint_semantic(reordered) == fingerprint_semantic(data)
+
+    changed = copy.deepcopy(data)
+    changed["source"]["asset_path"] = "/Game/BP_Other.BP_Other"
+    assert fingerprint_semantic(changed) != fingerprint_semantic(data)
 
 
 def test_unresolved_type_is_reported_not_inferred():

@@ -51,6 +51,7 @@ def compare_generated(request: CompareRequest) -> dict:
         **result,
         "direct_fingerprint": direct.fingerprint,
         "ai_fingerprint": ai.fingerprint,
+        "semantic_fingerprint": trace["semantic_fingerprint"] if trace is not None else None,
         "structure": compare_declarations(direct, ai),
         "reflection": compare_reflection(direct, ai),
         "signatures": compare_signatures(direct, ai),

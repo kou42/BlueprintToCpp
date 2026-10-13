@@ -1,7 +1,27 @@
 """Semantic JSON v2の出典・未解決情報を生成結果に添付する読み取り専用要約。"""
 from __future__ import annotations
 
-from .semantic_json import parse_semantic_json
+import hashlib
+import json
+
+from .semantic_json import SemanticJsonError, parse_semantic_json
+
+
+def _fingerprint_parsed_semantic(parsed: dict) -> str:
+    """JSONのキー順や空白に依存しない入力追跡用SHA-256を返す。"""
+    try:
+        canonical = json.dumps(
+            parsed, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise SemanticJsonError(f"semantic: cannot create canonical fingerprint: {exc}") from exc
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def fingerprint_semantic(semantic: dict) -> str:
+    """契約検証済みSemantic JSON全体を決定的に識別する。"""
+    return _fingerprint_parsed_semantic(parse_semantic_json(semantic))
 
 
 def summarize_generation_trace(semantic: dict) -> dict:
@@ -22,6 +42,7 @@ def summarize_generation_trace(semantic: dict) -> dict:
                 })
     traces = parsed.get("graph_traces", [])
     return {
+        "semantic_fingerprint": _fingerprint_parsed_semantic(parsed),
         "source_asset_path": parsed["source"]["asset_path"],
         "semantic_status": parsed["semantic_status"],
         "variable_count": len(parsed.get("variables", [])),

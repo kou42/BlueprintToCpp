@@ -95,6 +95,7 @@ def summarize_verification(
     return {
         "record_id": record_id,
         "revised_fingerprint": fingerprint,
+        "semantic_fingerprint": review["result"]["review"].get("semantic_fingerprint"),
         "review": {
             "decision": decision_status,
             "latest_event_id": decision["id"] if decision is not None else None,

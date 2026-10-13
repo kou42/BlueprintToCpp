@@ -52,6 +52,7 @@ def review_recompare(request: ReviewRequest) -> dict:
     updated = CompareRequest(
         direct=request.revision.revised if request.revision.target == "direct" else request.original.direct,
         ai=request.revision.revised if request.revision.target == "ai" else request.original.ai,
+        semantic=request.original.semantic,
     )
     before = compare_generated(request.original)
     after = compare_generated(updated)
@@ -62,6 +63,7 @@ def review_recompare(request: ReviewRequest) -> dict:
             "note": request.revision.note,
             "original_fingerprint": original_direct.fingerprint if request.revision.target == "direct" else original_ai.fingerprint,
             "revised_fingerprint": revised.fingerprint,
+            "semantic_fingerprint": after["semantic_fingerprint"],
             "approved": False,
         },
         "before": before,
