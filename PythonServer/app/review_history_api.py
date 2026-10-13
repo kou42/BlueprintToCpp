@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .review_api import ReviewRequest, review_recompare
-from .review_store import list_records, load_record, save_record
+from .review_store import list_records, load_record, record_sort_key, save_record
 from .verification_report_api import index_verification_events, summarize_verification
 
 router = APIRouter()
@@ -94,7 +94,7 @@ def _summarize(
         fingerprint = review["result"]["review"]["revised_fingerprint"]
         events = sorted(
             (item for item in event_index.get((record_id, fingerprint), []) if item["type"] == "decision"),
-            key=lambda item: (item.get("created_at", ""), item["id"]),
+            key=record_sort_key,
         )
         latest = events[-1] if events else None
         summaries.append({

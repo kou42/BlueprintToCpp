@@ -10,7 +10,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .review_store import list_records, load_record, save_record
+from .review_store import list_records, load_record, record_sort_key, save_record
 
 router = APIRouter()
 
@@ -37,7 +37,7 @@ def _verification_events(record_id: str) -> list[dict]:
         and item.get("source_record_id") == record_id
         and item.get("revised_fingerprint") == expected
     ]
-    return sorted(events, key=lambda item: (item.get("created_at", ""), item["id"]))
+    return sorted(events, key=record_sort_key)
 
 
 @router.post("/review/records/{record_id}/verification", status_code=201)

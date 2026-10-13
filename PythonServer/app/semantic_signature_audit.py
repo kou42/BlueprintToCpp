@@ -16,10 +16,28 @@ _CPP_TYPES = {
     "name": "FName", "text": "FText",
 }
 
+# type_pathだけから任意のUClass/UScriptStructのC++接頭辞を推測しない。
+# UEで表記が固定されている代表型だけを明示し、それ以外は未検証に残す。
+_CPP_PATH_TYPES = {
+    ("object", "/Script/CoreUObject.Object"): "UObject*",
+    ("object", "/Script/Engine.Actor"): "AActor*",
+    ("struct", "/Script/CoreUObject.Vector"): "FVector",
+    ("struct", "/Script/CoreUObject.Vector2D"): "FVector2D",
+    ("struct", "/Script/CoreUObject.Rotator"): "FRotator",
+    ("struct", "/Script/CoreUObject.Transform"): "FTransform",
+    ("struct", "/Script/CoreUObject.LinearColor"): "FLinearColor",
+    ("struct", "/Script/CoreUObject.Color"): "FColor",
+}
+
 
 def _cpp_type(semantic_type: dict) -> str | None:
-    base = _CPP_TYPES.get(semantic_type["kind"])
-    if base is None or semantic_type["type_path"]:
+    kind = semantic_type["kind"]
+    type_path = semantic_type["type_path"]
+    if type_path:
+        base = _CPP_PATH_TYPES.get((kind, type_path))
+    else:
+        base = _CPP_TYPES.get(kind)
+    if base is None:
         return None
     if semantic_type["is_const"]:
         base = "const " + base

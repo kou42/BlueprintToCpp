@@ -77,11 +77,11 @@ bool FBPPrintStringConnectedTest::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPPrintStringUnsupportedTest,
-    "BlueprintAIConverter.PrintString.RejectColor",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPPrintStringColorTest,
+    "BlueprintAIConverter.PrintString.ExplicitColor",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FBPPrintStringUnsupportedTest::RunTest(const FString& Parameters)
+bool FBPPrintStringColorTest::RunTest(const FString& Parameters)
 {
     FBPGraphIR IR = MakeGraph();
     FBPIRPin Color;
@@ -93,8 +93,16 @@ bool FBPPrintStringUnsupportedTest::RunTest(const FString& Parameters)
 
     FBPPrintStringCall Call;
     TArray<FString> Diagnostics;
-    TestFalse(TEXT("Explicit color rejected"), FBPPrintStringAnalyzer::Analyze(IR, Call, Diagnostics));
-    TestTrue(TEXT("Diagnostic reported"), Diagnostics.IsEmpty() == false);
+    TestTrue(TEXT("Explicit color accepted"), FBPPrintStringAnalyzer::Analyze(IR, Call, Diagnostics));
+    TestEqual(TEXT("Red preserved"), Call.TextColor.R, 1.0f);
+    TestEqual(TEXT("Green preserved"), Call.TextColor.G, 0.0f);
+    TestEqual(TEXT("Blue preserved"), Call.TextColor.B, 0.0f);
+    TestEqual(TEXT("Alpha preserved"), Call.TextColor.A, 1.0f);
+    TestTrue(TEXT("No diagnostics"), Diagnostics.IsEmpty());
+
+    IR.Graphs[0].Nodes[1].Pins.Last().DefaultValue = TEXT("(R=nan,G=0,B=0,A=1)");
+    TestFalse(TEXT("Non-finite color rejected"), FBPPrintStringAnalyzer::Analyze(IR, Call, Diagnostics));
+    TestTrue(TEXT("Invalid color diagnostic reported"), Diagnostics.IsEmpty() == false);
     return true;
 }
 #endif

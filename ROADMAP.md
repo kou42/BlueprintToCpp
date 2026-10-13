@@ -1,7 +1,7 @@
 # BlueprintToCpp 開発ロードマップ
 
 対象: Unreal Engine 5.7.4 / BlueprintAIConverter / PythonServer  
-更新日: 2026-10-12（社内利用を想定したDirect/AI二重生成・差分検証ワークフローを優先方針に追加）
+更新日: 2026-10-13（J2-1〜J2-9の実装状況とUE 5.7実機テスト結果を反映）
 
 ## 最終目標
 
@@ -258,7 +258,7 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 7. **UEバージョン依存性**: Blueprintコンパイラ内部APIを活用する場合はUE 5.7.4での公開範囲・安定性を確認する。
 8. **コード規約**: C++のifは波括弧を必須とし、null判定を明示する。重要な設計判断は日本語コメントで説明する。
 
-## 次の着手対象（2026-10-12更新）
+## 次の着手対象（2026-10-13更新）
 
 **優先方針: レビュー・統計APIの拡張をいったん区切り、Blueprint → Semantic JSON v2 の生成情報を強化する。** D1〜D4・V2のレビュー基盤は維持し、今後の追加実装は実際のBlueprint情報をAI/Directへ渡す品質向上に集中する。
 
@@ -273,7 +273,11 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 | 5 | J2-5: Editor往復検証 | UEのJSON保存・コピー → Python validator → AI Provider入力まで検証 | UE 5.7.4 Automation Test、Golden JSON、Python側の不正入力・互換性テストを実行 |
 | 6 | J2-6: C++生成連携 | 拡張JSONをDirect/AI比較・診断・生成結果追跡へ接続 | 未解決情報を自動補完せず、UHT/UBTとBlueprint動作比較を別途検証 |
 
-**直近の実装単位はJ2-1**。最初に `FBPSemanticIR`、`FBPSemanticJsonSerializer`、`FBPSnapshotExporter`、`PythonServer/app/semantic_json.py` と既存テストを確認し、必要な型と出典を最小限のスキーマ拡張として設計する。既存Snapshot v1は変更しない。Semantic JSON v2の互換性が崩れる変更は明示的にバージョン管理し、旧JSONの扱いをテストで固定する。
+J2-1〜J2-6は実装済み。J2-7でSemantic宣言監査、J2-8で反射関数シグネチャ監査を追加した。J2-9では型パスから任意のC++型名を推測せず、`UObject`、`Actor`、`Vector`、`Rotator`、`Transform`、`LinearColor`など表記が固定された代表型だけを署名監査へ追加した。未知の型パスは引き続き未検証として診断する。
+
+**次の実装単位は実機検証の証跡連携**。UE Editorで保存したSemantic JSON v2をPython validatorとDirect/AI比較へ渡し、入力ハッシュ、生成物、UHT/UBT結果、動作比較を同一レビューに紐付ける。Editor操作や外部検証をサーバーが実施したと偽らず、未実施・外部申告・サーバー実行済みを区別する。
+
+2026-10-13のローカル検証では、UE 5.7のEditorターゲットがビルド成功し、`BlueprintAIConverter` Automation Testは39/39件成功した。PythonServerはPython 3.12で201件成功した。生成された個別C++クラスのUHT/UBTとBlueprintとの実行時一致は引き続き未確認。
 
 ### レビュー基盤の到達点と残課題
 

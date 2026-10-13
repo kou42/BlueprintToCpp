@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from .review_store import list_records, load_record
+from .review_store import list_records, load_record, record_sort_key
 
 router = APIRouter()
 
@@ -15,7 +15,7 @@ def _latest(events: list[dict]) -> dict | None:
     """イベントの時刻とIDで安定した順序を決定する。"""
     if len(events) == 0:
         return None
-    return max(events, key=lambda item: (item.get("created_at", ""), item["id"]))
+    return max(events, key=record_sort_key)
 
 
 @router.get("/review/records/{record_id}/report")

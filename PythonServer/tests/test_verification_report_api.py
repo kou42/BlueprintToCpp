@@ -2,8 +2,20 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.output_comparison import normalize_artifact
+from app.verification_report_api import _latest
 
 client = TestClient(app)
+
+
+def test_latest_prefers_server_save_order_when_wall_clock_matches():
+    created_at = "2026-10-13T00:00:00+00:00"
+    events = [
+        {"id": "f" * 32, "created_at": created_at, "recorded_at_ns": 100,
+         "decision": "rejected"},
+        {"id": "0" * 32, "created_at": created_at, "recorded_at_ns": 101,
+         "decision": "approved"},
+    ]
+    assert _latest(events)["decision"] == "approved"
 
 
 def create_review():

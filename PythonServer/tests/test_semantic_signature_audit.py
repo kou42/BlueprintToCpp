@@ -53,6 +53,38 @@ def test_unsupported_type_is_not_inferred():
     assert any("unsupported argument" in d for d in result["diagnostics"])
 
 
+def test_known_unreal_struct_and_object_paths_are_compared():
+    data = semantic()
+    data["functions"][0]["parameters"] = [{
+        "name": "Location",
+        "type": {"kind": "struct", "type_path": "/Script/CoreUObject.Vector",
+                 "is_reference": True, "is_const": True},
+        "is_out": False, "is_return": False,
+    }, {
+        "name": "Target",
+        "type": {"kind": "object", "type_path": "/Script/Engine.Actor",
+                 "is_reference": False, "is_const": False},
+        "is_out": False, "is_return": False,
+    }]
+    result = audit_semantic_signatures(data, artifact(
+        "class AExample {\n bool Compute(const FVector& Location, AActor* Target);\n};"))
+    assert result["status"] == "incomplete"
+    assert result["differences"] == []
+
+
+def test_unknown_unreal_type_path_remains_unverified():
+    data = semantic()
+    data["functions"][0]["parameters"][0]["type"] = {
+        "kind": "object", "type_path": "/Script/Example.CustomObject",
+        "is_reference": False, "is_const": False,
+    }
+    result = audit_semantic_signatures(data, artifact(
+        "class AExample {\n bool Compute(UCustomObject* Amount);\n};"))
+    assert result["status"] == "incomplete"
+    assert result["differences"] == []
+    assert any("unsupported argument" in d for d in result["diagnostics"])
+
+
 def test_mock_generation_is_unavailable():
     assert audit_semantic_signatures(semantic(), artifact("", "mocked"))["status"] == "unavailable"
 

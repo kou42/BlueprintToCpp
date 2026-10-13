@@ -10,7 +10,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .review_store import list_records, load_record, save_record
+from .review_store import list_records, load_record, record_sort_key, save_record
 
 router = APIRouter()
 
@@ -91,7 +91,7 @@ def get_behavior_evidence(record_id: str) -> dict:
             and item.get("source_record_id") == record_id
             and item.get("revised_fingerprint") == expected
         ),
-        key=lambda item: (item.get("created_at", ""), item["id"]),
+        key=record_sort_key,
     )
     latest = events[-1] if events else None
     counts = {"matched": 0, "mismatched": 0, "not_run": 0}

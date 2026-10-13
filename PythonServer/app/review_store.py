@@ -8,9 +8,29 @@ import json
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from threading import Lock
+from time import time_ns
 from uuid import uuid4
 
 _STORE_ENV = "BLUEPRINT_TO_CPP_REVIEW_STORE"
+_ORDER_LOCK = Lock()
+_LAST_RECORDED_AT_NS = 0
+
+
+def _next_recorded_at_ns() -> int:
+    """同一プロセス内で保存順が必ず増加するサーバー側の順序値を返す。"""
+    global _LAST_RECORDED_AT_NS
+    with _ORDER_LOCK:
+        _LAST_RECORDED_AT_NS = max(time_ns(), _LAST_RECORDED_AT_NS + 1)
+        return _LAST_RECORDED_AT_NS
+
+
+def record_sort_key(record: dict) -> tuple:
+    """新レコードは保存順、旧レコードは従来の時刻とIDで安定ソートする。"""
+    order = record.get("recorded_at_ns")
+    if type(order) is int and order >= 0:
+        return (1, order, "", "")
+    return (0, 0, str(record.get("created_at", "")), str(record.get("id", "")))
 
 
 def store_directory() -> Path:
@@ -23,7 +43,7 @@ def save_record(record: dict) -> dict:
     directory = store_directory()
     directory.mkdir(parents=True, exist_ok=True)
     record_id = uuid4().hex
-    payload = {"id": record_id, **record}
+    payload = {"id": record_id, **record, "recorded_at_ns": _next_recorded_at_ns()}
     temp_path: Path | None = None
     try:
         with NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory, prefix=".review-", suffix=".tmp", delete=False) as temp:
