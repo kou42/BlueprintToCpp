@@ -25,6 +25,7 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Function.bIsStatic = true;
     FBPSemanticParameter Input;
     Input.Name = TEXT("Amount");
+    Input.DeclarationIndex = 0;
     Input.Type.Kind = EBPSemanticTypeKind::Int32;
     Input.bHasDefaultValue = true;
     Input.DefaultValueStatus = TEXT("specified");
@@ -121,6 +122,9 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
         FString(TEXT("/Game/BP_Test.BP_Test_C")));
     const TArray<TSharedPtr<FJsonValue>>& JsonParameters = FunctionJson->GetArrayField(TEXT("parameters"));
     TestEqual(TEXT("引数と戻り値"), JsonParameters.Num(), 2);
+    TestEqual(TEXT("引数宣言順"), static_cast<int32>(JsonParameters[0]->AsObject()->GetNumberField(TEXT("declaration_index"))), 0);
+    TestEqual(TEXT("戻り値の宣言順は対象外"), static_cast<int32>(JsonParameters[1]->AsObject()->GetNumberField(TEXT("declaration_index"))), INDEX_NONE);
+    TestEqual(TEXT("非コンテナ"), JsonParameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("container_kind")), FString(TEXT("none")));
     TestTrue(TEXT("Native属性"), FunctionJson->GetBoolField(TEXT("is_native")));
     TestTrue(TEXT("Static属性"), FunctionJson->GetBoolField(TEXT("is_static")));
     TestTrue(TEXT("引数既定値の存在"), JsonParameters[0]->AsObject()->GetBoolField(TEXT("has_default_value")));
