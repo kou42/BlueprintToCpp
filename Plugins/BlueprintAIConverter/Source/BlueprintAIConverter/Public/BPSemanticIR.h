@@ -85,6 +85,9 @@ struct FBPSemanticParameter
     bool bIsReturn = false;
     // メタデータが存在しない場合と空文字の既定値を区別する。
     bool bHasDefaultValue = false;
+    // CJ1: 既定値が存在しない場合と、取得方法が未対応の場合を区別する。
+    // specified / absent / unavailable のいずれかを保持する。
+    FString DefaultValueStatus = TEXT("unavailable");
     FString DefaultValue;
 };
 
