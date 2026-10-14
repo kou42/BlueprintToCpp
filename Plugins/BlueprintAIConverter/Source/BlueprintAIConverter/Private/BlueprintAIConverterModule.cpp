@@ -8,6 +8,7 @@
 #include "BPSemanticFunctionExtractor.h"
 #include "BPSemanticGraphTraceExtractor.h"
 #include "BPSemanticJsonExporter.h"
+#include "BPCopilotGraphJsonExporter.h"
 #include "Misc/EngineVersion.h"
 #include "BPGraphIR.h"
 #include "BPActorCodeGenerator.h"
@@ -360,6 +361,60 @@ private:
                             TEXT("Semantic JSON exported (%s): %s"), *Status, *Path);
                         FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(
                             FString::Printf(TEXT("Semantic JSON exported (%s):\n%s"), *Status, *Path)));
+                    }));
+
+                // Semantic JSON v2とは独立して、未対応ノードも含むGraph IRをCopilot用に保存する。
+                InSection.AddMenuEntry(
+                    TEXT("BlueprintAIConverter.ExportCopilotGraphJson"),
+                    FText::FromString(TEXT("Export Copilot Graph JSON")),
+                    FText::FromString(TEXT("Export node, pin, function reference and link data to Saved/BlueprintCopilotJson")),
+                    FSlateIcon(),
+                    FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
+                    {
+                        const auto* Ctx = MenuContext.FindContext<UContentBrowserAssetContextMenuContext>();
+                        if (Ctx == nullptr)
+                        {
+                            return;
+                        }
+                        if (Ctx->SelectedAssets.Num() != 1)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("Select exactly one Blueprint.")));
+                            return;
+                        }
+                        UBlueprint* Blueprint = Cast<UBlueprint>(Ctx->SelectedAssets[0].GetAsset());
+                        if (Blueprint == nullptr)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("The selected asset is not a Blueprint.")));
+                            return;
+                        }
+                        FBPGraphIR GraphIR;
+                        if (FBPGraphIRBuilder::Build(Blueprint, GraphIR) == false)
+                        {
+                            FMessageDialog::Open(EAppMsgType::Ok,
+                                FText::FromString(TEXT("Graph IR build failed. Copilot JSON was not saved.")));
+                            return;
+                        }
+                        // Graph IRとは別に、Blueprintの宣言情報をReflectionから取得する。
+                        // PrintString限定のLoweringには依存させない。
+                        FBPSemanticIR SemanticIR;
+                        SemanticIR.AssetPath = GraphIR.AssetPath;
+                        SemanticIR.ParentClassPath = GraphIR.ParentClassPath;
+                        FBPSemanticVariableExtractor::Append(Blueprint, SemanticIR);
+                        FBPSemanticFunctionExtractor::Append(Blueprint, SemanticIR);
+                        FString Path;
+                        FString Error;
+                        if (FBPCopilotGraphJsonExporter::Export(
+                            GraphIR, FEngineVersion::Current().ToString(), Path, Error, &SemanticIR) == false)
+                        {
+                            UE_LOG(LogBlueprintAIConverter, Error, TEXT("Copilot JSON export failed: %s"), *Error);
+                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Error));
+                            return;
+                        }
+                        UE_LOG(LogBlueprintAIConverter, Display, TEXT("Copilot graph JSON exported: %s"), *Path);
+                        FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(
+                            FString::Printf(TEXT("Copilot graph JSON exported (partial):\\n%s"), *Path)));
                     }));
 
                 InSection.AddMenuEntry(

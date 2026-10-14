@@ -57,10 +57,24 @@ void AppendGraph(const UEdGraph* Graph, const FString& Kind, FBPGraphIR& IR)
         if (const UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
         {
             IRNode.FunctionName = Call->GetFunctionName();
+            // 表示名ではなく解決済みUFunctionを優先し、Copilotが呼び出し先を推測しないようにする。
             const UFunction* TargetFunction = Call->GetTargetFunction();
-            IRNode.FunctionOwnerPath = TargetFunction != nullptr
-                ? GetPathNameSafe(TargetFunction->GetOwnerClass())
-                : FString();
+            if (TargetFunction != nullptr)
+            {
+                IRNode.bFunctionResolved = true;
+                IRNode.FunctionName = TargetFunction->GetFName();
+                IRNode.FunctionOwnerPath = GetPathNameSafe(TargetFunction->GetOwnerClass());
+                IRNode.FunctionPath = TargetFunction->GetPathName();
+                IRNode.bFunctionNative = TargetFunction->HasAnyFunctionFlags(FUNC_Native);
+                IRNode.bFunctionStatic = TargetFunction->HasAnyFunctionFlags(FUNC_Static);
+                IRNode.bFunctionPure = TargetFunction->HasAnyFunctionFlags(FUNC_BlueprintPure);
+                IRNode.bFunctionConst = TargetFunction->HasAnyFunctionFlags(FUNC_Const);
+            }
+            else
+            {
+                IR.Diagnostics.Add(FString::Printf(TEXT("%s: unresolved function reference %s"),
+                    *Node->GetPathName(), *IRNode.FunctionName.ToString()));
+            }
         }
         if (const UK2Node_Variable* Variable = Cast<UK2Node_Variable>(Node))
         {

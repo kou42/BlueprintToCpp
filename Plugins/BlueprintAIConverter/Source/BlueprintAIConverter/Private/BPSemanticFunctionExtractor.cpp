@@ -70,6 +70,10 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         }
         Target->OwnerClassPath = GeneratedClass->GetPathName();
         Target->SignatureSource = TEXT("generated_class_reflection");
+        Target->bIsNative = Function->HasAnyFunctionFlags(FUNC_Native);
+        Target->bIsStatic = Function->HasAnyFunctionFlags(FUNC_Static);
+        Target->bIsConst = Function->HasAnyFunctionFlags(FUNC_Const);
+        Target->bIsBlueprintEvent = Function->HasAnyFunctionFlags(FUNC_BlueprintEvent);
         Target->Parameters.Reset();
         Target->ReturnType.Kind = EBPSemanticTypeKind::Void;
         for (TFieldIterator<FProperty> ParamIt(Function); ParamIt; ++ParamIt)
@@ -84,6 +88,16 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             Parameter.Type = ResolvePropertyType(Property);
             Parameter.bIsOut = Property->HasAnyPropertyFlags(CPF_OutParm);
             Parameter.bIsReturn = Property->HasAnyPropertyFlags(CPF_ReturnParm);
+            // CPP_Default_<引数名> は存在する場合のみ取得する。存在しない値を空文字と混同しない。
+            if (Parameter.bIsReturn == false)
+            {
+                const FString DefaultKey = FString::Printf(TEXT("CPP_Default_%s"), *Property->GetName());
+                Parameter.bHasDefaultValue = Function->HasMetaData(*DefaultKey);
+                if (Parameter.bHasDefaultValue)
+                {
+                    Parameter.DefaultValue = Function->GetMetaData(*DefaultKey);
+                }
+            }
             if (Parameter.bIsReturn)
             {
                 Target->ReturnType = Parameter.Type;
