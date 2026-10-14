@@ -73,6 +73,15 @@ bool AddNameIntMapVariable(UBlueprint* Blueprint, const FName Name)
     Type.PinValueType.TerminalCategory = UEdGraphSchema_K2::PC_Int;
     return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, FString());
 }
+
+bool AddNativeEnumVariable(UBlueprint* Blueprint, const FName Name, UEnum* Enum,
+    const FString& DefaultValue)
+{
+    FEdGraphPinType Type;
+    Type.PinCategory = UEdGraphSchema_K2::PC_Byte;
+    Type.PinSubCategoryObject = Enum;
+    return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, DefaultValue);
+}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealBlueprintPrintStringConversionTest,
@@ -173,6 +182,9 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
         Blueprint, TEXT("VisitedIds")));
     TestTrue(TEXT("FName-int32 Mapメンバー変数を追加"), AddNameIntMapVariable(
         Blueprint, TEXT("Scores")));
+    TestTrue(TEXT("ネイティブEnumメンバー変数を追加"), AddNativeEnumVariable(
+        Blueprint, TEXT("TraceChannel"), StaticEnum<ECollisionChannel>(),
+        TEXT("ECC_Visibility")));
 
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
     TestNotNull(TEXT("Blueprintをコンパイル"), Blueprint->GeneratedClass.Get());
@@ -181,7 +193,7 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
     TestTrue(TEXT("実BlueprintからGraph IRを生成"), FBPGraphIRBuilder::Build(Blueprint, GraphIR));
     TestEqual(TEXT("Pawn親クラスパスを保持"),
         GraphIR.ParentClassPath, APawn::StaticClass()->GetPathName());
-    TestEqual(TEXT("Blueprintメンバー変数数を保持"), GraphIR.BlueprintVariableCount, 15);
+    TestEqual(TEXT("Blueprintメンバー変数数を保持"), GraphIR.BlueprintVariableCount, 16);
 
     FBPSemanticIR SemanticIR;
     if (TestTrue(TEXT("実GraphをSemantic IRへLowering"),
@@ -256,7 +268,11 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
         Files.HeaderContent.Contains(TEXT("TMap<FName,int32> Scores{};")) &&
         Files.SourceContent.Contains(
             TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, Scores)")));
-    TestEqual(TEXT("Variable IRを15件保持"), SemanticIR.Variables.Num(), 15);
+    TestTrue(TEXT("ネイティブEnum既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("TraceChannel{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, TraceChannel)")));
+    TestEqual(TEXT("Variable IRを16件保持"), SemanticIR.Variables.Num(), 16);
     for (const FBPSemanticVariable& Variable : SemanticIR.Variables)
     {
         TestTrue(*FString::Printf(TEXT("%sの反射C++型を保持"), *Variable.Name.ToString()),
