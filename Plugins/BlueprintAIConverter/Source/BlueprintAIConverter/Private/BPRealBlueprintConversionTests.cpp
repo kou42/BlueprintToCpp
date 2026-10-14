@@ -56,6 +56,23 @@ bool AddIntArrayVariable(UBlueprint* Blueprint, const FName Name, const FString&
     Type.ContainerType = EPinContainerType::Array;
     return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, DefaultValue);
 }
+
+bool AddIntSetVariable(UBlueprint* Blueprint, const FName Name)
+{
+    FEdGraphPinType Type;
+    Type.PinCategory = UEdGraphSchema_K2::PC_Int;
+    Type.ContainerType = EPinContainerType::Set;
+    return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, FString());
+}
+
+bool AddNameIntMapVariable(UBlueprint* Blueprint, const FName Name)
+{
+    FEdGraphPinType Type;
+    Type.PinCategory = UEdGraphSchema_K2::PC_Name;
+    Type.ContainerType = EPinContainerType::Map;
+    Type.PinValueType.TerminalCategory = UEdGraphSchema_K2::PC_Int;
+    return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, FString());
+}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealBlueprintPrintStringConversionTest,
@@ -152,6 +169,10 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
         TEXT("(R=0.1,G=0.2,B=0.3,A=1.0)")));
     TestTrue(TEXT("int32配列メンバー変数を追加"), AddIntArrayVariable(
         Blueprint, TEXT("Checkpoints"), TEXT("(10,20,30)")));
+    TestTrue(TEXT("int32 Setメンバー変数を追加"), AddIntSetVariable(
+        Blueprint, TEXT("VisitedIds")));
+    TestTrue(TEXT("FName-int32 Mapメンバー変数を追加"), AddNameIntMapVariable(
+        Blueprint, TEXT("Scores")));
 
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
     TestNotNull(TEXT("Blueprintをコンパイル"), Blueprint->GeneratedClass.Get());
@@ -160,7 +181,7 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
     TestTrue(TEXT("実BlueprintからGraph IRを生成"), FBPGraphIRBuilder::Build(Blueprint, GraphIR));
     TestEqual(TEXT("Pawn親クラスパスを保持"),
         GraphIR.ParentClassPath, APawn::StaticClass()->GetPathName());
-    TestEqual(TEXT("Blueprintメンバー変数数を保持"), GraphIR.BlueprintVariableCount, 13);
+    TestEqual(TEXT("Blueprintメンバー変数数を保持"), GraphIR.BlueprintVariableCount, 15);
 
     FBPSemanticIR SemanticIR;
     if (TestTrue(TEXT("実GraphをSemantic IRへLowering"),
@@ -227,7 +248,15 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
         Files.HeaderContent.Contains(TEXT("FLinearColor Tint{};")) &&
         Files.SourceContent.Contains(
             TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, Tint)")));
-    TestEqual(TEXT("Variable IRを13件保持"), SemanticIR.Variables.Num(), 13);
+    TestTrue(TEXT("TSet<int32>既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("TSet<int32> VisitedIds{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, VisitedIds)")));
+    TestTrue(TEXT("TMap<FName, int32>既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("TMap<FName,int32> Scores{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, Scores)")));
+    TestEqual(TEXT("Variable IRを15件保持"), SemanticIR.Variables.Num(), 15);
     for (const FBPSemanticVariable& Variable : SemanticIR.Variables)
     {
         TestTrue(*FString::Printf(TEXT("%sの反射C++型を保持"), *Variable.Name.ToString()),
