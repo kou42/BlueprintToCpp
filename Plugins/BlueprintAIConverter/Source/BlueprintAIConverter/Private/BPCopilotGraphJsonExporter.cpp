@@ -77,6 +77,11 @@ bool ValidateGraphLinks(const FBPIRGraph& Graph, FString& OutError)
     return true;
 }
 
+FString LinkKey(const FBPIRLink& Link)
+{
+    return Link.SourceNode.ToString() + TEXT("/") + Link.SourcePin.ToString()
+        + TEXT("/") + Link.TargetNode.ToString() + TEXT("/") + Link.TargetPin.ToString();
+}
 }
 
 bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& EngineVersion,
@@ -161,13 +166,23 @@ bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& En
         }
         GraphJson->SetArrayField(TEXT("nodes"), Nodes);
         TArray<TSharedPtr<FJsonValue>> ExecEdges;
-        for (const FBPIRLink& Link : Graph.ExecEdges)
+        TArray<FBPIRLink> SortedExecEdges = Graph.ExecEdges;
+        SortedExecEdges.Sort([](const FBPIRLink& A, const FBPIRLink& B)
+        {
+            return LinkKey(A) < LinkKey(B);
+        });
+        for (const FBPIRLink& Link : SortedExecEdges)
         {
             ExecEdges.Add(MakeShared<FJsonValueObject>(LinkJson(Link)));
         }
         GraphJson->SetArrayField(TEXT("exec_edges"), ExecEdges);
         TArray<TSharedPtr<FJsonValue>> DataEdges;
-        for (const FBPIRLink& Link : Graph.DataEdges)
+        TArray<FBPIRLink> SortedDataEdges = Graph.DataEdges;
+        SortedDataEdges.Sort([](const FBPIRLink& A, const FBPIRLink& B)
+        {
+            return LinkKey(A) < LinkKey(B);
+        });
+        for (const FBPIRLink& Link : SortedDataEdges)
         {
             DataEdges.Add(MakeShared<FJsonValueObject>(LinkJson(Link)));
         }
@@ -176,7 +191,9 @@ bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& En
     }
     Root->SetArrayField(TEXT("graphs"), Graphs);
     TArray<TSharedPtr<FJsonValue>> Diagnostics;
-    for (const FString& Message : IR.Diagnostics)
+    TArray<FString> SortedDiagnostics = IR.Diagnostics;
+    SortedDiagnostics.Sort();
+    for (const FString& Message : SortedDiagnostics)
     {
         Diagnostics.Add(MakeShared<FJsonValueString>(Message));
     }
