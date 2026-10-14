@@ -27,6 +27,7 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Input.Name = TEXT("Amount");
     Input.Type.Kind = EBPSemanticTypeKind::Int32;
     Input.bHasDefaultValue = true;
+    Input.DefaultValueStatus = TEXT("specified");
     Input.DefaultValue = TEXT("0");
     Function.Parameters.Add(Input);
     FBPSemanticParameter Output;
@@ -34,6 +35,7 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Output.Type.Kind = EBPSemanticTypeKind::Bool;
     Output.bIsOut = true;
     Output.bIsReturn = true;
+    Output.DefaultValueStatus = TEXT("absent");
     Function.Parameters.Add(Output);
     FBPSemanticBasicBlock Block;
     Block.SourceEntryNodeId = FGuid(1, 2, 3, 4);
@@ -122,6 +124,10 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Native属性"), FunctionJson->GetBoolField(TEXT("is_native")));
     TestTrue(TEXT("Static属性"), FunctionJson->GetBoolField(TEXT("is_static")));
     TestTrue(TEXT("引数既定値の存在"), JsonParameters[0]->AsObject()->GetBoolField(TEXT("has_default_value")));
+    TestEqual(TEXT("既定値の取得状態"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_status")),
+        FString(TEXT("specified")));
+    TestEqual(TEXT("戻り値の既定値状態"), JsonParameters[1]->AsObject()->GetStringField(TEXT("default_value_status")),
+        FString(TEXT("absent")));
     TestEqual(TEXT("引数既定値"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value")), FString(TEXT("0")));
     TestFalse(TEXT("戻り値には既定値なし"), JsonParameters[1]->AsObject()->GetBoolField(TEXT("has_default_value")));
     TestTrue(TEXT("既定値なしはnull"), JsonParameters[1]->AsObject()->GetField<EJson::Null>(TEXT("default_value"))->IsNull());
