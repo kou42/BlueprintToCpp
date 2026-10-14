@@ -28,6 +28,55 @@ TSharedRef<FJsonObject> LinkJson(const FBPIRLink& Link)
     Result->SetField(TEXT("target_pin_id"), GuidJson(Link.TargetPin));
     return Result;
 }
+// グラフ内の接続が実在するNode/Pinを指しているか検証する。
+// 不正な参照は推測で修復せず、出力を失敗させて原因を明示する。
+bool ValidateGraphLinks(const FBPIRGraph& Graph, FString& OutError)
+{
+    TMap<FGuid, TSet<FGuid>> NodePins;
+    for (const FBPIRNode& Node : Graph.Nodes)
+    {
+        if (Node.Id.IsValid() == false || NodePins.Contains(Node.Id))
+        {
+            OutError = FString::Printf(TEXT("Invalid or duplicate node GUID: %s"), *Graph.Name);
+            return false;
+        }
+        TSet<FGuid>& Pins = NodePins.Add(Node.Id);
+        for (const FBPIRPin& Pin : Node.Pins)
+        {
+            if (Pin.Id.IsValid() == false || Pins.Contains(Pin.Id))
+            {
+                OutError = FString::Printf(TEXT("Invalid or duplicate pin GUID: %s"), *Graph.Name);
+                return false;
+            }
+            Pins.Add(Pin.Id);
+        }
+    }
+    const auto IsValidLink = [&NodePins](const FBPIRLink& Link)
+    {
+        const TSet<FGuid>* Source = NodePins.Find(Link.SourceNode);
+        const TSet<FGuid>* Target = NodePins.Find(Link.TargetNode);
+        return Source != nullptr && Target != nullptr
+            && Source->Contains(Link.SourcePin) && Target->Contains(Link.TargetPin);
+    };
+    for (const FBPIRLink& Link : Graph.ExecEdges)
+    {
+        if (IsValidLink(Link) == false)
+        {
+            OutError = FString::Printf(TEXT("Invalid exec edge: %s"), *Graph.Name);
+            return false;
+        }
+    }
+    for (const FBPIRLink& Link : Graph.DataEdges)
+    {
+        if (IsValidLink(Link) == false)
+        {
+            OutError = FString::Printf(TEXT("Invalid data edge: %s"), *Graph.Name);
+            return false;
+        }
+    }
+    return true;
+}
+
 }
 
 bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& EngineVersion,
@@ -58,6 +107,10 @@ bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& En
     });
     for (const FBPIRGraph& Graph : SortedGraphs)
     {
+        if (ValidateGraphLinks(Graph, OutError) == false)
+        {
+            return false;
+        }
         TSharedRef<FJsonObject> GraphJson = MakeShared<FJsonObject>();
         GraphJson->SetStringField(TEXT("name"), Graph.Name);
         GraphJson->SetStringField(TEXT("path"), Graph.Path);
