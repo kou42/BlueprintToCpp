@@ -22,6 +22,7 @@ Unreal Engine の Blueprint グラフ構造を、GitHub Copilot Chat/Agent に�
 | `semantic_status` | string | 意味解析の完成度。現在は `partial` |
 | `graphs` | array | グラフ一覧 |
 | `diagnostics` | string[] | 抽出時の診断メッセージ |
+| `semantic_declarations` | object (optional) | Semantic JSON v2に準拠する宣言・診断情報。Semantic IR指定時に追加 |
 
 ## グラフ
 
@@ -84,5 +85,6 @@ Unreal Engine の Blueprint グラフ構造を、GitHub Copilot Chat/Agent に�
 ## 現時点の制限
 
 - Blueprintの全機能を意味的に再構成するものではない。
-- 関数シグネチャや変数定義の完全な情報はこのグラフ形式に統合されていない。
+- 関数・変数の宣言情報は `semantic_declarations.functions` / `semantic_declarations.variables` に格納する。未解決型や既定値の未取得はそのまま保持し、完全なC++宣言を保証しない。
+- `semantic_declarations` は既存Semantic JSON v2のオブジェクトを含むため、将来のスキーマ変更では互換性を確認する。
 - JSONの構造と出力順序に関するAutomation Testは追加済みだが、UE 5.7.4での実行確認は未実施。
