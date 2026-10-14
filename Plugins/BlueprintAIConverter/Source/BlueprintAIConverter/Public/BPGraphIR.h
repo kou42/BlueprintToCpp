@@ -26,6 +26,14 @@ struct FBPIRNode
     FString ClassPath;
     FString Title;
     FName FunctionName;
+    // 解決できたUFunctionの所有クラスと完全パス。未解決時は空文字を保持する。
+    FString FunctionOwnerPath;
+    FString FunctionPath;
+    bool bFunctionResolved = false;
+    bool bFunctionNative = false;
+    bool bFunctionStatic = false;
+    bool bFunctionPure = false;
+    bool bFunctionConst = false;
     FName VariableName;
     TArray<FBPIRPin> Pins;
 };
