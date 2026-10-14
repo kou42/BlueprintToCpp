@@ -51,7 +51,12 @@ bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& En
     Root->SetStringField(TEXT("semantic_status"), TEXT("partial"));
 
     TArray<TSharedPtr<FJsonValue>> Graphs;
-    for (const FBPIRGraph& Graph : IR.Graphs)
+    TArray<FBPIRGraph> SortedGraphs = IR.Graphs;
+    SortedGraphs.Sort([](const FBPIRGraph& A, const FBPIRGraph& B)
+    {
+        return A.Path < B.Path;
+    });
+    for (const FBPIRGraph& Graph : SortedGraphs)
     {
         TSharedRef<FJsonObject> GraphJson = MakeShared<FJsonObject>();
         GraphJson->SetStringField(TEXT("name"), Graph.Name);
