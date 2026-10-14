@@ -1,7 +1,7 @@
 # BlueprintToCpp 開発ロードマップ
 
 対象: Unreal Engine 5.7.4 / BlueprintAIConverter / PythonServer  
-更新日: 2026-10-14（実Blueprintを使うC++変換中心の優先順位へ更新）
+更新日: 2026-10-15（C4-4変数参照・C4-5四則演算の縦断検証を反映）
 
 ## 最終目標
 
@@ -128,10 +128,10 @@ C++ Generator（宣言・式・文・関数・クラス）
 | Semantic IR / PrintString変換 | **最小縦断実装済み・Automation/UHT/UBT確認済み** | 型付きIR、Lowering、C++ Generator、比較テストを追加。実Generator出力の隔離UHT/UBTまで確認。実行時の意味一致と汎用UFunction変換は未完了 |
 | Phase 2 UFunction呼び出し基盤 | **限定縦断実装済み・Automation/UHT/UBT確認済み** | 反射署名・ピン検証に加え、実BlueprintのBeginPlay→K2_SetActorLocationとK2_GetActorLocation.ReturnValue→NewLocationを通常Semantic経路へ統合。FHitResult出力領域を生成し、改ざん型を拒否する。一般関数、複数Consumer、接続済み戻り値は未対応 |
 | Blueprintメンバー変数・初期値 | **限定実装済み・Automation/UHT/UBT確認済み** | 基本型はCDOから型安全に生成。その他の値型はExportText/ImportTextの往復一致を条件に、FVector、FRotator、FTransform、FLinearColor、TArray/TSet/TMap、ネイティブEnumを実Blueprintで汎用復元。未検証型は日本語コメント付き宣言へフォールバックするが、UPROPERTYメタデータ、Object参照、ユーザー定義型等は未対応 |
-| Phase 4 制御フロー | **bool Branch・反射検証済み数値比較の限定縦断を実装済み・Automation/UHT/UBT確認済み** | 実BlueprintのBeginPlay→Branch→両枝PrintStringに加え、Kismet Math Libraryの`int32` / `double`比較6演算を反射署名で検証してConditionへ統合し、C++の比較条件を生成。不正な所有クラス・型・接続を拒否。変数入力、暗黙変換、複数Consumer、複数文、ネスト、Sequence、Loop、Returnは未対応 |
+| Phase 4 制御フロー | **bool Branch・数値比較・変数参照・四則演算の限定縦断を実装済み・Automation/UHT/UBT確認済み** | 実BlueprintのBeginPlay→Branch→両枝PrintStringに加え、Kismet Math Libraryの`int32` / `double`比較6演算と四則演算を反射署名で検証。メンバー変数Getとネストした算術式をConditionへ統合し、除算はUE固有のゼロ除算動作を保持する。不正な所有クラス・型・接続、複数Consumer、循環依存を拒否。暗黙変換、代入、複数文、ネストBranch、Sequence、Loop、Returnは未対応 |
 | Actor以外のBlueprint | **未対応** | 直接Actor親のMVP制限あり。Component、UObject、Widget、Anim等は段階的に拡張 |
 | Semantic IR Editor統合 | **限定実装・Automation確認済み** | 旧経路Shadow比較と独立したSemantic Previewメニューを追加。実Blueprintからの対応ノード拡張は継続 |
-| UE 5.7での生成C++ビルド・動作一致 | **隔離ビルドを複数ケースで確認** | Automation Test 52/52件、ActorLocation、bool Branch、`int32` / `double`比較Branch、構造体、コンテナ、ネイティブEnumを含む実Blueprint由来Generator出力の隔離UHT/UBTを確認。実行時のBlueprintとの意味一致は未確認 |
+| UE 5.7での生成C++ビルド・動作一致 | **隔離ビルドを複数ケースで確認** | Automation Test 55/55件、ActorLocation、bool Branch、`int32` / `double`比較Branch、メンバー変数比較、四則演算連鎖、構造体、コンテナ、ネイティブEnumを含む実Blueprint由来Generator出力の隔離UHT/UBTを確認。実行時のBlueprintとの意味一致は未確認 |
 
 GitHubへのコミットとUEでのコンパイル成功・動作確認は区別する。ユーザーからのビルド状況の共有は参考情報として記録し、Automation Test・生成C++のUHT/UBT・実行時の意味一致を別途検証する。
 
@@ -305,18 +305,32 @@ C1〜C3の限定縦断実装を維持しつつ、Editor APIで作成した実Blu
 3. [x] 数値リテラルを型ごとに正規化し、厳密な型一致を要求する。安全性を確認できない暗黙変換、所有クラス改ざん、余分なピンを診断付きで拒否する。
 4. [x] Automation Testと隔離UHT/UBTを通す。Blueprintとの実行時分岐一致は独立した未完了ゲートとして維持する。
 
-### 次のC++実装単位: C4-4 比較オペランドの変数参照対応
+### 完了したC++実装単位: C4-4 比較オペランドの変数参照対応
 
-1. Blueprintメンバー変数のGetノードから比較入力へ接続する実Blueprintを作成し、リテラル限定の比較データフローを拡張する。
-2. 変数参照を型付きSemantic式として比較式の引数へ保持し、生成クラスのメンバー名・型・評価回数を保存する。
-3. 比較UFunctionの反射型と変数FProperty型の厳密な一致を要求し、暗黙変換、未解決変数、複数Consumer、循環依存を診断付きで拒否する。
-4. Automation Testと隔離UHT/UBTを通す。Blueprintとの実行時分岐一致とCDO値一致は独立した未完了ゲートとして維持する。
+1. [x] Blueprintメンバー変数のGetノードから比較入力へ接続する実Blueprintを作成し、リテラル限定の比較データフローを拡張する。
+2. [x] 変数参照を型付きSemantic式として比較式の引数へ保持し、生成クラスのメンバー名・型・評価回数を保存する。
+3. [x] 比較UFunctionの反射型と変数FProperty型の厳密な一致を要求し、暗黙変換、未解決変数、複数Consumerを診断付きで拒否する。
+4. [x] Automation Testと隔離UHT/UBTを通す。Blueprintとの実行時分岐一致とCDO値一致は独立した未完了ゲートとして維持する。
+
+### 完了したC++実装単位: C4-5 四則演算を含む比較式
+
+1. [x] `int32` / `double`の加算・減算・乗算・除算を許可表と実UFunctionの反射署名から共通解決する。
+2. [x] メンバー変数・リテラル・算術関数を再帰的な型付きSemantic式として保持し、算術結果を比較入力へ接続する。
+3. [x] 除算を含む算術式は`UKismetMathLibrary`呼び出しとして生成し、Blueprint側のゼロ除算動作と評価回数を保持する。
+4. [x] 実Blueprintで`Score + 8 - 2`、乗算、除算、比較、Branchを連鎖し、Automation Testと隔離UHT/UBTを通す。複数Consumer、循環依存、型・所有クラス改ざんを診断付きで拒否する。
+
+### 次のC++実装単位: C4-6 複数文とSequence
+
+1. Sequenceから順序付きで複数の副作用文へ接続する実Blueprintを作成し、単一文限定のExec形状を拡張する。
+2. Semantic基本ブロックへ文の実行順を保持し、同じノードを重複評価・重複出力しない。
+3. 分岐との組み合わせは最初から推測せず、合流点、重複到達、循環、未接続出力を診断付きで拒否する。
+4. Automation Testと隔離UHT/UBTを通す。Blueprintとの実行順一致は独立した未完了ゲートとして維持する。
 
 親クラス解決は `FBPParentClassResolver` へ共通化した。ネイティブの任意の`AActor`派生クラスについて、C++名と公開ヘッダーをリフレクションから取得する。非Actor、解決不能、非公開ヘッダー、Blueprint生成親は診断付きで拒否する。Blueprint生成親をネイティブ祖先へ暗黙置換することは禁止する。
 
 **保留:** 旧J2-13（実生成アーティファクトとレビュー証跡の自動接続）、新しいProvider、レビュー統計・表示UIの拡張。C++縦断検証で直接必要になった場合のみ再開する。
 
-2026-10-15のローカル検証では、UE 5.7のEditorターゲットがビルド成功し、`BlueprintAIConverter` Automation Testは52/52件成功した。PythonServerは直近のPython 3.12検証で212件成功した。実Pawn/Actor BlueprintからGeneratorが出力したC++について、基本型、代表構造体、TArray/TSet/TMap、ネイティブEnum、ActorLocation呼び出し、bool Branchのif/else、`Greater_IntInt`を条件とする`if (7 > 3)`、`LessEqual_DoubleDouble`を条件とする`if (7.500000 <= 2.250000)`を隔離UHT/UBTで確認したが、Blueprintとの実行時一致は引き続き未確認。
+2026-10-15のローカル検証では、UE 5.7のEditorターゲットがビルド成功し、`BlueprintAIConverter` Automation Testは55/55件成功した。PythonServerは直近のPython 3.12検証で212件成功した。実Pawn/Actor BlueprintからGeneratorが出力したC++について、基本型、代表構造体、TArray/TSet/TMap、ネイティブEnum、ActorLocation呼び出し、bool Branchのif/else、`Greater_IntInt`を条件とする`if (7 > 3)`、`LessEqual_DoubleDouble`を条件とする`if (7.500000 <= 2.250000)`、メンバー変数`Health > 10`、加減乗除をネストした`Score`比較を隔離UHT/UBTで確認した。四則演算連鎖のartifact fingerprintは`6ac86ea2c792d234bf1c56c3f7f1daa5579669fa4ccf3f01bea563882a85b1d8`。Blueprintとの実行時一致は引き続き未確認。
 
 ### レビュー基盤の到達点と残課題
 

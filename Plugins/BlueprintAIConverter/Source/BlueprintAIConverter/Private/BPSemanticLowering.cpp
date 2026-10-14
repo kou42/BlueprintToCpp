@@ -5,6 +5,7 @@
 #include "BPConnectedActorLocationLowering.h"
 #include "BPConnectedFunctionCallEmitter.h"
 #include "BPFunctionSignatureResolver.h"
+#include "BPNumericArithmeticResolver.h"
 #include "BPNumericComparisonResolver.h"
 #include "BPOutputParameterStorage.h"
 #include "BPSemanticVariableExtractor.h"
@@ -243,8 +244,268 @@ bool AnalyzeBranchPrint(const FBPGraphIR& GraphIR, const FBPIRGraph& Graph,
     return true;
 }
 
+const FBPSemanticVariable* FindSemanticVariable(
+    const TArray<FBPSemanticVariable>& Variables, const FName Name)
+{
+    const FBPSemanticVariable* Match = nullptr;
+    for (const FBPSemanticVariable& Variable : Variables)
+    {
+        if (Variable.Name != Name)
+        {
+            continue;
+        }
+        if (Match != nullptr)
+        {
+            return nullptr;
+        }
+        Match = &Variable;
+    }
+    return Match;
+}
+
+bool BuildNumericExpression(const FBPIRGraph& Graph,
+    const FBPIRNode& Consumer, const FBPIRPin& OperandPin,
+    const EBPSemanticTypeKind OperandType,
+    const TArray<const FBPIRNode*>& VariableGets,
+    const TArray<const FBPIRNode*>& ArithmeticNodes,
+    const TArray<FBPSemanticVariable>& Variables, TSet<int32>& UsedDataEdges,
+    TSet<FGuid>& ActiveArithmeticNodes, FBPSemanticExpression& OutExpression,
+    FBPSemanticIR& OutIR)
+{
+    int32 IncomingEdgeIndex = INDEX_NONE;
+    for (int32 Index = 0; Index < Graph.DataEdges.Num(); ++Index)
+    {
+        const FBPIRLink& Edge = Graph.DataEdges[Index];
+        if (Edge.TargetNode != Consumer.Id || Edge.TargetPin != OperandPin.Id)
+        {
+            continue;
+        }
+        if (IncomingEdgeIndex != INDEX_NONE)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Consumer.Id,
+                TEXT("Numeric expression operand has multiple producers"));
+            return false;
+        }
+        IncomingEdgeIndex = Index;
+    }
+
+    if (IncomingEdgeIndex == INDEX_NONE)
+    {
+        FString CanonicalValue;
+        if (FBPNumericComparisonResolver::CanonicalizeLiteral(
+            OperandType, OperandPin.DefaultValue, CanonicalValue) == false)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Consumer.Id,
+                TEXT("Numeric expression requires finite literals of the reflected operand type"));
+            return false;
+        }
+        OutExpression = Literal(OperandType, CanonicalValue,
+            Consumer, OperandPin.Name);
+        return true;
+    }
+
+    const FBPIRLink& Edge = Graph.DataEdges[IncomingEdgeIndex];
+    const FBPIRNode* const* VariableMatch = VariableGets.FindByPredicate(
+        [&Edge](const FBPIRNode* Node)
+        {
+            return Node != nullptr && Node->Id == Edge.SourceNode;
+        });
+    const FBPIRNode* VariableGet = VariableMatch != nullptr ? *VariableMatch : nullptr;
+    if (VariableGet == nullptr)
+    {
+        const FBPIRNode* const* ArithmeticMatch = ArithmeticNodes.FindByPredicate(
+            [&Edge](const FBPIRNode* Node)
+            {
+                return Node != nullptr && Node->Id == Edge.SourceNode;
+            });
+        const FBPIRNode* Arithmetic = ArithmeticMatch != nullptr
+            ? *ArithmeticMatch : nullptr;
+        if (Arithmetic == nullptr)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Edge.SourceNode,
+                TEXT("Numeric expression producer is unsupported"));
+            return false;
+        }
+        if (ActiveArithmeticNodes.Contains(Arithmetic->Id))
+        {
+            AddDiagnostic(OutIR, Graph.Name, Arithmetic->Id,
+                TEXT("Numeric arithmetic dependency contains a cycle"));
+            return false;
+        }
+
+        FBPNumericArithmeticOperation Operation;
+        TArray<FString> ResolverDiagnostics;
+        if (FBPNumericArithmeticResolver::Resolve(Arithmetic->FunctionOwnerPath,
+            Arithmetic->FunctionName, Operation, ResolverDiagnostics) == false ||
+            Operation.OperandType != OperandType)
+        {
+            for (const FString& Message : ResolverDiagnostics)
+            {
+                AddDiagnostic(OutIR, Graph.Name, Arithmetic->Id, Message);
+            }
+            if (ResolverDiagnostics.IsEmpty())
+            {
+                AddDiagnostic(OutIR, Graph.Name, Arithmetic->Id,
+                    TEXT("Numeric arithmetic result type does not match its consumer"));
+            }
+            return false;
+        }
+
+        const FBPIRPin* A = FindPin(*Arithmetic, TEXT("A"), EGPD_Input);
+        const FBPIRPin* B = FindPin(*Arithmetic, TEXT("B"), EGPD_Input);
+        const FBPIRPin* ReturnValue = FindPin(
+            *Arithmetic, TEXT("ReturnValue"), EGPD_Output);
+        const bool bUnexpectedPin = Arithmetic->Pins.ContainsByPredicate(
+            [A, B, ReturnValue, &Operation](const FBPIRPin& Pin)
+            {
+                if (&Pin == A || &Pin == B || &Pin == ReturnValue)
+                {
+                    return false;
+                }
+                // 関数ライブラリ由来の非表示selfピンだけを追加ピンとして許可する。
+                return Pin.Name != UEdGraphSchema_K2::PN_Self ||
+                    Pin.Direction != EGPD_Input ||
+                    Pin.Category != UEdGraphSchema_K2::PC_Object ||
+                    Pin.SubCategoryObjectPath != Operation.FunctionOwnerPath;
+            });
+        if (A == nullptr || B == nullptr || ReturnValue == nullptr ||
+            Edge.SourcePin != ReturnValue->Id || bUnexpectedPin ||
+            FBPNumericComparisonResolver::MatchesPinType(
+                A->Category, A->SubCategory, OperandType) == false ||
+            FBPNumericComparisonResolver::MatchesPinType(
+                B->Category, B->SubCategory, OperandType) == false ||
+            FBPNumericComparisonResolver::MatchesPinType(
+                ReturnValue->Category, ReturnValue->SubCategory,
+                OperandType) == false ||
+            (A->DefaultObjectPath.IsEmpty() == false &&
+                A->DefaultObjectPath != TEXT("None")) ||
+            (B->DefaultObjectPath.IsEmpty() == false &&
+                B->DefaultObjectPath != TEXT("None")) ||
+            A->DefaultText.IsEmpty() == false || B->DefaultText.IsEmpty() == false)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Arithmetic->Id,
+                TEXT("Numeric arithmetic pins do not match the reflected binary signature"));
+            return false;
+        }
+
+        int32 ConsumerCount = 0;
+        for (const FBPIRLink& Candidate : Graph.DataEdges)
+        {
+            ConsumerCount += Candidate.SourceNode == Arithmetic->Id &&
+                Candidate.SourcePin == ReturnValue->Id ? 1 : 0;
+        }
+        if (ConsumerCount != 1)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Arithmetic->Id,
+                TEXT("Numeric arithmetic result must have exactly one consumer"));
+            return false;
+        }
+
+        UsedDataEdges.Add(IncomingEdgeIndex);
+        ActiveArithmeticNodes.Add(Arithmetic->Id);
+        FBPSemanticExpression AExpression;
+        FBPSemanticExpression BExpression;
+        const bool bBuilt = BuildNumericExpression(Graph, *Arithmetic, *A,
+                OperandType, VariableGets, ArithmeticNodes, Variables,
+                UsedDataEdges, ActiveArithmeticNodes, AExpression, OutIR) &&
+            BuildNumericExpression(Graph, *Arithmetic, *B,
+                OperandType, VariableGets, ArithmeticNodes, Variables,
+                UsedDataEdges, ActiveArithmeticNodes, BExpression, OutIR);
+        ActiveArithmeticNodes.Remove(Arithmetic->Id);
+        if (bBuilt == false)
+        {
+            return false;
+        }
+
+        OutExpression = FBPSemanticExpression();
+        OutExpression.Kind = EBPSemanticExpressionKind::FunctionCall;
+        OutExpression.Type.Kind = OperandType;
+        OutExpression.SourceNodeId = Arithmetic->Id;
+        OutExpression.SourcePinId = ReturnValue->Id;
+        OutExpression.FunctionName = Operation.FunctionName;
+        OutExpression.FunctionOwnerPath = Operation.FunctionOwnerPath;
+        OutExpression.Arguments.Add(MoveTemp(AExpression));
+        OutExpression.Arguments.Add(MoveTemp(BExpression));
+        return true;
+    }
+    if (VariableGet->VariableName.IsNone() ||
+        VariableGet->bVariableSelfContext == false)
+    {
+        AddDiagnostic(OutIR, Graph.Name, Edge.SourceNode,
+            TEXT("Numeric expression variable must be a self member Variable Get"));
+        return false;
+    }
+    const FBPIRPin* ValuePin = VariableGet->Pins.FindByPredicate(
+        [&Edge](const FBPIRPin& Pin)
+        {
+            return Pin.Id == Edge.SourcePin && Pin.Direction == EGPD_Output;
+        });
+    const bool bUnexpectedPin = VariableGet->Pins.ContainsByPredicate(
+        [ValuePin](const FBPIRPin& Pin)
+        {
+            if (&Pin == ValuePin)
+            {
+                return false;
+            }
+            // selfメンバーGetに付随する非表示selfピン以外は、依存関係を曖昧にするため拒否する。
+            return Pin.Name != UEdGraphSchema_K2::PN_Self ||
+                Pin.Direction != EGPD_Input ||
+                Pin.Category != UEdGraphSchema_K2::PC_Object;
+        });
+    if (ValuePin == nullptr || ValuePin->Name != VariableGet->VariableName ||
+        bUnexpectedPin ||
+        FBPNumericComparisonResolver::MatchesPinType(
+            ValuePin->Category, ValuePin->SubCategory, OperandType) == false)
+    {
+        AddDiagnostic(OutIR, Graph.Name, VariableGet->Id,
+            TEXT("Variable Get pin does not match the reflected comparison operand type"));
+        return false;
+    }
+    int32 ConsumerCount = 0;
+    for (const FBPIRLink& Candidate : Graph.DataEdges)
+    {
+        ConsumerCount += Candidate.SourceNode == VariableGet->Id &&
+            Candidate.SourcePin == ValuePin->Id ? 1 : 0;
+    }
+    if (ConsumerCount != 1)
+    {
+        AddDiagnostic(OutIR, Graph.Name, VariableGet->Id,
+            TEXT("Variable Get comparison operand must have exactly one consumer"));
+        return false;
+    }
+
+    const FBPSemanticVariable* Variable = FindSemanticVariable(
+        Variables, VariableGet->VariableName);
+    const FString ExpectedCppType = OperandType == EBPSemanticTypeKind::Int32
+        ? TEXT("int32")
+        : OperandType == EBPSemanticTypeKind::Float
+            ? TEXT("float")
+            : OperandType == EBPSemanticTypeKind::Double
+                ? TEXT("double") : FString();
+    if (Variable == nullptr || Variable->Type.Kind != OperandType ||
+        Variable->Type.bIsReference || Variable->Type.bIsConst ||
+        Variable->ReflectedCppType != ExpectedCppType)
+    {
+        AddDiagnostic(OutIR, Graph.Name, VariableGet->Id,
+            TEXT("Variable Get does not resolve to one exact reflected numeric member"));
+        return false;
+    }
+
+    OutExpression = FBPSemanticExpression();
+    OutExpression.Kind = EBPSemanticExpressionKind::VariableReference;
+    OutExpression.Type = Variable->Type;
+    OutExpression.SourceNodeId = VariableGet->Id;
+    OutExpression.SourcePinId = ValuePin->Id;
+    OutExpression.VariableName = Variable->Name;
+    UsedDataEdges.Add(IncomingEdgeIndex);
+    return true;
+}
+
 bool LowerNumericComparisonCondition(const FBPIRGraph& Graph, const FBPIRNode& Comparison,
     const FBPIRNode& Branch, const FBPIRPin& Condition,
+    const TArray<const FBPIRNode*>& VariableGets,
+    const TArray<const FBPIRNode*>& ArithmeticNodes,
+    const TArray<FBPSemanticVariable>& Variables,
     FBPSemanticExpression& OutExpression, FBPSemanticIR& OutIR)
 {
     FBPNumericComparison ResolvedComparison;
@@ -300,31 +561,86 @@ bool LowerNumericComparisonCondition(const FBPIRGraph& Graph, const FBPIRNode& C
                 *Condition.Category.ToString(), *Condition.SubCategory.ToString()));
         return false;
     }
-    if (Graph.DataEdges.Num() != 1)
+    int32 ResultEdgeIndex = INDEX_NONE;
+    int32 ResultConsumerCount = 0;
+    for (int32 Index = 0; Index < Graph.DataEdges.Num(); ++Index)
+    {
+        const FBPIRLink& Candidate = Graph.DataEdges[Index];
+        if (Candidate.SourceNode == Comparison.Id &&
+            Candidate.SourcePin == ReturnValue->Id)
+        {
+            ++ResultConsumerCount;
+            ResultEdgeIndex = Index;
+        }
+    }
+    if (ResultConsumerCount != 1)
     {
         AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
-            TEXT("Numeric comparison must have exactly one consumer"));
+            TEXT("Numeric comparison must have exactly one result consumer"));
         return false;
     }
-    const FBPIRLink& Edge = Graph.DataEdges[0];
-    if (Edge.SourceNode != Comparison.Id || Edge.SourcePin != ReturnValue->Id ||
-        Edge.TargetNode != Branch.Id || Edge.TargetPin != Condition.Id)
+    const FBPIRLink& ResultEdge = Graph.DataEdges[ResultEdgeIndex];
+    if (ResultEdge.TargetNode != Branch.Id || ResultEdge.TargetPin != Condition.Id)
     {
         AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
             TEXT("Numeric comparison result must connect directly to Branch Condition"));
         return false;
     }
 
-    FString AValue;
-    FString BValue;
-    if (FBPNumericComparisonResolver::CanonicalizeLiteral(
-            ResolvedComparison.OperandType, A->DefaultValue, AValue) == false ||
-        FBPNumericComparisonResolver::CanonicalizeLiteral(
-            ResolvedComparison.OperandType, B->DefaultValue, BValue) == false)
+    TSet<int32> UsedDataEdges;
+    TSet<FGuid> ActiveArithmeticNodes;
+    UsedDataEdges.Add(ResultEdgeIndex);
+    FBPSemanticExpression AExpression;
+    FBPSemanticExpression BExpression;
+    if (BuildNumericExpression(Graph, Comparison, *A,
+            ResolvedComparison.OperandType, VariableGets, ArithmeticNodes,
+            Variables, UsedDataEdges, ActiveArithmeticNodes,
+            AExpression, OutIR) == false ||
+        BuildNumericExpression(Graph, Comparison, *B,
+            ResolvedComparison.OperandType, VariableGets, ArithmeticNodes,
+            Variables, UsedDataEdges, ActiveArithmeticNodes,
+            BExpression, OutIR) == false ||
+        UsedDataEdges.Num() != Graph.DataEdges.Num())
     {
-        AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
-            TEXT("Numeric comparison requires finite literals of the reflected operand type"));
+        if (OutIR.HasErrors() == false)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
+                TEXT("Numeric comparison contains an unsupported data dependency"));
+        }
         return false;
+    }
+    for (const FBPIRNode* VariableGet : VariableGets)
+    {
+        if (VariableGet == nullptr ||
+            Graph.DataEdges.ContainsByPredicate(
+                [VariableGet](const FBPIRLink& Edge)
+                {
+                    return Edge.SourceNode == VariableGet->Id;
+                }) == false)
+        {
+            AddDiagnostic(OutIR, Graph.Name,
+                VariableGet != nullptr ? VariableGet->Id : FGuid(),
+                TEXT("Unconnected Variable Get is not supported in a comparison Branch"));
+            return false;
+        }
+    }
+    for (const FBPIRNode* Arithmetic : ArithmeticNodes)
+    {
+        bool bConnected = false;
+        for (int32 EdgeIndex = 0; Arithmetic != nullptr &&
+            EdgeIndex < Graph.DataEdges.Num(); ++EdgeIndex)
+        {
+            const FBPIRLink& Edge = Graph.DataEdges[EdgeIndex];
+            bConnected |= Edge.SourceNode == Arithmetic->Id &&
+                UsedDataEdges.Contains(EdgeIndex);
+        }
+        if (Arithmetic == nullptr || bConnected == false)
+        {
+            AddDiagnostic(OutIR, Graph.Name,
+                Arithmetic != nullptr ? Arithmetic->Id : FGuid(),
+                TEXT("Unconnected numeric arithmetic node is not supported in a comparison Branch"));
+            return false;
+        }
     }
 
     // 比較をbool値へ畳み込まず、型付きの式として保持してC++側でも一度だけ評価する。
@@ -335,10 +651,8 @@ bool LowerNumericComparisonCondition(const FBPIRGraph& Graph, const FBPIRNode& C
     OutExpression.SourcePinId = ReturnValue->Id;
     OutExpression.FunctionName = ResolvedComparison.FunctionName;
     OutExpression.FunctionOwnerPath = ResolvedComparison.FunctionOwnerPath;
-    OutExpression.Arguments.Add(Literal(
-        ResolvedComparison.OperandType, AValue, Comparison, TEXT("A")));
-    OutExpression.Arguments.Add(Literal(
-        ResolvedComparison.OperandType, BValue, Comparison, TEXT("B")));
+    OutExpression.Arguments.Add(MoveTemp(AExpression));
+    OutExpression.Arguments.Add(MoveTemp(BExpression));
     return true;
 }
 
@@ -381,6 +695,13 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         return false;
     }
 
+    // 比較入力のVariable Getを検証できるよう、関数本体より先に反射済み変数IRを用意する。
+    FBPSemanticVariableExtractor::Append(Blueprint, OutIR);
+    if (OutIR.HasErrors())
+    {
+        return false;
+    }
+
     const FBPIRGraph* EventGraph = nullptr;
     for (const FBPIRGraph& Graph : GraphIR.Graphs)
     {
@@ -418,6 +739,8 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     const FBPIRNode* Branch = nullptr;
     const FBPIRNode* Comparison = nullptr;
     TArray<const FBPIRNode*> Prints;
+    TArray<const FBPIRNode*> VariableGets;
+    TArray<const FBPIRNode*> ArithmeticNodes;
     for (const FBPIRNode& Node : Graph.Nodes)
     {
         if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
@@ -444,15 +767,40 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         {
             Prints.Add(&Node);
         }
-        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction"))
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") ||
+            Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CommutativeAssociativeBinaryOperator"))
         {
-            if (Comparison != nullptr)
+            FBPNumericComparison ResolvedComparison;
+            TArray<FString> ComparisonDiagnostics;
+            if (FBPNumericComparisonResolver::Resolve(Node.FunctionOwnerPath,
+                Node.FunctionName, ResolvedComparison, ComparisonDiagnostics))
             {
-                AddDiagnostic(OutIR, Graph.Name, Node.Id,
-                    TEXT("Duplicate numeric comparison node"));
-                return false;
+                if (Comparison != nullptr)
+                {
+                    AddDiagnostic(OutIR, Graph.Name, Node.Id,
+                        TEXT("Duplicate numeric comparison node"));
+                    return false;
+                }
+                Comparison = &Node;
+                continue;
             }
-            Comparison = &Node;
+
+            FBPNumericArithmeticOperation ResolvedArithmetic;
+            TArray<FString> ArithmeticDiagnostics;
+            if (FBPNumericArithmeticResolver::Resolve(Node.FunctionOwnerPath,
+                Node.FunctionName, ResolvedArithmetic, ArithmeticDiagnostics))
+            {
+                ArithmeticNodes.Add(&Node);
+                continue;
+            }
+
+            AddDiagnostic(OutIR, Graph.Name, Node.Id,
+                TEXT("Branch conversion contains an unsupported function call"));
+            return false;
+        }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
+        {
+            VariableGets.Add(&Node);
         }
         else
         {
@@ -463,7 +811,8 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     }
     if (BeginPlay == nullptr || Branch == nullptr || Prints.Num() != 2 ||
         Graph.ExecEdges.Num() != 3 ||
-        (Comparison == nullptr ? Graph.DataEdges.IsEmpty() == false : Graph.DataEdges.Num() != 1))
+        (Comparison == nullptr &&
+            (Graph.DataEdges.IsEmpty() == false || VariableGets.IsEmpty() == false)))
     {
         AddDiagnostic(OutIR, Graph.Name, FGuid(),
             TEXT("Branch conversion requires one supported condition, three Exec edges, and two PrintString calls"));
@@ -485,7 +834,8 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     if (Comparison != nullptr)
     {
         if (LowerNumericComparisonCondition(Graph, *Comparison, *Branch,
-            *Condition, ConditionExpression, OutIR) == false)
+            *Condition, VariableGets, ArithmeticNodes, OutIR.Variables,
+            ConditionExpression, OutIR) == false)
         {
             return false;
         }

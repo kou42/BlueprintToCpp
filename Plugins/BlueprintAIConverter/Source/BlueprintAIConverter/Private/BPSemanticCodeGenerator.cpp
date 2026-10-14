@@ -1,4 +1,5 @@
 #include "BPSemanticCodeGenerator.h"
+#include "BPNumericArithmeticResolver.h"
 #include "BPNumericComparisonResolver.h"
 #include "BPParentClassResolver.h"
 
@@ -492,7 +493,97 @@ bool ReadBoolLiteral(const FBPSemanticExpression& Expression, FString& OutValue)
     return true;
 }
 
+bool EmitNumericExpression(const FBPSemanticExpression& Expression,
+    const EBPSemanticTypeKind OperandType,
+    const TArray<FBPSemanticVariable>& Variables, FString& OutOperand,
+    TArray<FString>& Diagnostics)
+{
+    if (Expression.Type.Kind != OperandType ||
+        Expression.Type.bIsReference || Expression.Type.bIsConst)
+    {
+        Diagnostics.Add(TEXT("Numeric comparison operand type is invalid"));
+        return false;
+    }
+    if (Expression.Kind == EBPSemanticExpressionKind::Literal)
+    {
+        if (EmitNumericLiteral(OperandType,
+            Expression.LiteralValue, OutOperand) == false)
+        {
+            Diagnostics.Add(TEXT("Invalid numeric comparison literal"));
+            return false;
+        }
+        return true;
+    }
+    if (Expression.Kind == EBPSemanticExpressionKind::FunctionCall)
+    {
+        FBPNumericArithmeticOperation Operation;
+        if (Expression.Arguments.Num() != 2 ||
+            FBPNumericArithmeticResolver::Resolve(Expression.FunctionOwnerPath,
+                Expression.FunctionName, Operation, Diagnostics) == false ||
+            Operation.OperandType != OperandType)
+        {
+            Diagnostics.Add(TEXT("Unsupported numeric arithmetic expression"));
+            return false;
+        }
+        FString A;
+        FString B;
+        if (EmitNumericExpression(Expression.Arguments[0], OperandType,
+                Variables, A, Diagnostics) == false ||
+            EmitNumericExpression(Expression.Arguments[1], OperandType,
+                Variables, B, Diagnostics) == false)
+        {
+            return false;
+        }
+        // 除算を含め、Blueprint側のゼロ除算処理と同じ実装を呼び出す。
+        OutOperand = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
+            *Operation.FunctionName.ToString(), *A, *B);
+        return true;
+    }
+    if (Expression.Kind != EBPSemanticExpressionKind::VariableReference)
+    {
+        Diagnostics.Add(TEXT("Unsupported numeric comparison operand expression"));
+        return false;
+    }
+
+    const FString Name = Expression.VariableName.ToString();
+    if (IsIdentifier(Name) == false || Name == TEXT("this"))
+    {
+        Diagnostics.Add(TEXT("Numeric comparison variable name is invalid"));
+        return false;
+    }
+    const FBPSemanticVariable* Match = nullptr;
+    for (const FBPSemanticVariable& Variable : Variables)
+    {
+        if (Variable.Name != Expression.VariableName)
+        {
+            continue;
+        }
+        if (Match != nullptr)
+        {
+            Diagnostics.Add(TEXT("Numeric comparison variable is ambiguous"));
+            return false;
+        }
+        Match = &Variable;
+    }
+    const FString ExpectedCppType = OperandType == EBPSemanticTypeKind::Int32
+        ? TEXT("int32")
+        : OperandType == EBPSemanticTypeKind::Float
+            ? TEXT("float")
+            : OperandType == EBPSemanticTypeKind::Double
+                ? TEXT("double") : FString();
+    if (Match == nullptr || Match->Type.Kind != OperandType ||
+        Match->Type.bIsReference || Match->Type.bIsConst ||
+        Match->ReflectedCppType != ExpectedCppType)
+    {
+        Diagnostics.Add(TEXT("Numeric comparison variable does not match one reflected member"));
+        return false;
+    }
+    OutOperand = Name;
+    return true;
+}
+
 bool EmitBranchCondition(const FBPSemanticExpression& Expression,
+    const TArray<FBPSemanticVariable>& Variables,
     FString& OutCondition, TArray<FString>& Diagnostics)
 {
     if (ReadBoolLiteral(Expression, OutCondition))
@@ -514,23 +605,13 @@ bool EmitBranchCondition(const FBPSemanticExpression& Expression,
     {
         return false;
     }
-    FString AText;
-    FString BText;
-    if (ReadArgument(Expression.Arguments[0], Comparison.OperandType,
-        AText, Diagnostics) == false ||
-        ReadArgument(Expression.Arguments[1], Comparison.OperandType,
-            BText, Diagnostics) == false ||
-        Expression.Arguments[0].Type.bIsReference || Expression.Arguments[0].Type.bIsConst ||
-        Expression.Arguments[1].Type.bIsReference || Expression.Arguments[1].Type.bIsConst)
-    {
-        return false;
-    }
     FString A;
     FString B;
-    if (EmitNumericLiteral(Comparison.OperandType, AText, A) == false ||
-        EmitNumericLiteral(Comparison.OperandType, BText, B) == false)
+    if (EmitNumericExpression(Expression.Arguments[0],
+            Comparison.OperandType, Variables, A, Diagnostics) == false ||
+        EmitNumericExpression(Expression.Arguments[1],
+            Comparison.OperandType, Variables, B, Diagnostics) == false)
     {
-        Diagnostics.Add(TEXT("Invalid numeric comparison literal"));
         return false;
     }
     OutCondition = FString::Printf(TEXT("%s %s %s"),
@@ -735,7 +816,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     if (Statement.Kind == EBPSemanticStatementKind::Branch)
     {
         FString Condition;
-        if (EmitBranchCondition(Statement.Expression, Condition, OutDiagnostics) == false ||
+        if (EmitBranchCondition(Statement.Expression, IR.Variables,
+            Condition, OutDiagnostics) == false ||
             Statement.ThenStatements.Num() != 1 || Statement.ElseStatements.Num() != 1)
         {
             OutDiagnostics.Add(TEXT("Branch requires one supported bool condition and one statement in each output"));
@@ -791,7 +873,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration);
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    if (%s)\n    {\n%s    }\n    else\n    {\n%s    }\n}\n"),
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    if (%s)\n    {\n%s    }\n    else\n    {\n%s    }\n}\n"),
             *BaseName, *UnrealTypeInclude, *ConstructorDefinition,
             *ClassName, *Condition, *ThenCode, *ElseCode);
         OutFiles = MoveTemp(Files);

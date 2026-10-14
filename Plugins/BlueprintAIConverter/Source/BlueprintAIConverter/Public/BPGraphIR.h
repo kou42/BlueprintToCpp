@@ -28,6 +28,7 @@ struct FBPIRNode
     FName FunctionName;
     FString FunctionOwnerPath;
     FName VariableName;
+    bool bVariableSelfContext = false;
     TArray<FBPIRPin> Pins;
 };
 
