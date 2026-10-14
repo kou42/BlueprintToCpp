@@ -20,7 +20,9 @@ enum class EBPSemanticTypeKind : uint8
     Object,
     Struct,
     Enum,
-    Byte
+    Byte,
+    Delegate,
+    MulticastDelegate
 };
 
 struct FBPSemanticType
@@ -33,6 +35,10 @@ struct FBPSemanticType
     FString InnerType;
     FString KeyType;
     FString ValueType;
+    // 再帰的な型ツリー。子要素が存在しない場合はnullptrを使用する。
+    TSharedPtr<FBPSemanticType> ElementType;
+    TSharedPtr<FBPSemanticType> KeyTypeInfo;
+    TSharedPtr<FBPSemanticType> ValueTypeInfo;
     bool bIsReference = false;
     bool bIsConst = false;
 };
