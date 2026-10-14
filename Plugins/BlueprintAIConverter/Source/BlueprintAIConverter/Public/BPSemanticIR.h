@@ -79,6 +79,9 @@ struct FBPSemanticParameter
     FBPSemanticType Type;
     bool bIsOut = false;
     bool bIsReturn = false;
+    // メタデータが存在しない場合と空文字の既定値を区別する。
+    bool bHasDefaultValue = false;
+    FString DefaultValue;
 };
 
 struct FBPSemanticFunction
@@ -87,6 +90,11 @@ struct FBPSemanticFunction
     FBPSemanticType ReturnType;
     FString OwnerClassPath;
     FString SignatureSource;
+    // リフレクションから得た属性。NativeであってもBP Override可能なため単一の実装区分に集約しない。
+    bool bIsNative = false;
+    bool bIsStatic = false;
+    bool bIsConst = false;
+    bool bIsBlueprintEvent = false;
     TArray<FBPSemanticParameter> Parameters;
     TArray<FBPSemanticBasicBlock> Blocks;
 };
