@@ -99,4 +99,37 @@ bool FBPCopilotGraphJsonExporterTest::RunTest(const FString& Parameters)
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPCopilotGraphJsonInvalidLinkTest,
+    "BlueprintAIConverter.CopilotJson.InvalidLink",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPCopilotGraphJsonInvalidLinkTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR;
+    IR.AssetPath = TEXT("/Game/BP_InvalidLink.BP_InvalidLink");
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    FBPIRNode Node;
+    Node.Id = FGuid(1, 2, 3, 4);
+    FBPIRPin Pin;
+    Pin.Id = FGuid(5, 6, 7, 8);
+    Node.Pins.Add(Pin);
+    Graph.Nodes.Add(Node);
+    FBPIRLink Link;
+    Link.SourceNode = Node.Id;
+    Link.SourcePin = Pin.Id;
+    Link.TargetNode = FGuid(9, 10, 11, 12);
+    Link.TargetPin = FGuid(13, 14, 15, 16);
+    Graph.ExecEdges.Add(Link);
+    IR.Graphs.Add(Graph);
+    FString Path;
+    FString Error;
+    TestFalse(TEXT("存在しない接続先を拒否"),
+        FBPCopilotGraphJsonExporter::Export(IR, TEXT("5.7.4"), Path, Error));
+    TestTrue(TEXT("診断がある"), Error.Contains(TEXT("Invalid exec edge")));
+    TestTrue(TEXT("ファイルは保存されない"), Path.IsEmpty());
+    return true;
+}
+
 #endif
