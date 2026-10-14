@@ -147,6 +147,10 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
         {
             FunctionJson->SetStringField(TEXT("owner_class_path"), Function.OwnerClassPath);
             FunctionJson->SetStringField(TEXT("signature_source"), Function.SignatureSource);
+            FunctionJson->SetBoolField(TEXT("is_native"), Function.bIsNative);
+            FunctionJson->SetBoolField(TEXT("is_static"), Function.bIsStatic);
+            FunctionJson->SetBoolField(TEXT("is_const"), Function.bIsConst);
+            FunctionJson->SetBoolField(TEXT("is_blueprint_event"), Function.bIsBlueprintEvent);
             TArray<TSharedPtr<FJsonValue>> Parameters;
             for (const FBPSemanticParameter& Parameter : Function.Parameters)
             {
@@ -155,6 +159,15 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
                 ParamJson->SetObjectField(TEXT("type"), TypeToJson(Parameter.Type));
                 ParamJson->SetBoolField(TEXT("is_out"), Parameter.bIsOut);
                 ParamJson->SetBoolField(TEXT("is_return"), Parameter.bIsReturn);
+                ParamJson->SetBoolField(TEXT("has_default_value"), Parameter.bHasDefaultValue);
+                if (Parameter.bHasDefaultValue)
+                {
+                    ParamJson->SetStringField(TEXT("default_value"), Parameter.DefaultValue);
+                }
+                else
+                {
+                    ParamJson->SetField(TEXT("default_value"), MakeShared<FJsonValueNull>());
+                }
                 Parameters.Add(MakeShared<FJsonValueObject>(ParamJson));
             }
             FunctionJson->SetArrayField(TEXT("parameters"), Parameters);
