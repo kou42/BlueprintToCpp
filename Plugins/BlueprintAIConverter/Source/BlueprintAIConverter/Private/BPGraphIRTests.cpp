@@ -8,6 +8,8 @@
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
 #include "GameFramework/Actor.h"
+#include "K2Node_CallFunction.h"
+#include "Kismet/KismetSystemLibrary.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPGraphIRNullTest,
     "BlueprintAIConverter.IR.NullInput",
@@ -94,6 +96,40 @@ bool FBPGraphIRLinkTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Data target pin"), Result.DataEdges[0].TargetPin, DataIn->PinId);
     }
     TestEqual(TEXT("Input default value preserved"), Result.Nodes[1].Pins[1].DefaultValue, FString(TEXT("Hello")));
+    return true;
+}
+// 実際のUFunctionを参照するCallFunctionノードで、解決済みの正式な参照情報を確認する。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPGraphIRFunctionReferenceTest,
+    "BlueprintAIConverter.IR.FunctionReference",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPGraphIRFunctionReferenceTest::RunTest(const FString& Parameters)
+{
+    UBlueprint* Blueprint = NewObject<UBlueprint>(GetTransientPackage());
+    UEdGraph* Graph = NewObject<UEdGraph>(Blueprint);
+    Blueprint->UbergraphPages.Add(Graph);
+
+    UK2Node_CallFunction* Call = NewObject<UK2Node_CallFunction>(Graph);
+    Call->CreateNewGuid();
+    Call->SetFromFunction(UKismetSystemLibrary::StaticClass()->FindFunctionByName(
+        GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, PrintString)));
+    Graph->Nodes.Add(Call);
+
+    FBPGraphIR IR;
+    TestTrue(TEXT("関数参照付きIR生成"), FBPGraphIRBuilder::Build(Blueprint, IR));
+    if (IR.Graphs.Num() != 1 || IR.Graphs[0].Nodes.Num() != 1)
+    {
+        AddError(TEXT("関数ノードが取得できません"));
+        return false;
+    }
+    const FBPIRNode& Node = IR.Graphs[0].Nodes[0];
+    TestTrue(TEXT("関数参照を解決"), Node.bFunctionResolved);
+    TestEqual(TEXT("関数名"), Node.FunctionName, FName(TEXT("PrintString")));
+    TestEqual(TEXT("所有クラス"), Node.FunctionOwnerPath,
+        UKismetSystemLibrary::StaticClass()->GetPathName());
+    TestTrue(TEXT("関数パス"), Node.FunctionPath.IsEmpty() == false);
+    TestTrue(TEXT("Native属性"), Node.bFunctionNative);
+    TestTrue(TEXT("Static属性"), Node.bFunctionStatic);
     return true;
 }
 #endif
