@@ -25,6 +25,8 @@ FString TypeKindName(EBPSemanticTypeKind Kind)
     case EBPSemanticTypeKind::Struct: return TEXT("struct");
     case EBPSemanticTypeKind::Enum: return TEXT("enum");
     case EBPSemanticTypeKind::Byte: return TEXT("byte");
+    case EBPSemanticTypeKind::Delegate: return TEXT("delegate");
+    case EBPSemanticTypeKind::MulticastDelegate: return TEXT("multicast_delegate");
     }
     return TEXT("unresolved");
 }
@@ -89,6 +91,16 @@ TSharedRef<FJsonObject> TypeToJson(const FBPSemanticType& Type)
     Json->SetStringField(TEXT("inner_type"), Type.InnerType);
     Json->SetStringField(TEXT("key_type"), Type.KeyType);
     Json->SetStringField(TEXT("value_type"), Type.ValueType);
+    // 従来の文字列フィールドに加えて、ネストした型の意味情報を保持する。
+    Json->SetField(TEXT("element_type_info"), Type.ElementType.IsValid()
+        ? MakeShared<FJsonValueObject>(TypeToJson(*Type.ElementType))
+        : MakeShared<FJsonValueNull>());
+    Json->SetField(TEXT("key_type_info"), Type.KeyTypeInfo.IsValid()
+        ? MakeShared<FJsonValueObject>(TypeToJson(*Type.KeyTypeInfo))
+        : MakeShared<FJsonValueNull>());
+    Json->SetField(TEXT("value_type_info"), Type.ValueTypeInfo.IsValid()
+        ? MakeShared<FJsonValueObject>(TypeToJson(*Type.ValueTypeInfo))
+        : MakeShared<FJsonValueNull>());
     Json->SetBoolField(TEXT("is_reference"), Type.bIsReference);
     Json->SetBoolField(TEXT("is_const"), Type.bIsConst);
     return Json;
