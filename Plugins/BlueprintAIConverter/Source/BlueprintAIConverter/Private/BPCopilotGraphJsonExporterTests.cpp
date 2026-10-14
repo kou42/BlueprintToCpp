@@ -2,6 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 #include "BPCopilotGraphJsonExporter.h"
+#include "BPSemanticIR.h"
 #include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
@@ -39,10 +40,19 @@ bool FBPCopilotGraphJsonExporterTest::RunTest(const FString& Parameters)
     Graph.Nodes.Add(Node);
     IR.Graphs.Add(Graph);
 
+    FBPSemanticIR SemanticIR;
+    SemanticIR.AssetPath = IR.AssetPath;
+    SemanticIR.ParentClassPath = IR.ParentClassPath;
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("ExampleFunction");
+    SemanticIR.Functions.Add(Function);
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("ExampleVariable");
+    SemanticIR.Variables.Add(Variable);
     FString Path;
     FString Error;
     const bool bExported = FBPCopilotGraphJsonExporter::Export(
-        IR, TEXT("5.7.4"), Path, Error);
+        IR, TEXT("5.7.4"), Path, Error, &SemanticIR);
     TestTrue(TEXT("Copilot JSONを書き出す"), bExported);
     if (bExported == false)
     {
@@ -72,6 +82,9 @@ bool FBPCopilotGraphJsonExporterTest::RunTest(const FString& Parameters)
         FString(TEXT("blueprint_copilot_graph")));
     TestEqual(TEXT("解析状態"), Root->GetStringField(TEXT("semantic_status")),
         FString(TEXT("partial")));
+    const TSharedPtr<FJsonObject> Declarations = Root->GetObjectField(TEXT("semantic_declarations"));
+    TestEqual(TEXT("関数宣言数"), Declarations->GetArrayField(TEXT("functions")).Num(), 1);
+    TestEqual(TEXT("変数宣言数"), Declarations->GetArrayField(TEXT("variables")).Num(), 1);
     const TArray<TSharedPtr<FJsonValue>>& Graphs = Root->GetArrayField(TEXT("graphs"));
     if (Graphs.Num() != 1)
     {
