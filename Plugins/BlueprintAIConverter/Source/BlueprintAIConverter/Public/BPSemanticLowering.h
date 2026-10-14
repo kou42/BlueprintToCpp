@@ -25,4 +25,8 @@ public:
     // BeginPlayでGetActorLocationの結果をK2_SetActorLocationへ渡す限定縦断Lowering。
     static bool LowerActorLocation(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
+
+    // BeginPlayからbool Branchを通り、両枝でPrintStringを呼ぶ限定縦断Lowering。
+    static bool LowerBranch(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
+        FBPSemanticIR& OutIR);
 };

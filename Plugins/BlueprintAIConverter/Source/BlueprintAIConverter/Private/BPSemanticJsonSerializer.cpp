@@ -45,6 +45,7 @@ FString StatementKindName(EBPSemanticStatementKind Kind)
     case EBPSemanticStatementKind::Expression: return TEXT("expression");
     case EBPSemanticStatementKind::Assignment: return TEXT("assignment");
     case EBPSemanticStatementKind::Return: return TEXT("return");
+    case EBPSemanticStatementKind::Branch: return TEXT("branch");
     }
     return TEXT("expression");
 }
@@ -115,6 +116,18 @@ TSharedRef<FJsonObject> StatementToJson(const FBPSemanticStatement& Statement)
     Json->SetField(TEXT("source_node_id"), GuidValue(Statement.SourceNodeId));
     Json->SetField(TEXT("assignment_target"), OptionalName(Statement.AssignmentTarget));
     Json->SetObjectField(TEXT("expression"), ExpressionToJson(Statement.Expression));
+    TArray<TSharedPtr<FJsonValue>> ThenStatements;
+    for (const FBPSemanticStatement& Child : Statement.ThenStatements)
+    {
+        ThenStatements.Add(MakeShared<FJsonValueObject>(StatementToJson(Child)));
+    }
+    Json->SetArrayField(TEXT("then_statements"), ThenStatements);
+    TArray<TSharedPtr<FJsonValue>> ElseStatements;
+    for (const FBPSemanticStatement& Child : Statement.ElseStatements)
+    {
+        ElseStatements.Add(MakeShared<FJsonValueObject>(StatementToJson(Child)));
+    }
+    Json->SetArrayField(TEXT("else_statements"), ElseStatements);
     return Json;
 }
 }

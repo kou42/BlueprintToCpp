@@ -55,7 +55,8 @@ enum class EBPSemanticStatementKind : uint8
 {
     Expression,
     Assignment,
-    Return
+    Return,
+    Branch
 };
 
 struct FBPSemanticStatement
@@ -64,6 +65,9 @@ struct FBPSemanticStatement
     FGuid SourceNodeId;
     FBPSemanticExpression Expression;
     FName AssignmentTarget;
+    // BranchではExpressionをbool条件として使用し、各枝の文を順序付きで保持する。
+    TArray<FBPSemanticStatement> ThenStatements;
+    TArray<FBPSemanticStatement> ElseStatements;
 };
 
 struct FBPSemanticBasicBlock

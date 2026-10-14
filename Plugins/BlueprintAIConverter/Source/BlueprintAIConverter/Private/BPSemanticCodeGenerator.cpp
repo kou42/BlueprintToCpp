@@ -454,6 +454,80 @@ bool ReadBoolLiteral(const FBPSemanticExpression& Expression, FString& OutValue)
     return true;
 }
 
+bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
+    const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
+    TArray<FString>& Diagnostics)
+{
+    OutStatement.Reset();
+    if (Call.Kind != EBPSemanticExpressionKind::FunctionCall ||
+        Call.Type.Kind != EBPSemanticTypeKind::Void ||
+        Call.FunctionName != TEXT("PrintString") ||
+        Call.FunctionOwnerPath != TEXT("/Script/Engine.KismetSystemLibrary") ||
+        Call.Arguments.Num() != 7)
+    {
+        Diagnostics.Add(TEXT("Unsupported PrintString semantic signature"));
+        return false;
+    }
+    const FBPSemanticExpression& Context = Call.Arguments[0];
+    if (Context.Kind != EBPSemanticExpressionKind::VariableReference ||
+        Context.VariableName != TEXT("this") ||
+        Context.Type.Kind != EBPSemanticTypeKind::Object ||
+        Context.Type.TypePath != ParentClassPath ||
+        Context.Type.bIsReference || Context.Type.bIsConst)
+    {
+        Diagnostics.Add(TEXT("Unsupported PrintString world context"));
+        return false;
+    }
+
+    FString Text;
+    FString Screen;
+    FString Log;
+    FString Color;
+    FString DurationText;
+    FString Key;
+    if (ReadArgument(Call.Arguments[1], EBPSemanticTypeKind::String, Text, Diagnostics) == false ||
+        ReadArgument(Call.Arguments[2], EBPSemanticTypeKind::Bool, Screen, Diagnostics) == false ||
+        ReadArgument(Call.Arguments[3], EBPSemanticTypeKind::Bool, Log, Diagnostics) == false ||
+        ReadArgument(Call.Arguments[4], EBPSemanticTypeKind::Struct, Color, Diagnostics) == false ||
+        ReadArgument(Call.Arguments[5], EBPSemanticTypeKind::Float, DurationText, Diagnostics) == false ||
+        ReadArgument(Call.Arguments[6], EBPSemanticTypeKind::String, Key, Diagnostics) == false)
+    {
+        return false;
+    }
+    if ((Screen != TEXT("true") && Screen != TEXT("false")) ||
+        (Log != TEXT("true") && Log != TEXT("false")) ||
+        Call.Arguments[4].Type.TypePath != TEXT("/Script/CoreUObject.LinearColor"))
+    {
+        Diagnostics.Add(TEXT("Invalid PrintString boolean or color type"));
+        return false;
+    }
+    float Duration = 0.0f;
+    FLinearColor LinearColor;
+    if (LexTryParseString(Duration, *DurationText) == false ||
+        FMath::IsFinite(Duration) == false ||
+        LinearColor.InitFromString(Color) == false ||
+        FMath::IsFinite(LinearColor.R) == false || FMath::IsFinite(LinearColor.G) == false ||
+        FMath::IsFinite(LinearColor.B) == false || FMath::IsFinite(LinearColor.A) == false)
+    {
+        Diagnostics.Add(TEXT("Invalid PrintString duration or color"));
+        return false;
+    }
+    FString EscapedText;
+    FString EscapedKey;
+    if (EscapeString(Text, EscapedText, Diagnostics) == false ||
+        EscapeString(Key, EscapedKey, Diagnostics) == false)
+    {
+        return false;
+    }
+    OutStatement = FString::Printf(
+        TEXT("%sUKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n"),
+        *Indent, *EscapedText, *Screen, *Log,
+        *FloatLiteral(LinearColor.R), *FloatLiteral(LinearColor.G),
+        *FloatLiteral(LinearColor.B), *FloatLiteral(LinearColor.A),
+        *FloatLiteral(Duration), *EscapedKey);
+    return true;
+}
+
 bool EmitActorLocationStatement(const FBPSemanticExpression& Call,
     const FString& ParentClassPath, FString& OutStatement,
     TArray<FString>& Diagnostics)
@@ -574,6 +648,71 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     }
     const FBPSemanticStatement& Statement = Function.Blocks[0].Statements[0];
     const FBPSemanticExpression& Call = Statement.Expression;
+    if (Statement.Kind == EBPSemanticStatementKind::Branch)
+    {
+        FString Condition;
+        if (ReadBoolLiteral(Statement.Expression, Condition) == false ||
+            Statement.ThenStatements.Num() != 1 || Statement.ElseStatements.Num() != 1)
+        {
+            OutDiagnostics.Add(TEXT("Branch requires one bool literal condition and one statement in each output"));
+            return false;
+        }
+        const FBPSemanticStatement& ThenStatement = Statement.ThenStatements[0];
+        const FBPSemanticStatement& ElseStatement = Statement.ElseStatements[0];
+        if (ThenStatement.Kind != EBPSemanticStatementKind::Expression ||
+            ElseStatement.Kind != EBPSemanticStatementKind::Expression ||
+            ThenStatement.ThenStatements.IsEmpty() == false ||
+            ThenStatement.ElseStatements.IsEmpty() == false ||
+            ElseStatement.ThenStatements.IsEmpty() == false ||
+            ElseStatement.ElseStatements.IsEmpty() == false)
+        {
+            OutDiagnostics.Add(TEXT("Branch outputs contain an unsupported semantic statement"));
+            return false;
+        }
+        FString ThenCode;
+        FString ElseCode;
+        if (EmitPrintStringStatement(ThenStatement.Expression, IR.ParentClassPath,
+            TEXT("        "), ThenCode, OutDiagnostics) == false ||
+            EmitPrintStringStatement(ElseStatement.Expression, IR.ParentClassPath,
+                TEXT("        "), ElseCode, OutDiagnostics) == false)
+        {
+            return false;
+        }
+
+        FString VariableDeclarations;
+        FString ConstructorBody;
+        if (EmitVariables(IR.Variables, ClassName, VariableDeclarations,
+            ConstructorBody, OutDiagnostics, VariableFallbackMode) == false)
+        {
+            return false;
+        }
+        const FString BaseName = ClassName.Mid(1);
+        const FString ApiPrefix = ModuleApiMacro.IsEmpty()
+            ? FString() : ModuleApiMacro + TEXT(" ");
+        const FString ConstructorDeclaration = ConstructorBody.IsEmpty()
+            ? FString()
+            : FString::Printf(TEXT("public:\n    %s();\n\n"), *ClassName);
+        const FString UnrealTypeInclude = ConstructorBody.IsEmpty()
+            ? FString()
+            : TEXT("#include \"UObject/UnrealType.h\"\n");
+        const FString ConstructorDefinition = ConstructorBody.IsEmpty()
+            ? FString()
+            : FString::Printf(TEXT("\n%s::%s()\n{\n%s}\n"),
+                *ClassName, *ClassName, *ConstructorBody);
+        FBPGeneratedActorFiles Files;
+        Files.HeaderFileName = BaseName + TEXT(".h");
+        Files.SourceFileName = BaseName + TEXT(".cpp");
+        Files.HeaderContent = FString::Printf(
+            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%sprotected:\n    virtual void BeginPlay() override;\n};\n"),
+            *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
+            *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration);
+        Files.SourceContent = FString::Printf(
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    if (%s)\n    {\n%s    }\n    else\n    {\n%s    }\n}\n"),
+            *BaseName, *UnrealTypeInclude, *ConstructorDefinition,
+            *ClassName, *Condition, *ThenCode, *ElseCode);
+        OutFiles = MoveTemp(Files);
+        return true;
+    }
     if (Statement.Kind == EBPSemanticStatementKind::Expression &&
         Call.FunctionName == TEXT("K2_SetActorLocation"))
     {
