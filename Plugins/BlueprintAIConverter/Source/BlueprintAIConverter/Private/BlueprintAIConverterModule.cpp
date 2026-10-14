@@ -396,10 +396,17 @@ private:
                                 FText::FromString(TEXT("Graph IR build failed. Copilot JSON was not saved.")));
                             return;
                         }
+                        // Graph IRとは別に、Blueprintの宣言情報をReflectionから取得する。
+                        // PrintString限定のLoweringには依存させない。
+                        FBPSemanticIR SemanticIR;
+                        SemanticIR.AssetPath = GraphIR.AssetPath;
+                        SemanticIR.ParentClassPath = GraphIR.ParentClassPath;
+                        FBPSemanticVariableExtractor::Append(Blueprint, SemanticIR);
+                        FBPSemanticFunctionExtractor::Append(Blueprint, SemanticIR);
                         FString Path;
                         FString Error;
                         if (FBPCopilotGraphJsonExporter::Export(
-                            GraphIR, FEngineVersion::Current().ToString(), Path, Error) == false)
+                            GraphIR, FEngineVersion::Current().ToString(), Path, Error, &SemanticIR) == false)
                         {
                             UE_LOG(LogBlueprintAIConverter, Error, TEXT("Copilot JSON export failed: %s"), *Error);
                             FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Error));
