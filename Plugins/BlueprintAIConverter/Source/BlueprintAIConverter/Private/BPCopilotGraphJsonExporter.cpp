@@ -84,7 +84,12 @@ bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& En
             NodeJson->SetBoolField(TEXT("function_const"), Node.bFunctionConst);
             NodeJson->SetStringField(TEXT("variable_name"), Node.VariableName.ToString());
             TArray<TSharedPtr<FJsonValue>> Pins;
-            for (const FBPIRPin& Pin : Node.Pins)
+            TArray<FBPIRPin> SortedPins = Node.Pins;
+            SortedPins.Sort([](const FBPIRPin& A, const FBPIRPin& B)
+            {
+                return A.Id.ToString() < B.Id.ToString();
+            });
+            for (const FBPIRPin& Pin : SortedPins)
             {
                 TSharedRef<FJsonObject> PinJson = MakeShared<FJsonObject>();
                 PinJson->SetField(TEXT("id"), GuidJson(Pin.Id));
