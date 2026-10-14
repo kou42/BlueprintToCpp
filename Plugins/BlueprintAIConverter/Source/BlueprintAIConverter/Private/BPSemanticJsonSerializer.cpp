@@ -23,6 +23,8 @@ FString TypeKindName(EBPSemanticTypeKind Kind)
     case EBPSemanticTypeKind::Text: return TEXT("text");
     case EBPSemanticTypeKind::Object: return TEXT("object");
     case EBPSemanticTypeKind::Struct: return TEXT("struct");
+    case EBPSemanticTypeKind::Enum: return TEXT("enum");
+    case EBPSemanticTypeKind::Byte: return TEXT("byte");
     }
     return TEXT("unresolved");
 }
@@ -83,6 +85,10 @@ TSharedRef<FJsonObject> TypeToJson(const FBPSemanticType& Type)
     TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
     Json->SetStringField(TEXT("kind"), TypeKindName(Type.Kind));
     Json->SetStringField(TEXT("type_path"), Type.TypePath);
+    Json->SetStringField(TEXT("container_kind"), Type.ContainerKind);
+    Json->SetStringField(TEXT("inner_type"), Type.InnerType);
+    Json->SetStringField(TEXT("key_type"), Type.KeyType);
+    Json->SetStringField(TEXT("value_type"), Type.ValueType);
     Json->SetBoolField(TEXT("is_reference"), Type.bIsReference);
     Json->SetBoolField(TEXT("is_const"), Type.bIsConst);
     return Json;
@@ -170,6 +176,7 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
                 TSharedRef<FJsonObject> ParamJson = MakeShared<FJsonObject>();
                 ParamJson->SetStringField(TEXT("name"), Parameter.Name.ToString());
                 ParamJson->SetObjectField(TEXT("type"), TypeToJson(Parameter.Type));
+                ParamJson->SetNumberField(TEXT("declaration_index"), Parameter.DeclarationIndex);
                 ParamJson->SetBoolField(TEXT("is_out"), Parameter.bIsOut);
                 ParamJson->SetBoolField(TEXT("is_return"), Parameter.bIsReturn);
                 ParamJson->SetBoolField(TEXT("has_default_value"), Parameter.bHasDefaultValue);
