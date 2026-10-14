@@ -79,6 +79,7 @@ void AppendGraph(const UEdGraph* Graph, const FString& Kind, FBPGraphIR& IR)
         if (const UK2Node_Variable* Variable = Cast<UK2Node_Variable>(Node))
         {
             IRNode.VariableName = Variable->VariableReference.GetMemberName();
+            IRNode.bVariableSelfContext = Variable->VariableReference.IsSelfContext();
         }
 
         for (const UEdGraphPin* Pin : Node->Pins)

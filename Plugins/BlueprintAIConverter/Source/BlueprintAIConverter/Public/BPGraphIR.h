@@ -35,6 +35,7 @@ struct FBPIRNode
     bool bFunctionPure = false;
     bool bFunctionConst = false;
     FName VariableName;
+    bool bVariableSelfContext = false;
     TArray<FBPIRPin> Pins;
 };
 

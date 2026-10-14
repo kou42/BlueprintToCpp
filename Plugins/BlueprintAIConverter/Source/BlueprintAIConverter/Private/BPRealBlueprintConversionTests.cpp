@@ -48,6 +48,40 @@ bool AddStructVariable(UBlueprint* Blueprint, const FName Name, UScriptStruct* S
     Type.PinSubCategoryObject = Struct;
     return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, DefaultValue);
 }
+
+bool AddIntArrayVariable(UBlueprint* Blueprint, const FName Name, const FString& DefaultValue)
+{
+    FEdGraphPinType Type;
+    Type.PinCategory = UEdGraphSchema_K2::PC_Int;
+    Type.ContainerType = EPinContainerType::Array;
+    return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, DefaultValue);
+}
+
+bool AddIntSetVariable(UBlueprint* Blueprint, const FName Name)
+{
+    FEdGraphPinType Type;
+    Type.PinCategory = UEdGraphSchema_K2::PC_Int;
+    Type.ContainerType = EPinContainerType::Set;
+    return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, FString());
+}
+
+bool AddNameIntMapVariable(UBlueprint* Blueprint, const FName Name)
+{
+    FEdGraphPinType Type;
+    Type.PinCategory = UEdGraphSchema_K2::PC_Name;
+    Type.ContainerType = EPinContainerType::Map;
+    Type.PinValueType.TerminalCategory = UEdGraphSchema_K2::PC_Int;
+    return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, FString());
+}
+
+bool AddNativeEnumVariable(UBlueprint* Blueprint, const FName Name, UEnum* Enum,
+    const FString& DefaultValue)
+{
+    FEdGraphPinType Type;
+    Type.PinCategory = UEdGraphSchema_K2::PC_Byte;
+    Type.PinSubCategoryObject = Enum;
+    return FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, DefaultValue);
+}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealBlueprintPrintStringConversionTest,
@@ -133,6 +167,24 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
     TestTrue(TEXT("FVectorメンバー変数を追加"), AddStructVariable(
         Blueprint, TEXT("SpawnOffset"), TBaseStructure<FVector>::Get(),
         TEXT("(X=125.0,Y=-50.0,Z=300.0)")));
+    TestTrue(TEXT("FRotatorメンバー変数を追加"), AddStructVariable(
+        Blueprint, TEXT("SpawnRotation"), TBaseStructure<FRotator>::Get(),
+        TEXT("(Pitch=10.0,Yaw=20.0,Roll=30.0)")));
+    TestTrue(TEXT("FTransformメンバー変数を追加"), AddStructVariable(
+        Blueprint, TEXT("SpawnTransform"), TBaseStructure<FTransform>::Get(),
+        FString()));
+    TestTrue(TEXT("FLinearColorメンバー変数を追加"), AddStructVariable(
+        Blueprint, TEXT("Tint"), TBaseStructure<FLinearColor>::Get(),
+        TEXT("(R=0.1,G=0.2,B=0.3,A=1.0)")));
+    TestTrue(TEXT("int32配列メンバー変数を追加"), AddIntArrayVariable(
+        Blueprint, TEXT("Checkpoints"), TEXT("(10,20,30)")));
+    TestTrue(TEXT("int32 Setメンバー変数を追加"), AddIntSetVariable(
+        Blueprint, TEXT("VisitedIds")));
+    TestTrue(TEXT("FName-int32 Mapメンバー変数を追加"), AddNameIntMapVariable(
+        Blueprint, TEXT("Scores")));
+    TestTrue(TEXT("ネイティブEnumメンバー変数を追加"), AddNativeEnumVariable(
+        Blueprint, TEXT("TraceChannel"), StaticEnum<ECollisionChannel>(),
+        TEXT("ECC_Visibility")));
 
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
     TestNotNull(TEXT("Blueprintをコンパイル"), Blueprint->GeneratedClass.Get());
@@ -141,7 +193,7 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
     TestTrue(TEXT("実BlueprintからGraph IRを生成"), FBPGraphIRBuilder::Build(Blueprint, GraphIR));
     TestEqual(TEXT("Pawn親クラスパスを保持"),
         GraphIR.ParentClassPath, APawn::StaticClass()->GetPathName());
-    TestEqual(TEXT("Blueprintメンバー変数数を保持"), GraphIR.BlueprintVariableCount, 9);
+    TestEqual(TEXT("Blueprintメンバー変数数を保持"), GraphIR.BlueprintVariableCount, 16);
 
     FBPSemanticIR SemanticIR;
     if (TestTrue(TEXT("実GraphをSemantic IRへLowering"),
@@ -190,7 +242,37 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
         Files.SourceContent.Contains(TEXT("X=125.000000")) &&
         Files.SourceContent.Contains(TEXT("Y=-50.000000")) &&
         Files.SourceContent.Contains(TEXT("Z=300.000000")));
-    TestEqual(TEXT("Variable IRを9件保持"), SemanticIR.Variables.Num(), 9);
+    TestTrue(TEXT("int32配列宣言"),
+        Files.HeaderContent.Contains(TEXT("TArray<int32> Checkpoints{};")));
+    TestTrue(TEXT("int32配列既定値を汎用ImportTextで復元"),
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, Checkpoints)")) &&
+        Files.SourceContent.Contains(TEXT("(10,20,30)")));
+    TestTrue(TEXT("FRotator既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("FRotator SpawnRotation{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, SpawnRotation)")));
+    TestTrue(TEXT("FTransform既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("FTransform SpawnTransform{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, SpawnTransform)")));
+    TestTrue(TEXT("FLinearColor既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("FLinearColor Tint{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, Tint)")));
+    TestTrue(TEXT("TSet<int32>既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("TSet<int32> VisitedIds{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, VisitedIds)")));
+    TestTrue(TEXT("TMap<FName, int32>既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("TMap<FName,int32> Scores{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, Scores)")));
+    TestTrue(TEXT("ネイティブEnum既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("TraceChannel{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, TraceChannel)")));
+    TestEqual(TEXT("Variable IRを16件保持"), SemanticIR.Variables.Num(), 16);
     for (const FBPSemanticVariable& Variable : SemanticIR.Variables)
     {
         TestTrue(*FString::Printf(TEXT("%sの反射C++型を保持"), *Variable.Name.ToString()),
@@ -213,6 +295,21 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
         TestTrue(TEXT("FVectorはImportText初期化"),
             SpawnOffset->InitializationStrategy == EBPVariableInitializationStrategy::ImportText);
         TestEqual(TEXT("FVector既定値ソース"), SpawnOffset->DefaultValueSource,
+            FString(TEXT("cdo_export_text")));
+    }
+    const FBPSemanticVariable* Checkpoints = SemanticIR.Variables.FindByPredicate(
+        [](const FBPSemanticVariable& Variable)
+        {
+            return Variable.Name == TEXT("Checkpoints");
+        });
+    TestNotNull(TEXT("TArray<int32> Variable IR"), Checkpoints);
+    if (Checkpoints != nullptr)
+    {
+        TestEqual(TEXT("配列の反射C++型"), Checkpoints->ReflectedCppType,
+            FString(TEXT("TArray<int32>")));
+        TestTrue(TEXT("配列はImportText初期化"),
+            Checkpoints->InitializationStrategy == EBPVariableInitializationStrategy::ImportText);
+        TestEqual(TEXT("配列既定値ソース"), Checkpoints->DefaultValueSource,
             FString(TEXT("cdo_export_text")));
     }
 
