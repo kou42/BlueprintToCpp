@@ -141,6 +141,15 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
     TestTrue(TEXT("FVectorメンバー変数を追加"), AddStructVariable(
         Blueprint, TEXT("SpawnOffset"), TBaseStructure<FVector>::Get(),
         TEXT("(X=125.0,Y=-50.0,Z=300.0)")));
+    TestTrue(TEXT("FRotatorメンバー変数を追加"), AddStructVariable(
+        Blueprint, TEXT("SpawnRotation"), TBaseStructure<FRotator>::Get(),
+        TEXT("(Pitch=10.0,Yaw=20.0,Roll=30.0)")));
+    TestTrue(TEXT("FTransformメンバー変数を追加"), AddStructVariable(
+        Blueprint, TEXT("SpawnTransform"), TBaseStructure<FTransform>::Get(),
+        FString()));
+    TestTrue(TEXT("FLinearColorメンバー変数を追加"), AddStructVariable(
+        Blueprint, TEXT("Tint"), TBaseStructure<FLinearColor>::Get(),
+        TEXT("(R=0.1,G=0.2,B=0.3,A=1.0)")));
     TestTrue(TEXT("int32配列メンバー変数を追加"), AddIntArrayVariable(
         Blueprint, TEXT("Checkpoints"), TEXT("(10,20,30)")));
 
@@ -151,7 +160,7 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
     TestTrue(TEXT("実BlueprintからGraph IRを生成"), FBPGraphIRBuilder::Build(Blueprint, GraphIR));
     TestEqual(TEXT("Pawn親クラスパスを保持"),
         GraphIR.ParentClassPath, APawn::StaticClass()->GetPathName());
-    TestEqual(TEXT("Blueprintメンバー変数数を保持"), GraphIR.BlueprintVariableCount, 10);
+    TestEqual(TEXT("Blueprintメンバー変数数を保持"), GraphIR.BlueprintVariableCount, 13);
 
     FBPSemanticIR SemanticIR;
     if (TestTrue(TEXT("実GraphをSemantic IRへLowering"),
@@ -206,7 +215,19 @@ bool FBPRealBlueprintPrintStringConversionTest::RunTest(const FString& Parameter
         Files.SourceContent.Contains(
             TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, Checkpoints)")) &&
         Files.SourceContent.Contains(TEXT("(10,20,30)")));
-    TestEqual(TEXT("Variable IRを10件保持"), SemanticIR.Variables.Num(), 10);
+    TestTrue(TEXT("FRotator既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("FRotator SpawnRotation{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, SpawnRotation)")));
+    TestTrue(TEXT("FTransform既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("FTransform SpawnTransform{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, SpawnTransform)")));
+    TestTrue(TEXT("FLinearColor既定値を汎用ImportTextで復元"),
+        Files.HeaderContent.Contains(TEXT("FLinearColor Tint{};")) &&
+        Files.SourceContent.Contains(
+            TEXT("GET_MEMBER_NAME_CHECKED(ARealPawnPrintString, Tint)")));
+    TestEqual(TEXT("Variable IRを13件保持"), SemanticIR.Variables.Num(), 13);
     for (const FBPSemanticVariable& Variable : SemanticIR.Variables)
     {
         TestTrue(*FString::Printf(TEXT("%sの反射C++型を保持"), *Variable.Name.ToString()),
