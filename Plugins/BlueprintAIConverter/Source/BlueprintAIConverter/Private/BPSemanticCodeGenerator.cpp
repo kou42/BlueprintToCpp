@@ -1,4 +1,5 @@
 #include "BPSemanticCodeGenerator.h"
+#include "BPNumericComparisonResolver.h"
 #include "BPParentClassResolver.h"
 
 namespace
@@ -68,12 +69,49 @@ FString DoubleLiteral(double Value)
     return Result;
 }
 
+bool EmitNumericLiteral(const EBPSemanticTypeKind Type, const FString& Value,
+    FString& OutLiteral)
+{
+    FString CanonicalValue;
+    if (FBPNumericComparisonResolver::CanonicalizeLiteral(
+        Type, Value, CanonicalValue) == false)
+    {
+        return false;
+    }
+    if (Type == EBPSemanticTypeKind::Int32)
+    {
+        OutLiteral = MoveTemp(CanonicalValue);
+        return true;
+    }
+    if (Type == EBPSemanticTypeKind::Float)
+    {
+        float Parsed = 0.0f;
+        if (LexTryParseString(Parsed, *CanonicalValue) == false)
+        {
+            return false;
+        }
+        OutLiteral = FloatLiteral(Parsed);
+        return true;
+    }
+    if (Type == EBPSemanticTypeKind::Double)
+    {
+        double Parsed = 0.0;
+        if (LexTryParseString(Parsed, *CanonicalValue) == false)
+        {
+            return false;
+        }
+        OutLiteral = DoubleLiteral(Parsed);
+        return true;
+    }
+    return false;
+}
+
 bool ReadArgument(const FBPSemanticExpression& Arg, EBPSemanticTypeKind Expected,
     FString& Out, TArray<FString>& Diagnostics)
 {
     if (Arg.Kind != EBPSemanticExpressionKind::Literal || Arg.Type.Kind != Expected)
     {
-        Diagnostics.Add(TEXT("Unsupported PrintString argument expression or type"));
+        Diagnostics.Add(TEXT("Unsupported literal argument expression or type"));
         return false;
     }
     Out = Arg.LiteralValue;
@@ -464,32 +502,39 @@ bool EmitBranchCondition(const FBPSemanticExpression& Expression,
     if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
         Expression.Type.Kind != EBPSemanticTypeKind::Bool ||
         Expression.Type.bIsReference || Expression.Type.bIsConst ||
-        Expression.FunctionName != TEXT("Greater_IntInt") ||
-        Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
         Expression.Arguments.Num() != 2)
     {
         Diagnostics.Add(TEXT("Unsupported Branch condition expression"));
         return false;
     }
+
+    FBPNumericComparison Comparison;
+    if (FBPNumericComparisonResolver::Resolve(Expression.FunctionOwnerPath,
+        Expression.FunctionName, Comparison, Diagnostics) == false)
+    {
+        return false;
+    }
     FString AText;
     FString BText;
-    if (ReadArgument(Expression.Arguments[0], EBPSemanticTypeKind::Int32,
+    if (ReadArgument(Expression.Arguments[0], Comparison.OperandType,
         AText, Diagnostics) == false ||
-        ReadArgument(Expression.Arguments[1], EBPSemanticTypeKind::Int32,
+        ReadArgument(Expression.Arguments[1], Comparison.OperandType,
             BText, Diagnostics) == false ||
         Expression.Arguments[0].Type.bIsReference || Expression.Arguments[0].Type.bIsConst ||
         Expression.Arguments[1].Type.bIsReference || Expression.Arguments[1].Type.bIsConst)
     {
         return false;
     }
-    int32 A = 0;
-    int32 B = 0;
-    if (LexTryParseString(A, *AText) == false || LexTryParseString(B, *BText) == false)
+    FString A;
+    FString B;
+    if (EmitNumericLiteral(Comparison.OperandType, AText, A) == false ||
+        EmitNumericLiteral(Comparison.OperandType, BText, B) == false)
     {
-        Diagnostics.Add(TEXT("Invalid integer greater-than comparison literal"));
+        Diagnostics.Add(TEXT("Invalid numeric comparison literal"));
         return false;
     }
-    OutCondition = FString::Printf(TEXT("%s > %s"), *LexToString(A), *LexToString(B));
+    OutCondition = FString::Printf(TEXT("%s %s %s"),
+        *A, *Comparison.OperatorToken, *B);
     return true;
 }
 

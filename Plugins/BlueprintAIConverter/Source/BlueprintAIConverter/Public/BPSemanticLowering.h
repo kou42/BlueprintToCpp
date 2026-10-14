@@ -26,7 +26,7 @@ public:
     static bool LowerActorLocation(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
 
-    // BeginPlayからboolリテラルまたは整数比較のBranchを通り、
+    // BeginPlayからboolリテラルまたは反射検証済み数値比較のBranchを通り、
     // 両枝でPrintStringを呼ぶ限定縦断Lowering。
     static bool LowerBranch(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);

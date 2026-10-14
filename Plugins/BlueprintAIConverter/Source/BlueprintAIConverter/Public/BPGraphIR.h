@@ -26,6 +26,7 @@ struct FBPIRNode
     FString ClassPath;
     FString Title;
     FName FunctionName;
+    FString FunctionOwnerPath;
     FName VariableName;
     TArray<FBPIRPin> Pins;
 };

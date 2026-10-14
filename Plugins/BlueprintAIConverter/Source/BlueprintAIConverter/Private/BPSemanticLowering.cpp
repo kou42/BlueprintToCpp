@@ -5,6 +5,7 @@
 #include "BPConnectedActorLocationLowering.h"
 #include "BPConnectedFunctionCallEmitter.h"
 #include "BPFunctionSignatureResolver.h"
+#include "BPNumericComparisonResolver.h"
 #include "BPOutputParameterStorage.h"
 #include "BPSemanticVariableExtractor.h"
 
@@ -242,25 +243,54 @@ bool AnalyzeBranchPrint(const FBPGraphIR& GraphIR, const FBPIRGraph& Graph,
     return true;
 }
 
-bool LowerIntGreaterCondition(const FBPIRGraph& Graph, const FBPIRNode& Comparison,
+bool LowerNumericComparisonCondition(const FBPIRGraph& Graph, const FBPIRNode& Comparison,
     const FBPIRNode& Branch, const FBPIRPin& Condition,
     FBPSemanticExpression& OutExpression, FBPSemanticIR& OutIR)
 {
+    FBPNumericComparison ResolvedComparison;
+    TArray<FString> ResolverDiagnostics;
+    if (FBPNumericComparisonResolver::Resolve(Comparison.FunctionOwnerPath,
+        Comparison.FunctionName, ResolvedComparison, ResolverDiagnostics) == false)
+    {
+        for (const FString& Message : ResolverDiagnostics)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Comparison.Id, Message);
+        }
+        return false;
+    }
+
     const FBPIRPin* A = FindPin(Comparison, TEXT("A"), EGPD_Input);
     const FBPIRPin* B = FindPin(Comparison, TEXT("B"), EGPD_Input);
     const FBPIRPin* ReturnValue = FindPin(Comparison, TEXT("ReturnValue"), EGPD_Output);
-    if (A == nullptr || B == nullptr || ReturnValue == nullptr ||
-        A->Category != UEdGraphSchema_K2::PC_Int ||
-        B->Category != UEdGraphSchema_K2::PC_Int ||
+    const bool bHasUnexpectedPin = Comparison.Pins.ContainsByPredicate(
+        [A, B, ReturnValue, &ResolvedComparison](const FBPIRPin& Pin)
+        {
+            if (&Pin == A || &Pin == B || &Pin == ReturnValue)
+            {
+                return false;
+            }
+            // Blueprint Function Libraryの非表示selfピンだけは、所有型まで一致する場合に許可する。
+            return Pin.Name != UEdGraphSchema_K2::PN_Self ||
+                Pin.Direction != EGPD_Input ||
+                Pin.Category != UEdGraphSchema_K2::PC_Object ||
+                Pin.SubCategoryObjectPath != ResolvedComparison.FunctionOwnerPath;
+        });
+    if (A == nullptr || B == nullptr || ReturnValue == nullptr || bHasUnexpectedPin ||
+        FBPNumericComparisonResolver::MatchesPinType(
+            A->Category, A->SubCategory, ResolvedComparison.OperandType) == false ||
+        FBPNumericComparisonResolver::MatchesPinType(
+            B->Category, B->SubCategory, ResolvedComparison.OperandType) == false ||
         ReturnValue->Category != UEdGraphSchema_K2::PC_Boolean ||
+        ReturnValue->SubCategory.IsNone() == false ||
         Condition.Category != UEdGraphSchema_K2::PC_Boolean ||
+        Condition.SubCategory.IsNone() == false ||
         (A->DefaultObjectPath.IsEmpty() == false && A->DefaultObjectPath != TEXT("None")) ||
         (B->DefaultObjectPath.IsEmpty() == false && B->DefaultObjectPath != TEXT("None")) ||
         A->DefaultText.IsEmpty() == false || B->DefaultText.IsEmpty() == false)
     {
         AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
             FString::Printf(
-                TEXT("Integer greater-than comparison pins are invalid: A=%s/%s B=%s/%s ReturnValue=%s/%s Condition=%s/%s"),
+                TEXT("Numeric comparison pins are invalid: A=%s/%s B=%s/%s ReturnValue=%s/%s Condition=%s/%s"),
                 A != nullptr ? *A->Category.ToString() : TEXT("missing"),
                 A != nullptr ? *A->SubCategory.ToString() : TEXT("missing"),
                 B != nullptr ? *B->Category.ToString() : TEXT("missing"),
@@ -273,7 +303,7 @@ bool LowerIntGreaterCondition(const FBPIRGraph& Graph, const FBPIRNode& Comparis
     if (Graph.DataEdges.Num() != 1)
     {
         AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
-            TEXT("Integer comparison must have exactly one consumer"));
+            TEXT("Numeric comparison must have exactly one consumer"));
         return false;
     }
     const FBPIRLink& Edge = Graph.DataEdges[0];
@@ -281,17 +311,19 @@ bool LowerIntGreaterCondition(const FBPIRGraph& Graph, const FBPIRNode& Comparis
         Edge.TargetNode != Branch.Id || Edge.TargetPin != Condition.Id)
     {
         AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
-            TEXT("Integer comparison result must connect directly to Branch Condition"));
+            TEXT("Numeric comparison result must connect directly to Branch Condition"));
         return false;
     }
 
-    int32 AValue = 0;
-    int32 BValue = 0;
-    if (LexTryParseString(AValue, *A->DefaultValue) == false ||
-        LexTryParseString(BValue, *B->DefaultValue) == false)
+    FString AValue;
+    FString BValue;
+    if (FBPNumericComparisonResolver::CanonicalizeLiteral(
+            ResolvedComparison.OperandType, A->DefaultValue, AValue) == false ||
+        FBPNumericComparisonResolver::CanonicalizeLiteral(
+            ResolvedComparison.OperandType, B->DefaultValue, BValue) == false)
     {
         AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
-            TEXT("Integer comparison requires valid int32 literal inputs"));
+            TEXT("Numeric comparison requires finite literals of the reflected operand type"));
         return false;
     }
 
@@ -301,12 +333,12 @@ bool LowerIntGreaterCondition(const FBPIRGraph& Graph, const FBPIRNode& Comparis
     OutExpression.Type.Kind = EBPSemanticTypeKind::Bool;
     OutExpression.SourceNodeId = Comparison.Id;
     OutExpression.SourcePinId = ReturnValue->Id;
-    OutExpression.FunctionName = TEXT("Greater_IntInt");
-    OutExpression.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    OutExpression.FunctionName = ResolvedComparison.FunctionName;
+    OutExpression.FunctionOwnerPath = ResolvedComparison.FunctionOwnerPath;
     OutExpression.Arguments.Add(Literal(
-        EBPSemanticTypeKind::Int32, LexToString(AValue), Comparison, TEXT("A")));
+        ResolvedComparison.OperandType, AValue, Comparison, TEXT("A")));
     OutExpression.Arguments.Add(Literal(
-        EBPSemanticTypeKind::Int32, LexToString(BValue), Comparison, TEXT("B")));
+        ResolvedComparison.OperandType, BValue, Comparison, TEXT("B")));
     return true;
 }
 
@@ -412,13 +444,12 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         {
             Prints.Add(&Node);
         }
-        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
-            Node.FunctionName == TEXT("Greater_IntInt"))
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction"))
         {
             if (Comparison != nullptr)
             {
                 AddDiagnostic(OutIR, Graph.Name, Node.Id,
-                    TEXT("Duplicate integer comparison node"));
+                    TEXT("Duplicate numeric comparison node"));
                 return false;
             }
             Comparison = &Node;
@@ -453,7 +484,7 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     FBPSemanticExpression ConditionExpression;
     if (Comparison != nullptr)
     {
-        if (LowerIntGreaterCondition(Graph, *Comparison, *Branch,
+        if (LowerNumericComparisonCondition(Graph, *Comparison, *Branch,
             *Condition, ConditionExpression, OutIR) == false)
         {
             return false;

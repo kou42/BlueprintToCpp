@@ -128,10 +128,10 @@ C++ Generator（宣言・式・文・関数・クラス）
 | Semantic IR / PrintString変換 | **最小縦断実装済み・Automation/UHT/UBT確認済み** | 型付きIR、Lowering、C++ Generator、比較テストを追加。実Generator出力の隔離UHT/UBTまで確認。実行時の意味一致と汎用UFunction変換は未完了 |
 | Phase 2 UFunction呼び出し基盤 | **限定縦断実装済み・Automation/UHT/UBT確認済み** | 反射署名・ピン検証に加え、実BlueprintのBeginPlay→K2_SetActorLocationとK2_GetActorLocation.ReturnValue→NewLocationを通常Semantic経路へ統合。FHitResult出力領域を生成し、改ざん型を拒否する。一般関数、複数Consumer、接続済み戻り値は未対応 |
 | Blueprintメンバー変数・初期値 | **限定実装済み・Automation/UHT/UBT確認済み** | 基本型はCDOから型安全に生成。その他の値型はExportText/ImportTextの往復一致を条件に、FVector、FRotator、FTransform、FLinearColor、TArray/TSet/TMap、ネイティブEnumを実Blueprintで汎用復元。未検証型は日本語コメント付き宣言へフォールバックするが、UPROPERTYメタデータ、Object参照、ユーザー定義型等は未対応 |
-| Phase 4 制御フロー | **bool Branch・整数比較の限定縦断を実装済み・Automation/UHT/UBT確認済み** | 実BlueprintのBeginPlay→Branch→両枝PrintStringに加え、`Greater_IntInt`→Conditionを通常Semantic経路へ統合し、C++の`if (A > B)`を生成。不正な型・接続を拒否。ほかの演算子・数値型、変数入力、暗黙変換、複数Consumer、複数文、ネスト、Sequence、Loop、Returnは未対応 |
+| Phase 4 制御フロー | **bool Branch・反射検証済み数値比較の限定縦断を実装済み・Automation/UHT/UBT確認済み** | 実BlueprintのBeginPlay→Branch→両枝PrintStringに加え、Kismet Math Libraryの`int32` / `double`比較6演算を反射署名で検証してConditionへ統合し、C++の比較条件を生成。不正な所有クラス・型・接続を拒否。変数入力、暗黙変換、複数Consumer、複数文、ネスト、Sequence、Loop、Returnは未対応 |
 | Actor以外のBlueprint | **未対応** | 直接Actor親のMVP制限あり。Component、UObject、Widget、Anim等は段階的に拡張 |
 | Semantic IR Editor統合 | **限定実装・Automation確認済み** | 旧経路Shadow比較と独立したSemantic Previewメニューを追加。実Blueprintからの対応ノード拡張は継続 |
-| UE 5.7での生成C++ビルド・動作一致 | **隔離ビルドを複数ケースで確認** | Automation Test 50/50件、ActorLocation、bool Branch、整数比較Branch、構造体、コンテナ、ネイティブEnumを含む実Blueprint由来Generator出力の隔離UHT/UBTを確認。実行時のBlueprintとの意味一致は未確認 |
+| UE 5.7での生成C++ビルド・動作一致 | **隔離ビルドを複数ケースで確認** | Automation Test 52/52件、ActorLocation、bool Branch、`int32` / `double`比較Branch、構造体、コンテナ、ネイティブEnumを含む実Blueprint由来Generator出力の隔離UHT/UBTを確認。実行時のBlueprintとの意味一致は未確認 |
 
 GitHubへのコミットとUEでのコンパイル成功・動作確認は区別する。ユーザーからのビルド状況の共有は参考情報として記録し、Automation Test・生成C++のUHT/UBT・実行時の意味一致を別途検証する。
 
@@ -298,18 +298,25 @@ C1〜C3の限定縦断実装を維持しつつ、Editor APIで作成した実Blu
 3. [x] 数値型の不一致、未対応の暗黙変換、複数Consumer、余分なData接続を診断付きで拒否する。
 4. [x] Automation Testと隔離UHT/UBTを通す。Blueprintとの実行時分岐一致は独立した未完了ゲートとして維持する。
 
-### 次のC++実装単位: C4-3 比較演算の反射駆動一般化
+### 完了したC++実装単位: C4-3 比較演算の反射駆動一般化
 
-1. 演算子・型ごとの個別分岐を増やさず、検証済みUFunctionの署名とメタデータから比較演算の対応可否を解決する。
-2. `int` / `float` / `double`と`==` / `!=` / `<` / `<=` / `>` / `>=`を、明示的な対応表またはResolverで段階的に拡張する。
-3. 数値リテラルを型ごとに正規化し、厳密な型一致を要求する。安全性を確認できない暗黙変換、昇格、Wildcardピン構成は診断付きで拒否する。
-4. Automation Testと隔離UHT/UBTを通す。Blueprintとの実行時分岐一致は独立した未完了ゲートとして維持する。
+1. [x] 演算子・型ごとの個別分岐を増やさず、許可表と実UFunctionの署名・メタデータから比較演算の対応可否を解決する。
+2. [x] UE 5.7で反射可能な`int32` / `double`の`==` / `!=` / `<` / `<=` / `>` / `>=`を共通Resolverで検証する。独立した`FloatFloat`比較UFunctionが存在しない場合は推測で代替しない。
+3. [x] 数値リテラルを型ごとに正規化し、厳密な型一致を要求する。安全性を確認できない暗黙変換、所有クラス改ざん、余分なピンを診断付きで拒否する。
+4. [x] Automation Testと隔離UHT/UBTを通す。Blueprintとの実行時分岐一致は独立した未完了ゲートとして維持する。
+
+### 次のC++実装単位: C4-4 比較オペランドの変数参照対応
+
+1. Blueprintメンバー変数のGetノードから比較入力へ接続する実Blueprintを作成し、リテラル限定の比較データフローを拡張する。
+2. 変数参照を型付きSemantic式として比較式の引数へ保持し、生成クラスのメンバー名・型・評価回数を保存する。
+3. 比較UFunctionの反射型と変数FProperty型の厳密な一致を要求し、暗黙変換、未解決変数、複数Consumer、循環依存を診断付きで拒否する。
+4. Automation Testと隔離UHT/UBTを通す。Blueprintとの実行時分岐一致とCDO値一致は独立した未完了ゲートとして維持する。
 
 親クラス解決は `FBPParentClassResolver` へ共通化した。ネイティブの任意の`AActor`派生クラスについて、C++名と公開ヘッダーをリフレクションから取得する。非Actor、解決不能、非公開ヘッダー、Blueprint生成親は診断付きで拒否する。Blueprint生成親をネイティブ祖先へ暗黙置換することは禁止する。
 
 **保留:** 旧J2-13（実生成アーティファクトとレビュー証跡の自動接続）、新しいProvider、レビュー統計・表示UIの拡張。C++縦断検証で直接必要になった場合のみ再開する。
 
-2026-10-15のローカル検証では、UE 5.7のEditorターゲットがビルド成功し、`BlueprintAIConverter` Automation Testは50/50件成功した。PythonServerは直近のPython 3.12検証で212件成功した。実Pawn/Actor BlueprintからGeneratorが出力したC++について、基本型、代表構造体、TArray/TSet/TMap、ネイティブEnum、ActorLocation呼び出し、bool Branchのif/else、`Greater_IntInt`を条件とする`if (7 > 3)`を隔離UHT/UBTで確認したが、Blueprintとの実行時一致は引き続き未確認。
+2026-10-15のローカル検証では、UE 5.7のEditorターゲットがビルド成功し、`BlueprintAIConverter` Automation Testは52/52件成功した。PythonServerは直近のPython 3.12検証で212件成功した。実Pawn/Actor BlueprintからGeneratorが出力したC++について、基本型、代表構造体、TArray/TSet/TMap、ネイティブEnum、ActorLocation呼び出し、bool Branchのif/else、`Greater_IntInt`を条件とする`if (7 > 3)`、`LessEqual_DoubleDouble`を条件とする`if (7.500000 <= 2.250000)`を隔離UHT/UBTで確認したが、Blueprintとの実行時一致は引き続き未確認。
 
 ### レビュー基盤の到達点と残課題
 

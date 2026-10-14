@@ -57,6 +57,10 @@ void AppendGraph(const UEdGraph* Graph, const FString& Kind, FBPGraphIR& IR)
         if (const UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
         {
             IRNode.FunctionName = Call->GetFunctionName();
+            const UFunction* TargetFunction = Call->GetTargetFunction();
+            IRNode.FunctionOwnerPath = TargetFunction != nullptr
+                ? GetPathNameSafe(TargetFunction->GetOwnerClass())
+                : FString();
         }
         if (const UK2Node_Variable* Variable = Cast<UK2Node_Variable>(Node))
         {
