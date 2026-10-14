@@ -105,6 +105,24 @@ bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& En
     Root->SetStringField(TEXT("parent_class_path"), IR.ParentClassPath);
     // Graph IRは意味的な完全性を保証しない。Copilotに推測で補完させない。
     Root->SetStringField(TEXT("semantic_status"), TEXT("partial"));
+    if (SemanticIR != nullptr)
+    {
+        // Semantic JSON v2のシリアライザーを再利用し、型情報の解釈差を避ける。
+        FString SemanticJson;
+        if (FBPSemanticJsonSerializer::Serialize(*SemanticIR, EngineVersion, SemanticJson) == false)
+        {
+            OutError = TEXT("Semantic JSON serialization failed");
+            return false;
+        }
+        TSharedPtr<FJsonObject> SemanticRoot;
+        const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(SemanticJson);
+        if (FJsonSerializer::Deserialize(Reader, SemanticRoot) == false || SemanticRoot.IsValid() == false)
+        {
+            OutError = TEXT("Semantic JSON parsing failed");
+            return false;
+        }
+        Root->SetObjectField(TEXT("semantic_declarations"), SemanticRoot);
+    }
 
     TArray<TSharedPtr<FJsonValue>> Graphs;
     TArray<FBPIRGraph> SortedGraphs = IR.Graphs;
