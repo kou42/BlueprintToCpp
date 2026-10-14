@@ -454,6 +454,45 @@ bool ReadBoolLiteral(const FBPSemanticExpression& Expression, FString& OutValue)
     return true;
 }
 
+bool EmitBranchCondition(const FBPSemanticExpression& Expression,
+    FString& OutCondition, TArray<FString>& Diagnostics)
+{
+    if (ReadBoolLiteral(Expression, OutCondition))
+    {
+        return true;
+    }
+    if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
+        Expression.Type.Kind != EBPSemanticTypeKind::Bool ||
+        Expression.Type.bIsReference || Expression.Type.bIsConst ||
+        Expression.FunctionName != TEXT("Greater_IntInt") ||
+        Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
+        Expression.Arguments.Num() != 2)
+    {
+        Diagnostics.Add(TEXT("Unsupported Branch condition expression"));
+        return false;
+    }
+    FString AText;
+    FString BText;
+    if (ReadArgument(Expression.Arguments[0], EBPSemanticTypeKind::Int32,
+        AText, Diagnostics) == false ||
+        ReadArgument(Expression.Arguments[1], EBPSemanticTypeKind::Int32,
+            BText, Diagnostics) == false ||
+        Expression.Arguments[0].Type.bIsReference || Expression.Arguments[0].Type.bIsConst ||
+        Expression.Arguments[1].Type.bIsReference || Expression.Arguments[1].Type.bIsConst)
+    {
+        return false;
+    }
+    int32 A = 0;
+    int32 B = 0;
+    if (LexTryParseString(A, *AText) == false || LexTryParseString(B, *BText) == false)
+    {
+        Diagnostics.Add(TEXT("Invalid integer greater-than comparison literal"));
+        return false;
+    }
+    OutCondition = FString::Printf(TEXT("%s > %s"), *LexToString(A), *LexToString(B));
+    return true;
+}
+
 bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
     const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
     TArray<FString>& Diagnostics)
@@ -651,10 +690,10 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     if (Statement.Kind == EBPSemanticStatementKind::Branch)
     {
         FString Condition;
-        if (ReadBoolLiteral(Statement.Expression, Condition) == false ||
+        if (EmitBranchCondition(Statement.Expression, Condition, OutDiagnostics) == false ||
             Statement.ThenStatements.Num() != 1 || Statement.ElseStatements.Num() != 1)
         {
-            OutDiagnostics.Add(TEXT("Branch requires one bool literal condition and one statement in each output"));
+            OutDiagnostics.Add(TEXT("Branch requires one supported bool condition and one statement in each output"));
             return false;
         }
         const FBPSemanticStatement& ThenStatement = Statement.ThenStatements[0];

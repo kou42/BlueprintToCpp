@@ -242,6 +242,74 @@ bool AnalyzeBranchPrint(const FBPGraphIR& GraphIR, const FBPIRGraph& Graph,
     return true;
 }
 
+bool LowerIntGreaterCondition(const FBPIRGraph& Graph, const FBPIRNode& Comparison,
+    const FBPIRNode& Branch, const FBPIRPin& Condition,
+    FBPSemanticExpression& OutExpression, FBPSemanticIR& OutIR)
+{
+    const FBPIRPin* A = FindPin(Comparison, TEXT("A"), EGPD_Input);
+    const FBPIRPin* B = FindPin(Comparison, TEXT("B"), EGPD_Input);
+    const FBPIRPin* ReturnValue = FindPin(Comparison, TEXT("ReturnValue"), EGPD_Output);
+    if (A == nullptr || B == nullptr || ReturnValue == nullptr ||
+        A->Category != UEdGraphSchema_K2::PC_Int ||
+        B->Category != UEdGraphSchema_K2::PC_Int ||
+        ReturnValue->Category != UEdGraphSchema_K2::PC_Boolean ||
+        Condition.Category != UEdGraphSchema_K2::PC_Boolean ||
+        (A->DefaultObjectPath.IsEmpty() == false && A->DefaultObjectPath != TEXT("None")) ||
+        (B->DefaultObjectPath.IsEmpty() == false && B->DefaultObjectPath != TEXT("None")) ||
+        A->DefaultText.IsEmpty() == false || B->DefaultText.IsEmpty() == false)
+    {
+        AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
+            FString::Printf(
+                TEXT("Integer greater-than comparison pins are invalid: A=%s/%s B=%s/%s ReturnValue=%s/%s Condition=%s/%s"),
+                A != nullptr ? *A->Category.ToString() : TEXT("missing"),
+                A != nullptr ? *A->SubCategory.ToString() : TEXT("missing"),
+                B != nullptr ? *B->Category.ToString() : TEXT("missing"),
+                B != nullptr ? *B->SubCategory.ToString() : TEXT("missing"),
+                ReturnValue != nullptr ? *ReturnValue->Category.ToString() : TEXT("missing"),
+                ReturnValue != nullptr ? *ReturnValue->SubCategory.ToString() : TEXT("missing"),
+                *Condition.Category.ToString(), *Condition.SubCategory.ToString()));
+        return false;
+    }
+    if (Graph.DataEdges.Num() != 1)
+    {
+        AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
+            TEXT("Integer comparison must have exactly one consumer"));
+        return false;
+    }
+    const FBPIRLink& Edge = Graph.DataEdges[0];
+    if (Edge.SourceNode != Comparison.Id || Edge.SourcePin != ReturnValue->Id ||
+        Edge.TargetNode != Branch.Id || Edge.TargetPin != Condition.Id)
+    {
+        AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
+            TEXT("Integer comparison result must connect directly to Branch Condition"));
+        return false;
+    }
+
+    int32 AValue = 0;
+    int32 BValue = 0;
+    if (LexTryParseString(AValue, *A->DefaultValue) == false ||
+        LexTryParseString(BValue, *B->DefaultValue) == false)
+    {
+        AddDiagnostic(OutIR, Graph.Name, Comparison.Id,
+            TEXT("Integer comparison requires valid int32 literal inputs"));
+        return false;
+    }
+
+    // 比較をbool値へ畳み込まず、型付きの式として保持してC++側でも一度だけ評価する。
+    OutExpression = FBPSemanticExpression();
+    OutExpression.Kind = EBPSemanticExpressionKind::FunctionCall;
+    OutExpression.Type.Kind = EBPSemanticTypeKind::Bool;
+    OutExpression.SourceNodeId = Comparison.Id;
+    OutExpression.SourcePinId = ReturnValue->Id;
+    OutExpression.FunctionName = TEXT("Greater_IntInt");
+    OutExpression.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    OutExpression.Arguments.Add(Literal(
+        EBPSemanticTypeKind::Int32, LexToString(AValue), Comparison, TEXT("A")));
+    OutExpression.Arguments.Add(Literal(
+        EBPSemanticTypeKind::Int32, LexToString(BValue), Comparison, TEXT("B")));
+    return true;
+}
+
 bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     FBPSemanticIR& OutIR)
 {
@@ -316,6 +384,7 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     const FBPIRGraph& Graph = *EventGraph;
     const FBPIRNode* BeginPlay = nullptr;
     const FBPIRNode* Branch = nullptr;
+    const FBPIRNode* Comparison = nullptr;
     TArray<const FBPIRNode*> Prints;
     for (const FBPIRNode& Node : Graph.Nodes)
     {
@@ -343,6 +412,17 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         {
             Prints.Add(&Node);
         }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+            Node.FunctionName == TEXT("Greater_IntInt"))
+        {
+            if (Comparison != nullptr)
+            {
+                AddDiagnostic(OutIR, Graph.Name, Node.Id,
+                    TEXT("Duplicate integer comparison node"));
+                return false;
+            }
+            Comparison = &Node;
+        }
         else
         {
             AddDiagnostic(OutIR, Graph.Name, Node.Id,
@@ -351,10 +431,11 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         }
     }
     if (BeginPlay == nullptr || Branch == nullptr || Prints.Num() != 2 ||
-        Graph.ExecEdges.Num() != 3 || Graph.DataEdges.IsEmpty() == false)
+        Graph.ExecEdges.Num() != 3 ||
+        (Comparison == nullptr ? Graph.DataEdges.IsEmpty() == false : Graph.DataEdges.Num() != 1))
     {
         AddDiagnostic(OutIR, Graph.Name, FGuid(),
-            TEXT("Branch conversion requires BeginPlay, one Branch, two PrintString calls, three Exec edges, and no data edges"));
+            TEXT("Branch conversion requires one supported condition, three Exec edges, and two PrintString calls"));
         return false;
     }
     const FBPIRPin* Condition = FindPin(*Branch, TEXT("Condition"), EGPD_Input);
@@ -362,14 +443,33 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     const FBPIRPin* Execute = FindPin(*Branch, UEdGraphSchema_K2::PN_Execute, EGPD_Input);
     const FBPIRPin* Then = FindPin(*Branch, UEdGraphSchema_K2::PN_Then, EGPD_Output);
     const FBPIRPin* Else = FindPin(*Branch, TEXT("else"), EGPD_Output);
-    FString ConditionValue;
     if (Condition == nullptr || BeginThen == nullptr || Execute == nullptr ||
-        Then == nullptr || Else == nullptr ||
-        FBPBooleanPinDefaultEmitter::Emit(*Condition, ConditionValue) == false)
+        Then == nullptr || Else == nullptr)
     {
         AddDiagnostic(OutIR, Graph.Name, Branch->Id,
             TEXT("Branch condition or Exec pins are invalid"));
         return false;
+    }
+    FBPSemanticExpression ConditionExpression;
+    if (Comparison != nullptr)
+    {
+        if (LowerIntGreaterCondition(Graph, *Comparison, *Branch,
+            *Condition, ConditionExpression, OutIR) == false)
+        {
+            return false;
+        }
+    }
+    else
+    {
+        FString ConditionValue;
+        if (FBPBooleanPinDefaultEmitter::Emit(*Condition, ConditionValue) == false)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Branch->Id,
+                TEXT("Branch bool literal condition is invalid"));
+            return false;
+        }
+        ConditionExpression = Literal(EBPSemanticTypeKind::Bool,
+            ConditionValue, *Branch, TEXT("Condition"));
     }
     const FBPIRNode* ThenPrint = nullptr;
     const FBPIRNode* ElsePrint = nullptr;
@@ -439,8 +539,7 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     FBPSemanticStatement BranchStatement;
     BranchStatement.Kind = EBPSemanticStatementKind::Branch;
     BranchStatement.SourceNodeId = Branch->Id;
-    BranchStatement.Expression = Literal(EBPSemanticTypeKind::Bool,
-        ConditionValue, *Branch, TEXT("Condition"));
+    BranchStatement.Expression = MoveTemp(ConditionExpression);
     FBPSemanticStatement ThenStatement;
     ThenStatement.Kind = EBPSemanticStatementKind::Expression;
     ThenStatement.SourceNodeId = ThenPrint->Id;
