@@ -132,4 +132,74 @@ bool FBPCopilotGraphJsonInvalidLinkTest::RunTest(const FString& Parameters)
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPCopilotGraphJsonStableOrderTest,
+    "BlueprintAIConverter.CopilotJson.StableOrder",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPCopilotGraphJsonStableOrderTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR;
+    IR.AssetPath = TEXT("/Game/BP_StableOrder.BP_StableOrder");
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    Graph.Path = TEXT("EventGraph");
+    FBPIRNode First;
+    First.Id = FGuid(1, 0, 0, 0);
+    FBPIRPin FirstOut;
+    FirstOut.Id = FGuid(2, 0, 0, 0);
+    FirstOut.Direction = EGPD_Output;
+    First.Pins.Add(FirstOut);
+    FBPIRNode Second;
+    Second.Id = FGuid(3, 0, 0, 0);
+    FBPIRPin SecondIn;
+    SecondIn.Id = FGuid(4, 0, 0, 0);
+    Second.Pins.Add(SecondIn);
+    Graph.Nodes.Add(Second);
+    Graph.Nodes.Add(First);
+    FBPIRLink Link;
+    Link.SourceNode = First.Id;
+    Link.SourcePin = FirstOut.Id;
+    Link.TargetNode = Second.Id;
+    Link.TargetPin = SecondIn.Id;
+    Graph.ExecEdges.Add(Link);
+    IR.Graphs.Add(Graph);
+    IR.Diagnostics.Add(TEXT("z diagnostic"));
+    IR.Diagnostics.Add(TEXT("a diagnostic"));
+
+    FString Path;
+    FString Error;
+    if (FBPCopilotGraphJsonExporter::Export(IR, TEXT("5.7.4"), Path, Error) == false)
+    {
+        AddError(Error);
+        return false;
+    }
+    FString FirstJson;
+    const bool bFirstRead = FFileHelper::LoadFileToString(FirstJson, *Path);
+    if (bFirstRead == false)
+    {
+        AddError(TEXT("最初のJSONを読み込めません"));
+        return false;
+    }
+
+    // 入力の並びを逆転させても、生成されるJSONの内容は同一になる。
+    IR.Graphs[0].Nodes.Swap(0, 1);
+    IR.Diagnostics.Swap(0, 1);
+    if (FBPCopilotGraphJsonExporter::Export(IR, TEXT("5.7.4"), Path, Error) == false)
+    {
+        AddError(Error);
+        return false;
+    }
+    FString SecondJson;
+    const bool bSecondRead = FFileHelper::LoadFileToString(SecondJson, *Path);
+    IFileManager::Get().Delete(*Path);
+    TestTrue(TEXT("再出力を読み込める"), bSecondRead);
+    if (bSecondRead)
+    {
+        TestEqual(TEXT("入力配列順序に依存しないJSON"), FirstJson, SecondJson);
+    }
+    return true;
+}
+
 #endif
