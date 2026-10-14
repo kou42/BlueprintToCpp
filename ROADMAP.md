@@ -126,11 +126,11 @@ C++ Generator（宣言・式・文・関数・クラス）
 | Editorプレビュー・保存 | **実装済み・実機での全面検証は未完** | Convert to C++ (Preview)、プロジェクトSourceへの保存経路 |
 | Snapshot JSON / PythonServer | **既存v1を維持・JSON/AI機能を段階追加** | Semantic JSON v2の設計・Serializer・Validator・Editorコピー/保存、Mock/OpenAI Provider、生成結果ValidatorをPR #43〜#48で実装。実機・実API未検証 |
 | Semantic IR / PrintString変換 | **最小縦断実装済み・Automation/UHT/UBT確認済み** | 型付きIR、Lowering、C++ Generator、比較テストを追加。実Generator出力の隔離UHT/UBTまで確認。実行時の意味一致と汎用UFunction変換は未完了 |
-| Phase 2 UFunction呼び出し基盤 | **限定実装済み・Automation確認済み** | 反射署名・ピン検証、GetActorLocation接続Lowering、bool既定値、未接続HitResultの宣言とK2_SetActorLocation文生成、出力ピンBindingPlanを実装。接続済みHitResultから単一VariableSetへの限定Loweringとテストを追加。通常のSemantic変換経路への統合は未完了 |
-| Blueprintメンバー変数・初期値 | **限定実装済み・Automation/UHT/UBT確認済み** | bool、int32、int64、float、double、FString、FName、FTextをCDOから型安全に生成。値型はExportText/ImportTextの往復一致を条件に汎用復元し、FVectorで実Blueprint縦断検証済み。未検証型は日本語コメント付き宣言へフォールバックするが、UPROPERTYメタデータとObject参照等は未対応 |
+| Phase 2 UFunction呼び出し基盤 | **限定縦断実装済み・Automation/UHT/UBT確認済み** | 反射署名・ピン検証に加え、実BlueprintのBeginPlay→K2_SetActorLocationとK2_GetActorLocation.ReturnValue→NewLocationを通常Semantic経路へ統合。FHitResult出力領域を生成し、改ざん型を拒否する。一般関数、複数Consumer、接続済み戻り値は未対応 |
+| Blueprintメンバー変数・初期値 | **限定実装済み・Automation/UHT/UBT確認済み** | 基本型はCDOから型安全に生成。その他の値型はExportText/ImportTextの往復一致を条件に、FVector、FRotator、FTransform、FLinearColor、TArray/TSet/TMap、ネイティブEnumを実Blueprintで汎用復元。未検証型は日本語コメント付き宣言へフォールバックするが、UPROPERTYメタデータ、Object参照、ユーザー定義型等は未対応 |
 | Actor以外のBlueprint | **未対応** | 直接Actor親のMVP制限あり。Component、UObject、Widget、Anim等は段階的に拡張 |
 | Semantic IR Editor統合 | **限定実装・Automation確認済み** | 旧経路Shadow比較と独立したSemantic Previewメニューを追加。実Blueprintからの対応ノード拡張は継続 |
-| UE 5.7での生成C++ビルド・動作一致 | **隔離ビルドを一部確認** | Automation Test 47/47件と、FVector汎用初期化を含む実Blueprint由来Generator出力の隔離UHT/UBTを確認。実行時のBlueprintとの意味一致は未確認 |
+| UE 5.7での生成C++ビルド・動作一致 | **隔離ビルドを複数ケースで確認** | Automation Test 48/48件、ActorLocation、構造体、コンテナ、ネイティブEnumを含む実Blueprint由来Generator出力の隔離UHT/UBTを確認。実行時のBlueprintとの意味一致は未確認 |
 
 GitHubへのコミットとUEでのコンパイル成功・動作確認は区別する。ユーザーからのビルド状況の共有は参考情報として記録し、Automation Test・生成C++のUHT/UBT・実行時の意味一致を別途検証する。
 
@@ -205,17 +205,17 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 
 ### M2: 汎用関数呼び出しの実証
 - [x] UFunction/FProperty解決と署名・ピンの限定検証を実装し、UE 5.7 Automation Testで確認
-- [ ] 引数の既定値・参照/出力引数・ターゲット/静的呼び出しを処理
-- [ ] GetActorLocation、SetActorLocation等の代表例を検証
+- [ ] 引数の既定値・参照/出力引数・ターゲット/静的呼び出しを処理（Get/SetActorLocationの限定ケースは完了。一般化は継続）
+- [x] GetActorLocation、SetActorLocationを実Blueprintの通常Semantic経路で検証
 - [x] 未対応メタデータ・特殊関数を限定的に明示拒否（対象拡張とUE検証は継続）
 
 ### M3-V: メンバー変数と初期値の変換（Phase 3の先行縦断実装）
 - [x] Graph IRとは独立したVariable IRに、変数名・FProperty型・Blueprintメタデータ・編集/公開属性・初期値の出典を保持する
 - [x] `UBlueprint::NewVariables` と `GeneratedClass` / Class Default Object（CDO）の対応を実BlueprintのAutomation Testで検証する
 - [x] bool / 整数 / float / double / FString / FName / FText の既定値を型安全にC++へ出力する
-- [ ] FVector / FRotator / FTransform / FLinearColor、Enumの初期値を生成する（FVectorは往復検証済みExportText/ImportTextによる汎用復元と隔離UHT/UBTを確認済み。他型の実Blueprint検証は未完了）
+- [x] FVector / FRotator / FTransform / FLinearColor、ネイティブEnumの初期値を往復検証済みExportText/ImportTextで汎用復元し、実Blueprintと隔離UHT/UBTで確認する
 - [ ] UPROPERTYの編集・公開・カテゴリ等を実際のメタデータから復元し、ヘッダー宣言とコンストラクタ初期化を必要に応じて使い分ける
-- [ ] 配列・Set・Map・ユーザー定義Struct、Object/アセット参照は依存関係とロード規則を確認して段階対応する（値型コンテナ向けの往復検証基盤は実装済み。個別の実Blueprint/UHT/UBT検証は未完了）
+- [ ] 配列・Set・Map・ユーザー定義Struct、Object/アセット参照は依存関係とロード規則を確認して段階対応する（ネイティブ値型のTArray/TSet/TMapは実Blueprintと隔離UHT/UBTで確認済み。ユーザー定義型と参照型は未完了）
 - [ ] 変換不能な値・未対応の属性・親クラス既定値との差分を黙って破棄せず診断し、Blueprintと生成C++のCDO値を比較するAutomation Testを追加する（宣言のみフォールバックと診断は実装済み。生成クラスとのCDO比較は未完了）
 - [x] 既存の `BlueprintVariableCount != 0` 一律拒否を解除し、厳密初期化・往復検証済み汎用初期化・診断付き宣言フォールバックへ分岐する
 
@@ -238,11 +238,11 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 - [x] 出力ピンと後続入力を対応付けるBindingPlanをEmitterへ統合し、Exec順序・変数スコープを限定検証
 - [x] 接続済みSweepHitResultから単一の反射済みVariableSetへの代入Loweringと正常系/拒否系テストを追加
 - [x] 未接続selfを許可し、接続self・型不一致・不正な追加入力を拒否する検証を追加
-- [ ] UE 5.7.4でEmitter/VariableSetのAutomation Testを実行し、生成文・診断・UHT/UBTを確認
-- [ ] 生成対象Blueprintの実際のOwnerClassを渡す変換経路を設計・統合する
+- [x] UE 5.7.4でEmitter/VariableSetを含むAutomation Testを実行し、代表生成物の診断・UHT/UBTを確認
+- [x] 生成対象Blueprintの実際のOwnerClassを通常Semantic変換経路へ渡す
 - [ ] ReturnValue、複数Consumer、一般的な関数・変数型のデータフローを段階的に実装する
 
-**現時点の注意:** PR #41の接続済み出力LoweringはEmitter単体の限定ケースであり、既定のActor Generator / Semantic Previewへは未統合。Blueprint固有メンバー変数を含むグラフはMVPの制限により引き続き拒否する。UE 5.7.4のビルド・Automation Test・生成コードの動作一致は未確認。
+**現時点の注意:** GetActorLocation→SetActorLocationは通常Semantic Previewへ統合済みだが、対応する関数名・ピン構成を厳密に検証する限定縦断実装である。一般UFunction、接続済みReturnValue、複数Consumer、Blueprintとの実行時一致は未完了。メンバー変数は安全性を確認できない場合に日本語コメント付き宣言へフォールバックし、値を推測しない。
 
 ## 実装・品質の原則
 
@@ -278,32 +278,30 @@ J2-11ではUE Editor APIから一時Actor Blueprintを生成し、bool・int・F
 
 J2-12では生成アーティファクトを新規の短命プラグインへ配置し、`RunUAT BuildPlugin` でUHT/UBTを実行するローカルCLIを追加した。既存Sourceを変更せず、入力制約、保存先、タイムアウト、ログ、artifact fingerprintを記録する。UE 5.7で最小Actor生成物を実際にビルドし、UHT/UBTの成功証跡を確認した。
 
-### 次のC++実装単位: C1-1 実BlueprintのPrintString縦断
+### 次のC++実装単位: C4-1 bool Branchの最小縦断
 
-テスト用に手組みしたIRではなく、Editor APIで作成した実BlueprintのBeginPlay→PrintStringを入力にして次を一続きに確認する。
+C1〜C3の限定縦断実装を維持しつつ、Editor APIで作成した実BlueprintのBeginPlay→Branch→PrintStringを入力にして制御フローを一段拡張する。
 
-1. Event BeginPlayとPrintStringノードを持つ一時Actor BlueprintをEditor APIで作成・コンパイルする。
-2. 実BlueprintからGraph IRを構築し、Semantic LoweringとC++ Generatorを通常経路と同じ順序で実行する。
-3. 文字列、画面/ログ出力、色、Duration、Keyが生成C++へ保持されることを確認する。
-4. 生成 `.h/.cpp` をJ2-12の隔離プラグインへ渡し、UHT/UBTを成功させる。
-5. Blueprintと生成C++の観測可能な出力を比較できる最小の実行テストを追加する。実行比較を自動化できない部分は、再現手順と未確認状態を明示する。
+1. boolリテラルをConditionに持つBranchと、True/FalseそれぞれのPrintStringを実Blueprintとして作成・コンパイルする。
+2. ExecエッジをSemantic IRの分岐文・ブロックとして表現し、片側を黙って破棄しない。
+3. C++ Generatorで`if`/`else`を生成し、Condition、各枝の引数、実行順を保持する。
+4. 不正なCondition型、枝の欠落、余分なExec/Data接続を診断付きで拒否する。
+5. Automation Testと隔離UHT/UBTを通す。元Blueprintとの実行時出力比較は独立した未完了ゲートとして記録する。
 
-C1-1完了後はC2-1としてbool、int32、FStringのメンバー宣言とCDO初期値生成へ進む。その後int64、float、double、FName、FTextへ型を拡張し、C3のGetActorLocation→SetActorLocation実Blueprint縦断へ進む。
-
-2026-10-14時点でC1-1の手順1〜4は完了した。`APawn`派生の実Blueprintから生成した `.h/.cpp` を隔離BuildPluginへ渡し、UHT/UBT成功を確認した。手順5のBlueprintと生成C++の実行時出力比較は未完了のため、C1-1の完了判定には含めない。
+2026-10-14時点で、C1はPrintString、C2は基本型・代表構造体・ネイティブ値型コンテナ・ネイティブEnum、C3はGetActorLocation→SetActorLocationについて、実Blueprint→通常Semantic経路→生成C++→隔離UHT/UBTまで確認した。C1〜C3とも実行時のBlueprintとの意味一致は未確認であり、完了を過大評価しない。
 
 親クラス解決は `FBPParentClassResolver` へ共通化した。ネイティブの任意の`AActor`派生クラスについて、C++名と公開ヘッダーをリフレクションから取得する。非Actor、解決不能、非公開ヘッダー、Blueprint生成親は診断付きで拒否する。Blueprint生成親をネイティブ祖先へ暗黙置換することは禁止する。
 
 **保留:** 旧J2-13（実生成アーティファクトとレビュー証跡の自動接続）、新しいProvider、レビュー統計・表示UIの拡張。C++縦断検証で直接必要になった場合のみ再開する。
 
-2026-10-14のローカル検証では、UE 5.7のEditorターゲットがビルド成功し、`BlueprintAIConverter` Automation Testは44/44件成功した。PythonServerはPython 3.12で212件成功した。実Pawn BlueprintからGeneratorが出力したC++の隔離UHT/UBTも成功したが、Blueprintとの実行時一致は引き続き未確認。
+2026-10-14のローカル検証では、UE 5.7のEditorターゲットがビルド成功し、`BlueprintAIConverter` Automation Testは48/48件成功した。PythonServerはPython 3.12で212件成功した。実Pawn/Actor BlueprintからGeneratorが出力したC++について、基本型、代表構造体、TArray/TSet/TMap、ネイティブEnum、ActorLocation呼び出しを隔離UHT/UBTで確認したが、Blueprintとの実行時一致は引き続き未確認。
 
 ### レビュー基盤の到達点と残課題
 
 - PR #43〜#48: Semantic JSON v2 Serializer/Validator、Editor出力、AI Providerと出力検証の基盤を統合済み。UE実機・実AI疎通は未検証。
 - PR #49〜#70: Direct/AI差分、構造比較、レビュー記録、外部UHT/UBT・動作証跡、統計・推移・ダッシュボード、索引共有と回帰テストを段階的に統合済み。
 - PR #70: GitHub Actions成功後にmainへマージ済み。レビュー要約と検証レポートの証跡索引を共有。
-- 残課題: 実Generator出力のUHT/UBT、Blueprintとの実行結果一致、実AI疎通。ローカルのAutomation Test・隔離UHT/UBT・GitHub ActionsのPythonテストは、これら未検証項目の代替ではない。
-- 集計性能の実測・表示UI・追加Providerは継続課題とするが、C1〜C3のC++変換能力より優先しない。
+- 残課題: Blueprintとの実行結果一致、未検証型・制御フローの生成C++ UHT/UBT、実AI疎通。ローカルのAutomation Test・隔離UHT/UBT・GitHub ActionsのPythonテストは、実行時一致の代替ではない。
+- 集計性能の実測・表示UI・追加Providerは継続課題とするが、C4〜C5のC++変換能力より優先しない。
 
 Semantic Previewは実験的な経路として維持し、旧Generatorの既定経路は実機検証が完了するまで切り替えない。
