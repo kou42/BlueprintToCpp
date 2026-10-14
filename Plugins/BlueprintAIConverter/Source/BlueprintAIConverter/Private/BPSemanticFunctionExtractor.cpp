@@ -5,10 +5,15 @@
 
 namespace
 {
-FBPSemanticType ResolvePropertyType(const FProperty* Property)
+FBPSemanticType ResolvePropertyType(const FProperty* Property, int32 Depth = 0)
 {
     FBPSemanticType Type;
     if (Property == nullptr)
+    {
+        return Type;
+    }
+    // 不正な循環参照・過度なネストを防止する。
+    if (Depth >= 16)
     {
         return Type;
     }
@@ -17,18 +22,44 @@ FBPSemanticType ResolvePropertyType(const FProperty* Property)
     if (const FArrayProperty* Array = CastField<FArrayProperty>(Property))
     {
         Type.ContainerKind = TEXT("array");
-        Type.InnerType = Array->Inner != nullptr ? Array->Inner->GetCPPType() : TEXT("");
+        if (Array->Inner != nullptr)
+        {
+            Type.InnerType = Array->Inner->GetCPPType();
+            Type.ElementType = MakeShared<FBPSemanticType>(ResolvePropertyType(Array->Inner, Depth + 1));
+        }
     }
     else if (const FSetProperty* Set = CastField<FSetProperty>(Property))
     {
         Type.ContainerKind = TEXT("set");
-        Type.InnerType = Set->ElementProp != nullptr ? Set->ElementProp->GetCPPType() : TEXT("");
+        if (Set->ElementProp != nullptr)
+        {
+            Type.InnerType = Set->ElementProp->GetCPPType();
+            Type.ElementType = MakeShared<FBPSemanticType>(ResolvePropertyType(Set->ElementProp, Depth + 1));
+        }
     }
     else if (const FMapProperty* Map = CastField<FMapProperty>(Property))
     {
         Type.ContainerKind = TEXT("map");
-        Type.KeyType = Map->KeyProp != nullptr ? Map->KeyProp->GetCPPType() : TEXT("");
-        Type.ValueType = Map->ValueProp != nullptr ? Map->ValueProp->GetCPPType() : TEXT("");
+        if (Map->KeyProp != nullptr)
+        {
+            Type.KeyType = Map->KeyProp->GetCPPType();
+            Type.KeyTypeInfo = MakeShared<FBPSemanticType>(ResolvePropertyType(Map->KeyProp, Depth + 1));
+        }
+        if (Map->ValueProp != nullptr)
+        {
+            Type.ValueType = Map->ValueProp->GetCPPType();
+            Type.ValueTypeInfo = MakeShared<FBPSemanticType>(ResolvePropertyType(Map->ValueProp, Depth + 1));
+        }
+    }
+    else if (const FMulticastDelegateProperty* Multicast = CastField<FMulticastDelegateProperty>(Property))
+    {
+        Type.Kind = EBPSemanticTypeKind::MulticastDelegate;
+        Type.TypePath = GetPathNameSafe(Multicast->SignatureFunction);
+    }
+    else if (const FDelegateProperty* Delegate = CastField<FDelegateProperty>(Property))
+    {
+        Type.Kind = EBPSemanticTypeKind::Delegate;
+        Type.TypePath = GetPathNameSafe(Delegate->SignatureFunction);
     }
     else if (const FEnumProperty* Enum = CastField<FEnumProperty>(Property))
     {
@@ -58,8 +89,7 @@ FBPSemanticType ResolvePropertyType(const FProperty* Property)
         Type.Kind = EBPSemanticTypeKind::Object;
         Type.TypePath = GetPathNameSafe(Object->PropertyClass);
     }
-    // Delegate等は型情報を推測せず未解決とする。コンテナは構造を保持し、
-    // 要素型の安全な再帰解決は後続のCJ1で行う。
+    // 未知のPropertyは未解決として保持し、型名から推測しない。
     return Type;
 }
 }
