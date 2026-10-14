@@ -441,6 +441,92 @@ bool EmitVariables(const TArray<FBPSemanticVariable>& Variables, const FString& 
     }
     return true;
 }
+
+bool ReadBoolLiteral(const FBPSemanticExpression& Expression, FString& OutValue)
+{
+    if (Expression.Kind != EBPSemanticExpressionKind::Literal ||
+        Expression.Type.Kind != EBPSemanticTypeKind::Bool ||
+        (Expression.LiteralValue != TEXT("true") && Expression.LiteralValue != TEXT("false")))
+    {
+        return false;
+    }
+    OutValue = Expression.LiteralValue;
+    return true;
+}
+
+bool EmitActorLocationStatement(const FBPSemanticExpression& Call,
+    const FString& ParentClassPath, FString& OutStatement,
+    TArray<FString>& Diagnostics)
+{
+    OutStatement.Reset();
+    if (Call.Kind != EBPSemanticExpressionKind::FunctionCall ||
+        Call.Type.Kind != EBPSemanticTypeKind::Bool ||
+        Call.FunctionName != TEXT("K2_SetActorLocation") ||
+        Call.FunctionOwnerPath != TEXT("/Script/Engine.Actor") ||
+        Call.Arguments.Num() != 5)
+    {
+        Diagnostics.Add(TEXT("Unsupported SetActorLocation semantic signature"));
+        return false;
+    }
+    const FBPSemanticExpression& Target = Call.Arguments[0];
+    if (Target.Kind != EBPSemanticExpressionKind::VariableReference ||
+        Target.VariableName != TEXT("this") ||
+        Target.Type.Kind != EBPSemanticTypeKind::Object ||
+        Target.Type.TypePath != ParentClassPath ||
+        Target.Type.bIsReference || Target.Type.bIsConst)
+    {
+        Diagnostics.Add(TEXT("Unsupported SetActorLocation target"));
+        return false;
+    }
+
+    const FBPSemanticExpression& Location = Call.Arguments[1];
+    if (Location.Kind != EBPSemanticExpressionKind::FunctionCall ||
+        Location.FunctionName != TEXT("K2_GetActorLocation") ||
+        Location.FunctionOwnerPath != TEXT("/Script/Engine.Actor") ||
+        Location.Type.Kind != EBPSemanticTypeKind::Struct ||
+        Location.Type.TypePath != TEXT("/Script/CoreUObject.Vector") ||
+        Location.Type.bIsReference || Location.Type.bIsConst ||
+        Location.Arguments.Num() != 1)
+    {
+        Diagnostics.Add(TEXT("Unsupported SetActorLocation location expression"));
+        return false;
+    }
+    const FBPSemanticExpression& LocationTarget = Location.Arguments[0];
+    if (LocationTarget.Kind != EBPSemanticExpressionKind::VariableReference ||
+        LocationTarget.VariableName != TEXT("this") ||
+        LocationTarget.Type.Kind != EBPSemanticTypeKind::Object ||
+        LocationTarget.Type.TypePath != ParentClassPath ||
+        LocationTarget.Type.bIsReference || LocationTarget.Type.bIsConst)
+    {
+        Diagnostics.Add(TEXT("Unsupported GetActorLocation target"));
+        return false;
+    }
+
+    FString Sweep;
+    FString Teleport;
+    if (ReadBoolLiteral(Call.Arguments[2], Sweep) == false ||
+        ReadBoolLiteral(Call.Arguments[4], Teleport) == false)
+    {
+        Diagnostics.Add(TEXT("Invalid SetActorLocation bool argument"));
+        return false;
+    }
+    const FBPSemanticExpression& HitResult = Call.Arguments[3];
+    const FString HitName = HitResult.VariableName.ToString();
+    if (HitResult.Kind != EBPSemanticExpressionKind::VariableReference ||
+        IsIdentifier(HitName) == false ||
+        HitResult.Type.Kind != EBPSemanticTypeKind::Struct ||
+        HitResult.Type.TypePath != TEXT("/Script/Engine.HitResult") ||
+        HitResult.Type.bIsConst)
+    {
+        Diagnostics.Add(TEXT("Invalid SetActorLocation output storage"));
+        return false;
+    }
+    OutStatement = FString::Printf(
+        TEXT("    FHitResult %s{};\n")
+        TEXT("    K2_SetActorLocation(GetActorLocation(), %s, %s, %s);\n"),
+        *HitName, *Sweep, *HitName, *Teleport);
+    return true;
+}
 }
 
 bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& ClassName,
@@ -488,6 +574,49 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     }
     const FBPSemanticStatement& Statement = Function.Blocks[0].Statements[0];
     const FBPSemanticExpression& Call = Statement.Expression;
+    if (Statement.Kind == EBPSemanticStatementKind::Expression &&
+        Call.FunctionName == TEXT("K2_SetActorLocation"))
+    {
+        FString ActorLocationStatement;
+        if (EmitActorLocationStatement(Call, IR.ParentClassPath,
+            ActorLocationStatement, OutDiagnostics) == false)
+        {
+            return false;
+        }
+        FString VariableDeclarations;
+        FString ConstructorBody;
+        if (EmitVariables(IR.Variables, ClassName, VariableDeclarations,
+            ConstructorBody, OutDiagnostics, VariableFallbackMode) == false)
+        {
+            return false;
+        }
+        const FString BaseName = ClassName.Mid(1);
+        const FString ApiPrefix = ModuleApiMacro.IsEmpty()
+            ? FString() : ModuleApiMacro + TEXT(" ");
+        const FString ConstructorDeclaration = ConstructorBody.IsEmpty()
+            ? FString()
+            : FString::Printf(TEXT("public:\n    %s();\n\n"), *ClassName);
+        const FString UnrealTypeInclude = ConstructorBody.IsEmpty()
+            ? FString()
+            : TEXT("#include \"UObject/UnrealType.h\"\n");
+        const FString ConstructorDefinition = ConstructorBody.IsEmpty()
+            ? FString()
+            : FString::Printf(TEXT("\n%s::%s()\n{\n%s}\n"),
+                *ClassName, *ClassName, *ConstructorBody);
+        FBPGeneratedActorFiles Files;
+        Files.HeaderFileName = BaseName + TEXT(".h");
+        Files.SourceFileName = BaseName + TEXT(".cpp");
+        Files.HeaderContent = FString::Printf(
+            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%sprotected:\n    virtual void BeginPlay() override;\n};\n"),
+            *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
+            *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration);
+        Files.SourceContent = FString::Printf(
+            TEXT("#include \"%s.h\"\n#include \"Engine/HitResult.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n%s}\n"),
+            *BaseName, *UnrealTypeInclude, *ConstructorDefinition,
+            *ClassName, *ActorLocationStatement);
+        OutFiles = MoveTemp(Files);
+        return true;
+    }
     if (Statement.Kind != EBPSemanticStatementKind::Expression ||
         Call.Kind != EBPSemanticExpressionKind::FunctionCall ||
         Call.Type.Kind != EBPSemanticTypeKind::Void ||

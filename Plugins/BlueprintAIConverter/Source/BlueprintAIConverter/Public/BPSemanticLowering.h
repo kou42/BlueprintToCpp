@@ -11,10 +11,18 @@ class UBlueprint;
 class BLUEPRINTAICONVERTER_API FBPSemanticLowering
 {
 public:
+    // 対応済みのグラフ形状を判定し、通常のSemantic Preview経路へ振り分ける。
+    static bool Lower(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
+        FBPSemanticIR& OutIR);
+
     static bool LowerPrintString(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR);
 
     // 実Blueprintを入力にする経路では、対応済みメンバー変数を同じSemantic IRへ取り込む。
     // Graph IRだけではCDO値を検証できないため、従来オーバーロードの拒否動作は維持する。
     static bool LowerPrintString(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
+        FBPSemanticIR& OutIR);
+
+    // BeginPlayでGetActorLocationの結果をK2_SetActorLocationへ渡す限定縦断Lowering。
+    static bool LowerActorLocation(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
 };

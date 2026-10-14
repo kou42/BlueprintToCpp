@@ -189,7 +189,7 @@ private:
                         }
 
                         FBPSemanticIR SemanticIR;
-                        if (FBPSemanticLowering::LowerPrintString(Blueprint, GraphIR, SemanticIR) == false)
+                        if (FBPSemanticLowering::Lower(Blueprint, GraphIR, SemanticIR) == false)
                         {
                             TArray<FString> Messages;
                             for (const FBPSemanticDiagnostic& Diagnostic : SemanticIR.Diagnostics)
@@ -255,7 +255,7 @@ private:
                         FBPSemanticIR SemanticIR;
                         if (FBPGraphIRBuilder::Build(Blueprint, GraphIR))
                         {
-                            FBPSemanticLowering::LowerPrintString(Blueprint, GraphIR, SemanticIR);
+                            FBPSemanticLowering::Lower(Blueprint, GraphIR, SemanticIR);
                         }
                         else
                         {
@@ -323,7 +323,7 @@ private:
                         if (FBPGraphIRBuilder::Build(Blueprint, GraphIR))
                         {
                             // 現段階のLoweringはPrintString MVPに限定される。
-                            FBPSemanticLowering::LowerPrintString(Blueprint, GraphIR, SemanticIR);
+                            FBPSemanticLowering::Lower(Blueprint, GraphIR, SemanticIR);
                         }
                         else
                         {
