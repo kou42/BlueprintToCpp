@@ -63,7 +63,12 @@ bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& En
         GraphJson->SetStringField(TEXT("path"), Graph.Path);
         GraphJson->SetStringField(TEXT("kind"), Graph.Kind);
         TArray<TSharedPtr<FJsonValue>> Nodes;
-        for (const FBPIRNode& Node : Graph.Nodes)
+        TArray<FBPIRNode> SortedNodes = Graph.Nodes;
+        SortedNodes.Sort([](const FBPIRNode& A, const FBPIRNode& B)
+        {
+            return A.Id.ToString() < B.Id.ToString();
+        });
+        for (const FBPIRNode& Node : SortedNodes)
         {
             TSharedRef<FJsonObject> NodeJson = MakeShared<FJsonObject>();
             NodeJson->SetField(TEXT("id"), GuidJson(Node.Id));
