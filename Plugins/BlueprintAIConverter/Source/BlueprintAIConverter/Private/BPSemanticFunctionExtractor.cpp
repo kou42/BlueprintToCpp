@@ -93,10 +93,18 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             {
                 const FString DefaultKey = FString::Printf(TEXT("CPP_Default_%s"), *Property->GetName());
                 Parameter.bHasDefaultValue = Function->HasMetaData(*DefaultKey);
+                // CPP_Defaultメタデータがないだけでは、Blueprint側の既定値が
+                // 存在しないと断定できないため、未取得として記録する。
+                Parameter.DefaultValueStatus = Parameter.bHasDefaultValue
+                    ? TEXT("specified") : TEXT("unavailable");
                 if (Parameter.bHasDefaultValue)
                 {
                     Parameter.DefaultValue = Function->GetMetaData(*DefaultKey);
                 }
+            }
+            if (Parameter.bIsReturn)
+            {
+                Parameter.DefaultValueStatus = TEXT("absent");
             }
             if (Parameter.bIsReturn)
             {
