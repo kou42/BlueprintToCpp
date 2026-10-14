@@ -1,4 +1,6 @@
 #include "BPCopilotGraphJsonExporter.h"
+#include "BPSemanticIR.h"
+#include "BPSemanticJsonSerializer.h"
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
@@ -85,7 +87,7 @@ FString LinkKey(const FBPIRLink& Link)
 }
 
 bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& EngineVersion,
-    FString& OutPath, FString& OutError)
+    FString& OutPath, FString& OutError, const FBPSemanticIR* SemanticIR)
 {
     OutPath.Reset();
     OutError.Reset();
