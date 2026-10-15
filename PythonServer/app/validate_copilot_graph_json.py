@@ -73,6 +73,10 @@ def validate(document):
                 current.add(pid)
                 if pin.get("direction") not in ("input", "output"):
                     errors.append(f"{ploc}: invalid direction")
+            if "function_dispatch_kind" in node and node["function_dispatch_kind"] not in ("regular", "interface_message", "interface_call", "unresolved", "not_applicable"):
+                errors.append(f"{loc}: invalid function_dispatch_kind")
+            if "function_latent" in node and type(node["function_latent"]) is not bool:
+                errors.append(f"{loc}: invalid function_latent")
             node_pins[nid] = current
             # 追加フィールドは旧JSONとの互換性のため任意。
             # 存在する場合はSelf Pinが実際にそのNodeに属することを検証する。
