@@ -134,6 +134,38 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             ? SuperClass->FindFunctionByName(Function->GetFName()) : nullptr;
         Target->bIsOverride = ParentFunction != nullptr;
         Target->OverriddenFunctionPath = GetPathNameSafe(ParentFunction);
+        // Blueprintが直接実装を宣言したInterfaceだけを照合する。
+        // 親クラスから継承したInterfaceや同名の無関係な関数は推測で扱わない。
+        Target->bIsInterfaceImplementation = false;
+        Target->InterfaceClassPath.Reset();
+        Target->InterfaceFunctionPath.Reset();
+        for (const FBPInterfaceDescription& Description : Blueprint->ImplementedInterfaces)
+        {
+            const UClass* InterfaceClass = Description.Interface;
+            if (InterfaceClass == nullptr)
+            {
+                continue;
+            }
+            const UFunction* InterfaceFunction = InterfaceClass->FindFunctionByName(Function->GetFName());
+            if (InterfaceFunction == nullptr)
+            {
+                continue;
+            }
+            // 複数Interfaceに同名関数がある場合、単一の所有者を確定しない。
+            if (Target->bIsInterfaceImplementation)
+            {
+                Target->InterfaceClassPath.Reset();
+                Target->InterfaceFunctionPath.Reset();
+                FBPSemanticDiagnostic Diagnostic;
+                Diagnostic.Message = FString::Printf(
+                    TEXT("Function %s matches multiple implemented interfaces"), *Function->GetName());
+                IR.Diagnostics.Add(MoveTemp(Diagnostic));
+                break;
+            }
+            Target->bIsInterfaceImplementation = true;
+            Target->InterfaceClassPath = InterfaceClass->GetPathName();
+            Target->InterfaceFunctionPath = InterfaceFunction->GetPathName();
+        }
         Target->Parameters.Reset();
         Target->ReturnType.Kind = EBPSemanticTypeKind::Void;
         for (TFieldIterator<FProperty> ParamIt(Function); ParamIt; ++ParamIt)
