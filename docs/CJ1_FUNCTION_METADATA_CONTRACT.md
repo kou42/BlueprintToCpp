@@ -60,3 +60,9 @@ GeneratedClass直下の`UFunction`に対して、親クラス階層の`FindFunct
 `Blueprint->ImplementedInterfaces` に直接登録されたInterfaceを調べ、GeneratedClass直下の関数と同名の`UFunction`がある場合、`is_interface_implementation=true`、`interface_class_path`、`interface_function_path`を出力する。未一致は`false`と`null`。複数Interfaceに同名関数がある場合は曖昧として診断し、`false`と`null`を出力する。
 
 **制約:** 現状は関数名のみの照合であり、引数型・戻り値・継承Interface・Blueprintコンパイル状態との厳密な一致検証は未実装。したがって`is_interface_implementation`は現段階では「直接宣言されたInterfaceとの名前一致候補」であり、CopilotがC++の`override`を無条件に生成する根拠にはしない。実Blueprintで同名関数・複数Interface・継承Interfaceを確認すること。
+
+## Interface関数シグネチャ照合の強化
+
+直接宣言されたInterfaceとの関数名一致候補に対し、`UFunction`の`FUNC_Static`/`FUNC_Const`、`CPF_Parm`の宣言順・個数・引数名、`FProperty::SameType`による型、`CPF_ReturnParm`/`CPF_OutParm`/`CPF_ReferenceParm`/`CPF_ConstParm`を比較する。一致しない候補は`is_interface_implementation`を立てず、warning診断を記録する。複数の一致候補が残る場合は従来どおり曖昧として扱う。
+
+この判定はReflection上の宣言一致を示すもので、Blueprintの実装グラフの有無や実際の呼び出し成功を証明するものではない。UE 5.7.4では引数名変更、型変更、out/ref/const差、複数Interface、Event形式のInterface関数、継承Interfaceをテストする。特にBlueprintでの関数名・Pin名のコンパイル後正規化差を確認すること。
