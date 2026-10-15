@@ -37,6 +37,8 @@ struct FBPIRNode
     // CallFunctionのSelf/Targetは関数所有クラスとは別情報。
     // self / explicit_target / unconnected_target / static / unresolved / not_applicable
     FString FunctionTargetKind = TEXT("not_applicable");
+    FString FunctionDispatchKind = TEXT("not_applicable");
+    bool bFunctionLatent = false;
     FGuid FunctionTargetPinId;
     TArray<FGuid> FunctionTargetLinkedPinIds;
     FName VariableName;
