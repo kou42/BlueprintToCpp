@@ -20,6 +20,22 @@ python -m app.validate_copilot_graph_json /path/to/BP.copilot.graph.json
 5. G01: BeginPlay→PrintString、G02: CalculateDamage、G03: Native呼び出し、G04: Branch、G05: 他BP関数、G06: Macro/Delegate、G07: out/Container型をそれぞれ検査する。
 6. JSON構造検証、UE Automation、UHT/UBT、動作比較は別々の結果として残す。
 
+## 実測Golden JSONの差分比較
+
+同一Blueprintをコンパイル・保存し、同一状態で二度エクスポートしたJSONを比較する。
+最初の実測JSONをレビュー後にGoldenとして保存し、次回の実測JSONと比較する。
+**合成FixtureをGoldenとして登録しない**。GUID・Pinのリンク先・出典情報を自動的に書き換えない。
+
+```bash
+cd PythonServer
+python -m unittest discover -s tests -p 'test_copilot_graph_golden.py'
+python -m app.compare_copilot_graph_golden /path/to/approved-golden.json /path/to/current-export.json
+```
+
+終了コード0は、両JSONが構造検証に合格し、全フィールドが一致した場合のみ返す。
+差分があれば終了コード1とJSONパスを表示する。GUIDの変更も差分として検出する。
+意図的なBlueprint変更による差分はレビューしてGoldenを更新する。出力の意味的正しさやUHT/UBT合格は別途検証する。
+
 ## 現状
 
 - ソースベースのバリデータ・合成テストは追加済み。
