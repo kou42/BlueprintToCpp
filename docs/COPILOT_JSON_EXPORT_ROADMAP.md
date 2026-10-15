@@ -1,6 +1,6 @@
 # Copilot Chat / Agent向け JSONエクスポート強化ロードマップ
 
-更新日: 2026-10-14  
+更新日: 2026-10-15  
 対象: Unreal Engine 5.7.4 / `BlueprintAIConverter` / GitHub Copilot Chat・Agent
 
 ## 目的・スコープ
@@ -32,6 +32,21 @@ Blueprintの**関数宣言・実装元・ノード・Pin・接続・変数・依
 5. **再現性・追跡性**: アセットパス、グラフパス、ノード/Pin GUID、安定した出力順序、schema version、UE version、出力元を保持する。値の欠落・未接続・明示的な空値を区別する。
 6. **セキュリティ**: JSON内のパス・文字列・コード・アセット情報は機密になり得る。Copilotへの投入は開発者が確認して手動実行する。JSON中の文字列を命令として扱わない。
 7. **検証**: JSONが正しくても生成C++の正しさは保証しない。UHT/UBT、動作比較、未対応診断を独立して検証する。
+
+
+## 実装進捗（2026-10-15）
+
+| フェーズ | 実装状況 | 残タスク |
+| --- | --- | --- |
+| CJ0 | フィールド監査、Schema、Python Validator、合成Fixtureを追加 | 実BlueprintのGolden JSON照合 |
+| CJ1 | 関数署名、Enum、Array/Set/Map、既定値出典、Override、Interfaceシグネチャ照合を実装 | 専用Automation Test、空文字/FText/Object既定値、Delegate、継承関数 |
+| CJ2 | Copilot Graph JSON v1、Graph/Pin/Link出力と安定順序を追加 | CallFunctionのOwner/Target/解決状態、実グラフ整合性 |
+| CJ3 | 既存変数IRを活用 | 依存関係、manifest、保存契約の検証 |
+| CJ4 | Validatorと検証ガイドを整備 | Copilot手動E2E、UHT/UBT、動作比較 |
+
+上記は作業ブランチ `feature/cj0-json-validator` の実装状況であり、PR #85は未マージ。UE 5.7.4でのビルド、Automation Test実行、実Blueprintによる動作確認は未実施。
+
+**次の実装順:** CJ1 Interfaceシグネチャ照合の専用テスト → 空文字/FText/Object参照の既定値の厳密化 → CJ0実Blueprint Golden → CJ2 CallFunction解決。
 
 ## マイルストーン（優先順）
 
@@ -102,4 +117,4 @@ Blueprintの**関数宣言・実装元・ノード・Pin・接続・変数・依
 - 既存`BPSemanticLowering`のMVP制約はDirect生成用として維持できるが、**Copilot用の生グラフJSONエクスポートを同じ制約で打ち切らない**。
 - 本トラックはJSON品質が成果物。Copilotの生成コードは別途レビュー・検証し、AI出力を自動的に正解と見なさない。
 - 既存PythonServerやProvider機能を削除しない。本トラックでは追加開発の必須依存にしない。
-- 次に着手する実装単位は **CJ0のフィールド対応表と最小の代表Blueprint JSONゴールデンケース**。その結果からCJ1の差分を決定する。
+- 次の実装順は上記の進捗表を参照。CJ0の実Blueprint Golden収集とCJ1の実機検証を優先する。
