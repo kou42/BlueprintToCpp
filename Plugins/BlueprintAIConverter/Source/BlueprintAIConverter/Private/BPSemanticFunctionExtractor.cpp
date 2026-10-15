@@ -172,7 +172,14 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             {
                 Target->ReturnType = Parameter.Type;
             }
-            if (Parameter.Type.Kind == EBPSemanticTypeKind::Unresolved)
+            // コンテナ自身のkindは未解決でも、要素型が存在すれば正常とする。
+            const bool bIsContainer = Parameter.Type.ContainerKind != TEXT("none");
+            const bool bMissingElement = (Parameter.Type.ContainerKind == TEXT("array") ||
+                Parameter.Type.ContainerKind == TEXT("set")) && Parameter.Type.ElementType.IsValid() == false;
+            const bool bMissingMapPart = Parameter.Type.ContainerKind == TEXT("map") &&
+                (Parameter.Type.KeyTypeInfo.IsValid() == false || Parameter.Type.ValueTypeInfo.IsValid() == false);
+            if ((bIsContainer == false && Parameter.Type.Kind == EBPSemanticTypeKind::Unresolved) ||
+                bMissingElement || bMissingMapPart)
             {
                 FBPSemanticDiagnostic Diagnostic;
                 Diagnostic.Message = FString::Printf(TEXT("Function %s parameter %s has unresolved type"),
