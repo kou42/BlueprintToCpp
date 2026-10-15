@@ -198,9 +198,13 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
                 // CPP_Default_メタデータがない場合、Blueprint側に既定値がないとは断定できない。
                 // 既存のhas_default_valueは維持し、取得状態を追加フィールドで区別する。
                 ParamJson->SetStringField(TEXT("default_value_source"),
-                    Parameter.bHasDefaultValue ? TEXT("cpp_default_metadata") : TEXT("unavailable"));
+                    Parameter.DefaultValueSource);
                 ParamJson->SetStringField(TEXT("default_value_status"),
-                    Parameter.bHasDefaultValue ? TEXT("specified") : TEXT("unavailable"));
+                    Parameter.DefaultValueStatus);
+                ParamJson->SetField(TEXT("default_value_source_node_id"),
+                    GuidValue(Parameter.DefaultValueSourceNodeId));
+                ParamJson->SetField(TEXT("default_value_source_pin_id"),
+                    GuidValue(Parameter.DefaultValueSourcePinId));
                 if (Parameter.bHasDefaultValue)
                 {
                     ParamJson->SetStringField(TEXT("default_value"), Parameter.DefaultValue);
