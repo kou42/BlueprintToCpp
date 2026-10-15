@@ -111,6 +111,9 @@ struct FBPSemanticFunction
     bool bIsStatic = false;
     bool bIsConst = false;
     bool bIsBlueprintEvent = false;
+    // 同名の親クラス関数が存在するときのみOverrideを確定する。
+    bool bIsOverride = false;
+    FString OverriddenFunctionPath;
     TArray<FBPSemanticParameter> Parameters;
     TArray<FBPSemanticBasicBlock> Blocks;
 };
