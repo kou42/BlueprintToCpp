@@ -101,15 +101,16 @@ def validate(document):
                 if kind in ("static", "unresolved", "not_applicable") and target_pin is not None:
                     errors.append(f"{loc}: target kind must not have Self pin")
                 if isinstance(links, list):
-                    if len(links) != len(set(links)):
+                    if all(isinstance(link, str) for link in links) and len(links) != len(set(links)):
                         errors.append(f"{loc}: duplicate target linked pin GUID")
-                    if links != sorted(links):
+                    if all(isinstance(link, str) for link in links) and links != sorted(links):
                         errors.append(f"{loc}: target links are not sorted")
                     if target_pin is None and links:
                         errors.append(f"{loc}: target links without Self pin")
                     if kind in ("self", "unconnected_target") and links:
                         errors.append(f"{loc}: unconnected target has linked pins")
-                    target_references.append((loc, nid, target_pin, links))
+                    if all(isinstance(link, str) for link in links):
+                        target_references.append((loc, nid, target_pin, links))
             if node.get("function_resolved") is True and (not node.get("function_path") or not node.get("function_owner_path")):
                 errors.append(f"{loc}: resolved function missing identity")
         for kind in ("exec_edges", "data_edges"):
