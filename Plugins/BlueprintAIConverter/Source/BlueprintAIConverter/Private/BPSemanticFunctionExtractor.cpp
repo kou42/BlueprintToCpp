@@ -368,3 +368,11 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         }
     }
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+bool FBPSemanticFunctionExtractor::MatchesInterfaceSignatureForTest(
+    const UFunction* Implementation, const UFunction* Declaration)
+{
+    return HasMatchingSignature(Implementation, Declaration);
+}
+#endif
