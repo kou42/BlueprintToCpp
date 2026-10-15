@@ -161,6 +161,7 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         Target->bIsConst = Function->HasAnyFunctionFlags(FUNC_Const);
         Target->bIsBlueprintEvent = Function->HasAnyFunctionFlags(FUNC_BlueprintEvent);
         Target->Parameters.Reset();
+        // 再抽出時に古いコンテナ要素型・型パスを残さない。
         Target->ReturnType = FBPSemanticType();
         Target->ReturnType.Kind = EBPSemanticTypeKind::Void;
         int32 DeclarationIndex = 0;
