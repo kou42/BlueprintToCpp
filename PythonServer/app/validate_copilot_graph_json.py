@@ -76,7 +76,7 @@ def validate(document):
                 current.add(pid)
                 if pin.get("direction") not in ("input", "output"):
                     errors.append(f"{ploc}: invalid direction")
-            if "function_dispatch_kind" in node and node["function_dispatch_kind"] not in ("regular", "interface_message", "interface_call", "unresolved", "not_applicable"):
+            if "function_dispatch_kind" in node and (not isinstance(node["function_dispatch_kind"], str) or node["function_dispatch_kind"] not in ("regular", "interface_message", "interface_call", "unresolved", "not_applicable")):
                 errors.append(f"{loc}: invalid function_dispatch_kind")
             if node.get("function_dispatch_kind") in ("interface_message", "interface_call"):
                 if node.get("function_resolved") is not True:
@@ -94,20 +94,20 @@ def validate(document):
                 kind = node["function_target_kind"]
                 allowed = ("self", "explicit_target", "unconnected_target",
                            "static", "unresolved", "not_applicable")
-                if kind not in allowed:
+                if not isinstance(kind, str) or kind not in allowed:
                     errors.append(f"{loc}: invalid function_target_kind")
                 target_pin = node.get("function_target_pin_id")
                 links = node.get("function_target_linked_pin_ids")
-                if target_pin is not None and target_pin not in current:
+                if target_pin is not None and (not isinstance(target_pin, str) or target_pin not in current):
                     errors.append(f"{loc}: invalid function_target_pin_id")
                 if not isinstance(links, list):
                     errors.append(f"{loc}: target links must be an array")
                 elif any(not isinstance(link, str) or GUID.fullmatch(link) is None
                          for link in links):
                     errors.append(f"{loc}: invalid target linked pin GUID")
-                if kind in ("self", "explicit_target", "unconnected_target") and target_pin is None:
+                if isinstance(kind, str) and kind in ("self", "explicit_target", "unconnected_target") and target_pin is None:
                     errors.append(f"{loc}: target kind requires Self pin")
-                if kind in ("static", "unresolved", "not_applicable") and target_pin is not None:
+                if isinstance(kind, str) and kind in ("static", "unresolved", "not_applicable") and target_pin is not None:
                     errors.append(f"{loc}: target kind must not have Self pin")
                 if isinstance(links, list):
                     if all(isinstance(link, str) for link in links) and len(links) != len(set(links)):
@@ -116,7 +116,7 @@ def validate(document):
                         errors.append(f"{loc}: target links are not sorted")
                     if target_pin is None and links:
                         errors.append(f"{loc}: target links without Self pin")
-                    if kind in ("self", "unconnected_target") and links:
+                    if isinstance(kind, str) and kind in ("self", "unconnected_target") and links:
                         errors.append(f"{loc}: unconnected target has linked pins")
                     if all(isinstance(link, str) for link in links):
                         target_references.append((loc, nid, target_pin, links))
