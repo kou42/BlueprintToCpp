@@ -139,6 +139,7 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         Target->bIsInterfaceImplementation = false;
         Target->InterfaceClassPath.Reset();
         Target->InterfaceFunctionPath.Reset();
+        bool bAmbiguousInterface = false;
         for (const FBPInterfaceDescription& Description : Blueprint->ImplementedInterfaces)
         {
             const UClass* InterfaceClass = Description.Interface;
@@ -154,12 +155,18 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             // 複数Interfaceに同名関数がある場合、単一の所有者を確定しない。
             if (Target->bIsInterfaceImplementation)
             {
+                bAmbiguousInterface = true;
                 Target->InterfaceClassPath.Reset();
                 Target->InterfaceFunctionPath.Reset();
+                Target->bIsInterfaceImplementation = false;
                 FBPSemanticDiagnostic Diagnostic;
                 Diagnostic.Message = FString::Printf(
                     TEXT("Function %s matches multiple implemented interfaces"), *Function->GetName());
                 IR.Diagnostics.Add(MoveTemp(Diagnostic));
+                break;
+            }
+            if (bAmbiguousInterface)
+            {
                 break;
             }
             Target->bIsInterfaceImplementation = true;
