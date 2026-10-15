@@ -76,6 +76,13 @@ def validate(document):
                     errors.append(f"{ploc}: invalid direction")
             if "function_dispatch_kind" in node and node["function_dispatch_kind"] not in ("regular", "interface_message", "interface_call", "unresolved", "not_applicable"):
                 errors.append(f"{loc}: invalid function_dispatch_kind")
+            if node.get("function_dispatch_kind") in ("interface_message", "interface_call"):
+                if node.get("function_resolved") is not True:
+                    errors.append(f"{loc}: interface dispatch requires resolved function")
+                if not node.get("function_owner_path") or not node.get("function_path"):
+                    errors.append(f"{loc}: interface dispatch missing function identity")
+            if node.get("function_dispatch_kind") == "unresolved" and node.get("function_resolved") is True:
+                errors.append(f"{loc}: unresolved dispatch contradicts resolved function")
             if "function_latent" in node and type(node["function_latent"]) is not bool:
                 errors.append(f"{loc}: invalid function_latent")
             node_pins[nid] = current
