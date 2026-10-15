@@ -54,3 +54,9 @@ GeneratedClass直下の関数について、`CPP_Default_<Param>` がない非Re
 GeneratedClass直下の`UFunction`に対して、親クラス階層の`FindFunctionByName`で同名の関数を探索する。存在する場合は`is_override=true`、`overridden_function_path`に親関数の正式パスを記録する。存在しない場合は`false`と`null`。既存の`is_native`、`is_blueprint_event`とは独立した属性として保持する。
 
 `function_attributes_source`には`signature_source`をそのまま使用する。Interface由来の実装やBlueprint FunctionGraphにおけるユーザー定義のオーバーライド表現については追加検証が必要であり、`is_override`だけでInterface実装を判定しない。
+
+## Interface関数の照合（暫定）
+
+`Blueprint->ImplementedInterfaces` に直接登録されたInterfaceを調べ、GeneratedClass直下の関数と同名の`UFunction`がある場合、`is_interface_implementation=true`、`interface_class_path`、`interface_function_path`を出力する。未一致は`false`と`null`。複数Interfaceに同名関数がある場合は曖昧として診断し、`false`と`null`を出力する。
+
+**制約:** 現状は関数名のみの照合であり、引数型・戻り値・継承Interface・Blueprintコンパイル状態との厳密な一致検証は未実装。したがって`is_interface_implementation`は現段階では「直接宣言されたInterfaceとの名前一致候補」であり、CopilotがC++の`override`を無条件に生成する根拠にはしない。実Blueprintで同名関数・複数Interface・継承Interfaceを確認すること。
