@@ -48,3 +48,9 @@ GeneratedClass直下の関数について、`CPP_Default_<Param>` がない非Re
 新しい `default_value_source_node_id` / `default_value_source_pin_id` は出典GUID（それ以外はnull）。`CPP_Default_` を優先し、空文字や接続中のPinを値が指定された証拠とはみなさない。Pinの`DefaultObject` / `DefaultTextValue` やUserDefinedPinの既定値との照合は未対応であり、UE 5.7.4で実Blueprintを用いた確認が必要。
 
 **重要:** Entry Pinに表示される値が関数宣言のデフォルト引数と同じ意味かどうかはBlueprintのノード種別とコンパイル状態に依存し得るため、現段階ではCopilotがC++デフォルト引数を無条件に生成する根拠にしない。
+
+## Overrideの識別
+
+GeneratedClass直下の`UFunction`に対して、親クラス階層の`FindFunctionByName`で同名の関数を探索する。存在する場合は`is_override=true`、`overridden_function_path`に親関数の正式パスを記録する。存在しない場合は`false`と`null`。既存の`is_native`、`is_blueprint_event`とは独立した属性として保持する。
+
+`function_attributes_source`には`signature_source`をそのまま使用する。Interface由来の実装やBlueprint FunctionGraphにおけるユーザー定義のオーバーライド表現については追加検証が必要であり、`is_override`だけでInterface実装を判定しない。
