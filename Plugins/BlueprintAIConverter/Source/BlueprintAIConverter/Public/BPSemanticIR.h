@@ -19,7 +19,10 @@ enum class EBPSemanticTypeKind : uint8
     Text,
     Object,
     Struct,
-    Enum
+    Enum,
+    Array,
+    Set,
+    Map
 };
 
 struct FBPSemanticType
@@ -29,6 +32,10 @@ struct FBPSemanticType
     FString TypePath;
     bool bIsReference = false;
     bool bIsConst = false;
+    // 再帰コンテナの要素型を値として共有所有し、未解決の子型も保持する。
+    TSharedPtr<FBPSemanticType> ElementType;
+    TSharedPtr<FBPSemanticType> KeyType;
+    TSharedPtr<FBPSemanticType> ValueType;
 };
 
 enum class EBPSemanticExpressionKind : uint8
