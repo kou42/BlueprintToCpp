@@ -5,6 +5,7 @@
 #include "GameFramework/Actor.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "UObject/UnrealType.h"
+#include "Engine/Blueprint.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticInterfaceSignatureTest,
     "BlueprintAIConverter.SemanticIR.InterfaceSignature",
@@ -12,6 +13,17 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticInterfaceSignatureTest,
 
 bool FBPSemanticInterfaceSignatureTest::RunTest(const FString& Parameters)
 {
+    // 未コンパイルのBlueprintやnullを渡しても、抽出先IRを破壊しない。
+    FBPSemanticIR EmptyIR;
+    FBPSemanticFunctionExtractor::Append(nullptr, EmptyIR);
+    TestEqual(TEXT("Null Blueprint does not append functions"), EmptyIR.Functions.Num(), 0);
+    UBlueprint* Uncompiled = NewObject<UBlueprint>(GetTransientPackage());
+    if (TestNotNull(TEXT("Transient Blueprint"), Uncompiled))
+    {
+        FBPSemanticFunctionExtractor::Append(Uncompiled, EmptyIR);
+        TestEqual(TEXT("Blueprint without generated class does not append functions"), EmptyIR.Functions.Num(), 0);
+    }
+
     const UFunction* Location = AActor::StaticClass()->FindFunctionByName(TEXT("K2_GetActorLocation"));
     const UFunction* Rotation = AActor::StaticClass()->FindFunctionByName(TEXT("K2_GetActorRotation"));
     const UFunction* SetLocation = AActor::StaticClass()->FindFunctionByName(TEXT("K2_SetActorLocation"));
