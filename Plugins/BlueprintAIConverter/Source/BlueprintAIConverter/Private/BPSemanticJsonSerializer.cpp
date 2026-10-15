@@ -24,6 +24,9 @@ FString TypeKindName(EBPSemanticTypeKind Kind)
     case EBPSemanticTypeKind::Object: return TEXT("object");
     case EBPSemanticTypeKind::Struct: return TEXT("struct");
     case EBPSemanticTypeKind::Enum: return TEXT("enum");
+    case EBPSemanticTypeKind::Array: return TEXT("array");
+    case EBPSemanticTypeKind::Set: return TEXT("set");
+    case EBPSemanticTypeKind::Map: return TEXT("map");
     }
     return TEXT("unresolved");
 }
@@ -86,6 +89,22 @@ TSharedRef<FJsonObject> TypeToJson(const FBPSemanticType& Type)
     Json->SetStringField(TEXT("type_path"), Type.TypePath);
     Json->SetBoolField(TEXT("is_reference"), Type.bIsReference);
     Json->SetBoolField(TEXT("is_const"), Type.bIsConst);
+    // 既存のスカラー型フィールドを維持し、コンテナ型にだけ子型を追加する。
+    if (Type.Kind == EBPSemanticTypeKind::Array || Type.Kind == EBPSemanticTypeKind::Set)
+    {
+        Json->SetField(TEXT("element_type"), Type.ElementType.IsValid()
+            ? MakeShared<FJsonValueObject>(TypeToJson(*Type.ElementType))
+            : MakeShared<FJsonValueNull>());
+    }
+    if (Type.Kind == EBPSemanticTypeKind::Map)
+    {
+        Json->SetField(TEXT("key_type"), Type.KeyType.IsValid()
+            ? MakeShared<FJsonValueObject>(TypeToJson(*Type.KeyType))
+            : MakeShared<FJsonValueNull>());
+        Json->SetField(TEXT("value_type"), Type.ValueType.IsValid()
+            ? MakeShared<FJsonValueObject>(TypeToJson(*Type.ValueType))
+            : MakeShared<FJsonValueNull>());
+    }
     return Json;
 }
 
