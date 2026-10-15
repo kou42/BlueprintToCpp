@@ -23,6 +23,8 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Function.SignatureSource = TEXT("generated_class_reflection");
     Function.bIsNative = true;
     Function.bIsStatic = true;
+    Function.bIsOverride = true;
+    Function.OverriddenFunctionPath = TEXT("/Script/Engine.Actor.ReceiveBeginPlay");
     FBPSemanticParameter Input;
     Input.Name = TEXT("Amount");
     Input.Type.Kind = EBPSemanticTypeKind::Int32;
@@ -146,6 +148,9 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("引数と戻り値"), JsonParameters.Num(), 4);
     TestTrue(TEXT("Native属性"), FunctionJson->GetBoolField(TEXT("is_native")));
     TestTrue(TEXT("Static属性"), FunctionJson->GetBoolField(TEXT("is_static")));
+    TestTrue(TEXT("Override属性"), FunctionJson->GetBoolField(TEXT("is_override")));
+    TestEqual(TEXT("Override元のパス"), FunctionJson->GetStringField(TEXT("overridden_function_path")),
+        FString(TEXT("/Script/Engine.Actor.ReceiveBeginPlay")));
     TestTrue(TEXT("引数既定値の存在"), JsonParameters[0]->AsObject()->GetBoolField(TEXT("has_default_value")));
     TestEqual(TEXT("引数既定値"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value")), FString(TEXT("0")));
     TestEqual(TEXT("既定値の取得元"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_source")),
