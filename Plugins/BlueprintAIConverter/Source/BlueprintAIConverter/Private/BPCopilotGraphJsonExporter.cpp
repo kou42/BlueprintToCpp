@@ -161,6 +161,8 @@ bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& En
             NodeJson->SetBoolField(TEXT("function_pure"), Node.bFunctionPure);
             NodeJson->SetBoolField(TEXT("function_const"), Node.bFunctionConst);
             NodeJson->SetStringField(TEXT("function_target_kind"), Node.FunctionTargetKind);
+            NodeJson->SetStringField(TEXT("function_dispatch_kind"), Node.FunctionDispatchKind);
+            NodeJson->SetBoolField(TEXT("function_latent"), Node.bFunctionLatent);
             NodeJson->SetField(TEXT("function_target_pin_id"), GuidJson(Node.FunctionTargetPinId));
             TArray<TSharedPtr<FJsonValue>> TargetLinks;
             for (const FGuid& LinkedPinId : Node.FunctionTargetLinkedPinIds)
