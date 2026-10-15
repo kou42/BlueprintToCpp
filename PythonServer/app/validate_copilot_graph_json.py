@@ -144,6 +144,8 @@ def validate(document):
              edge.get("target_node_id"), edge.get("target_pin_id"))
             for edge in graph.get("data_edges", [])
             if isinstance(edge, dict)
+            and all(isinstance(edge.get(field), str) for field in (
+                "source_node_id", "source_pin_id", "target_node_id", "target_pin_id"))
         } if isinstance(graph.get("data_edges"), list) else set()
         for loc, nid, target_pin, links in target_references:
             if target_pin is None:
