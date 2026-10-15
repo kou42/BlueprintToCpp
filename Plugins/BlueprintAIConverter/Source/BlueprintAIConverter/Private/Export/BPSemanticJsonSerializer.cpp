@@ -50,6 +50,7 @@ FString StatementKindName(EBPSemanticStatementKind Kind)
     case EBPSemanticStatementKind::Assignment: return TEXT("assignment");
     case EBPSemanticStatementKind::Return: return TEXT("return");
     case EBPSemanticStatementKind::Branch: return TEXT("branch");
+    case EBPSemanticStatementKind::ForLoop: return TEXT("for_loop");
     }
     return TEXT("expression");
 }
@@ -161,6 +162,21 @@ TSharedRef<FJsonObject> StatementToJson(const FBPSemanticStatement& Statement)
         ElseStatements.Add(MakeShared<FJsonValueObject>(StatementToJson(Child)));
     }
     Json->SetArrayField(TEXT("else_statements"), ElseStatements);
+    Json->SetField(TEXT("loop_index_variable"), OptionalName(Statement.LoopIndexVariable));
+    Json->SetObjectField(TEXT("loop_first_index"), ExpressionToJson(Statement.LoopFirstIndex));
+    Json->SetObjectField(TEXT("loop_last_index"), ExpressionToJson(Statement.LoopLastIndex));
+    TArray<TSharedPtr<FJsonValue>> LoopBodyStatements;
+    for (const FBPSemanticStatement& Child : Statement.LoopBodyStatements)
+    {
+        LoopBodyStatements.Add(MakeShared<FJsonValueObject>(StatementToJson(Child)));
+    }
+    Json->SetArrayField(TEXT("loop_body_statements"), LoopBodyStatements);
+    TArray<TSharedPtr<FJsonValue>> CompletedStatements;
+    for (const FBPSemanticStatement& Child : Statement.CompletedStatements)
+    {
+        CompletedStatements.Add(MakeShared<FJsonValueObject>(StatementToJson(Child)));
+    }
+    Json->SetArrayField(TEXT("completed_statements"), CompletedStatements);
     return Json;
 }
 }

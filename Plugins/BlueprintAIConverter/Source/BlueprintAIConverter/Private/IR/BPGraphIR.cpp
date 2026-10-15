@@ -7,6 +7,7 @@
 #include "EdGraphSchema_K2.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
+#include "K2Node_MacroInstance.h"
 #include "K2Node_Variable.h"
 
 namespace
@@ -75,6 +76,12 @@ void AppendGraph(const UEdGraph* Graph, const FString& Kind, FBPGraphIR& IR)
                 IR.Diagnostics.Add(FString::Printf(TEXT("%s: unresolved function reference %s"),
                     *Node->GetPathName(), *IRNode.FunctionName.ToString()));
             }
+        }
+        if (const UK2Node_MacroInstance* Macro = Cast<UK2Node_MacroInstance>(Node))
+        {
+            const UEdGraph* MacroGraph = Macro->GetMacroGraph();
+            IRNode.MacroGraphName = GetNameSafe(MacroGraph);
+            IRNode.MacroGraphPath = GetPathNameSafe(MacroGraph);
         }
         if (const UK2Node_Variable* Variable = Cast<UK2Node_Variable>(Node))
         {

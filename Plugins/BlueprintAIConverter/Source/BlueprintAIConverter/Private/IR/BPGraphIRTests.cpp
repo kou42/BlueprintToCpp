@@ -10,6 +10,8 @@
 #include "GameFramework/Actor.h"
 #include "K2Node_CallFunction.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPGraphIRNullTest,
     "BlueprintAIConverter.IR.NullInput",
@@ -105,31 +107,58 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPGraphIRFunctionReferenceTest,
 
 bool FBPGraphIRFunctionReferenceTest::RunTest(const FString& Parameters)
 {
-    UBlueprint* Blueprint = NewObject<UBlueprint>(GetTransientPackage());
-    UEdGraph* Graph = NewObject<UEdGraph>(Blueprint);
-    Blueprint->UbergraphPages.Add(Graph);
+    const FName BlueprintName = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_GraphIRFunctionReference"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        AActor::StaticClass(), GetTransientPackage(), BlueprintName, BPTYPE_Normal, NAME_None);
+    TestNotNull(TEXT("一時Blueprintを生成"), Blueprint);
+    if (Blueprint == nullptr)
+    {
+        return false;
+    }
+    UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+    TestNotNull(TEXT("EventGraphを取得"), Graph);
+    if (Graph == nullptr)
+    {
+        return false;
+    }
+    Graph->Nodes.Reset();
 
     UK2Node_CallFunction* Call = NewObject<UK2Node_CallFunction>(Graph);
+    Graph->AddNode(Call, false, false);
     Call->CreateNewGuid();
     Call->SetFromFunction(UKismetSystemLibrary::StaticClass()->FindFunctionByName(
         GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, PrintString)));
-    Graph->Nodes.Add(Call);
 
     FBPGraphIR IR;
     TestTrue(TEXT("関数参照付きIR生成"), FBPGraphIRBuilder::Build(Blueprint, IR));
-    if (IR.Graphs.Num() != 1 || IR.Graphs[0].Nodes.Num() != 1)
+    const FBPIRGraph* EventGraphIR = IR.Graphs.FindByPredicate(
+        [Graph](const FBPIRGraph& Candidate)
+        {
+            return Candidate.Path == Graph->GetPathName();
+        });
+    TestNotNull(TEXT("対象EventGraphを取得"), EventGraphIR);
+    if (EventGraphIR == nullptr)
     {
-        AddError(TEXT("関数ノードが取得できません"));
         return false;
     }
-    const FBPIRNode& Node = IR.Graphs[0].Nodes[0];
-    TestTrue(TEXT("関数参照を解決"), Node.bFunctionResolved);
-    TestEqual(TEXT("関数名"), Node.FunctionName, FName(TEXT("PrintString")));
-    TestEqual(TEXT("所有クラス"), Node.FunctionOwnerPath,
+    const FBPIRNode* Node = EventGraphIR->Nodes.FindByPredicate(
+        [Call](const FBPIRNode& Candidate)
+        {
+            return Candidate.Id == Call->NodeGuid;
+        });
+    TestNotNull(TEXT("関数ノードを取得"), Node);
+    if (Node == nullptr)
+    {
+        return false;
+    }
+    TestTrue(TEXT("関数参照を解決"), Node->bFunctionResolved);
+    TestEqual(TEXT("関数名"), Node->FunctionName, FName(TEXT("PrintString")));
+    TestEqual(TEXT("所有クラス"), Node->FunctionOwnerPath,
         UKismetSystemLibrary::StaticClass()->GetPathName());
-    TestTrue(TEXT("関数パス"), Node.FunctionPath.IsEmpty() == false);
-    TestTrue(TEXT("Native属性"), Node.bFunctionNative);
-    TestTrue(TEXT("Static属性"), Node.bFunctionStatic);
+    TestTrue(TEXT("関数パス"), Node->FunctionPath.IsEmpty() == false);
+    TestTrue(TEXT("Native属性"), Node->bFunctionNative);
+    TestTrue(TEXT("Static属性"), Node->bFunctionStatic);
     return true;
 }
 #endif

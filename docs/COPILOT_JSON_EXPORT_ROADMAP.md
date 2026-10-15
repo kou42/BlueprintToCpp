@@ -1,6 +1,6 @@
 # Copilot Chat / Agent向け JSONエクスポート強化ロードマップ
 
-更新日: 2026-10-15  
+更新日: 2026-10-16
 対象: Unreal Engine 5.7.4 / `BlueprintAIConverter` / GitHub Copilot Chat・Agent
 
 ## 目的・スコープ
@@ -39,14 +39,14 @@ Blueprintの**関数宣言・実装元・ノード・Pin・接続・変数・依
 | フェーズ | 実装状況 | 残タスク |
 | --- | --- | --- |
 | CJ0 | フィールド監査、Schema、Python Validator、合成Fixtureを追加 | 実BlueprintのGolden JSON照合 |
-| CJ1 | 関数署名、Enum、Array/Set/Map、既定値出典、Override、Interfaceシグネチャ照合を実装 | 専用Automation Test、空文字/FText/Object既定値、Delegate、継承関数 |
-| CJ2 | Copilot Graph JSON v1、Graph/Pin/Link出力と安定順序を追加 | CallFunctionのOwner/Target/解決状態、実グラフ整合性 |
+| CJ1 | 関数署名、Enum、Array/Set/Map、既定値出典、Override、Interfaceシグネチャ照合と専用Automation Testを実装 | 空文字/FText/Object既定値、Delegate、継承関数 |
+| CJ2 | Copilot Graph JSON v1、Graph/Pin/Link出力と安定順序、限定ForLoop変換を追加 | ForLoop拡張、ForEach/Break/While、CallFunctionのOwner/Target/解決状態、実グラフ整合性 |
 | CJ3 | 既存変数IRを活用 | 依存関係、manifest、保存契約の検証 |
 | CJ4 | Validatorと検証ガイドを整備 | Copilot手動E2E、UHT/UBT、動作比較 |
 
-上記は作業ブランチ `feature/cj0-json-validator` の実装状況であり、PR #85は未マージ。UE 5.7.4でのビルド、Automation Test実行、実Blueprintによる動作確認は未実施。
+上記のCJ0/CJ1/CJ2基盤は `main` へ統合済み。2026-10-16にUE 5.7でUHT/UBTビルドと `BlueprintAIConverter` Automation Test 64件を実行し、全件成功を確認した。実プロジェクト固有のBlueprintによるGolden収集と動作比較は引き続き未実施。
 
-**次の実装順:** CJ1 Interfaceシグネチャ照合の専用テスト → 空文字/FText/Object参照の既定値の厳密化 → CJ0実Blueprint Golden → CJ2 CallFunction解決。
+**次の実装順:** ForEachLoop → Break付きループ → WhileLoop/ネスト → ForLoop条件式の拡充 → 空文字/FText/Object参照の既定値の厳密化 → CJ0実Blueprint Golden → CJ2 CallFunction解決。
 
 ## マイルストーン（優先順）
 
@@ -76,6 +76,13 @@ Blueprintの**関数宣言・実装元・ノード・Pin・接続・変数・依
 - [ ] CallFunctionの関数参照、Owner、Self/Target、Static/Pure/Const、解決状態を取得する
 - [ ] Macro、Event、Interface、Dynamic Dispatch、Latentなどを分類し、未対応でも生グラフ情報を残す
 - [ ] ノードID/Pin IDの参照整合性と欠落リンクを検出する
+- [x] `ForLoop` Macro参照をGraph IR/JSONへ保持し、int32リテラル範囲と単一`PrintString`本体を両端包含のC++ `for`文へ変換する
+- [x] `ForLoop`のCompletedから単一`PrintString`への後続処理をループ後へ変換する
+- [x] `ForLoop`のIndex出力を`Conv_IntToString`経由でLoopBodyの`PrintString`へ渡す
+- [x] `ForLoop`のLoopBodyに直列接続された複数`PrintString`をExec接続順に変換する
+- [x] `ForLoop`のLoopBody直下にあるboolリテラル条件のBranchとTrue/False各`PrintString`を変換する
+- [ ] `ForLoop`のIndexを一般式・関数引数へ渡し、比較条件Branch、ネストを変換する
+- [ ] `ForEachLoop` / `ForEachLoopWithBreak` / `ForLoopWithBreak` / `WhileLoop`を意味解析し、配列要素・Index・Breakを保持する
 
 **完了条件:** Native関数呼び出しと自作関数呼び出しの対象をJSONで識別でき、Branch・Returnを含む代表グラフの実行/データ接続を復元できる。
 
@@ -108,6 +115,7 @@ Blueprintの**関数宣言・実装元・ノード・Pin・接続・変数・依
 | Native関数呼び出し | 実際のOwner/関数参照、Target | 既存UE APIを呼び出し、再実装しない |
 | BP自作関数→別BP自作関数 | 呼び出し先アセット、依存未解決診断 | 依存解決後のみ生成 |
 | Branch / Return / Pure式 | Exec/Dataリンク、評価順、分岐 | 副作用・戻り値が元BPと一致 |
+| ForLoop / ForEachLoop | 範囲、Index/要素、LoopBody、Completed、Break | 反復回数、順序、完了後処理が元BPと一致 |
 | 参照/out・配列・構造体 | 型とPin方向、未対応診断 | 型不明時は生成保留 |
 | 不正リンク・欠損型 | 診断、`partial/unsupported` | 推測による成功扱いを禁止 |
 

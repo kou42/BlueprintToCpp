@@ -1204,6 +1204,408 @@ bool LowerActorLocationImpl(const UBlueprint* Blueprint, const FBPGraphIR& Graph
     FBPSemanticVariableExtractor::Append(Blueprint, OutIR);
     return OutIR.HasErrors() == false;
 }
+
+bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+{
+    OutIR = FBPSemanticIR();
+    OutIR.AssetPath = GraphIR.AssetPath;
+    OutIR.ParentClassPath = GraphIR.ParentClassPath;
+
+    FBPResolvedParentClass ParentClass;
+    TArray<FString> ParentDiagnostics;
+    if (FBPParentClassResolver::ResolveActorParent(
+        GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
+    {
+        for (const FString& Message : ParentDiagnostics)
+        {
+            AddDiagnostic(OutIR, FString(), FGuid(), Message);
+        }
+        return false;
+    }
+    if (GraphIR.BlueprintVariableCount != 0)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(),
+            TEXT("ForLoop conversion does not yet support Blueprint member variables"));
+        return false;
+    }
+
+    const FBPIRGraph* EventGraph = nullptr;
+    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    {
+        if (Graph.Kind == TEXT("event"))
+        {
+            if (EventGraph != nullptr)
+            {
+                AddDiagnostic(OutIR, Graph.Name, FGuid(),
+                    TEXT("ForLoop conversion requires exactly one event graph"));
+                return false;
+            }
+            EventGraph = &Graph;
+        }
+        else if (Graph.Name != TEXT("UserConstructionScript") ||
+            Graph.ExecEdges.IsEmpty() == false || Graph.DataEdges.IsEmpty() == false)
+        {
+            AddDiagnostic(OutIR, Graph.Name, FGuid(),
+                TEXT("ForLoop conversion contains an unsupported graph"));
+            return false;
+        }
+    }
+    if (EventGraph == nullptr)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("ForLoop event graph is missing"));
+        return false;
+    }
+
+    const FBPIRNode* BeginPlay = nullptr;
+    const FBPIRNode* Loop = nullptr;
+    const FBPIRNode* IndexToString = nullptr;
+    const FBPIRNode* BodyBranch = nullptr;
+    TArray<const FBPIRNode*> Prints;
+    for (const FBPIRNode& Node : EventGraph->Nodes)
+    {
+        if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
+            Node.FunctionName == TEXT("ReceiveBeginPlay"))
+        {
+            BeginPlay = &Node;
+        }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
+            Node.MacroGraphName == TEXT("ForLoop"))
+        {
+            Loop = &Node;
+        }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+            Node.FunctionName == TEXT("PrintString"))
+        {
+            Prints.Add(&Node);
+        }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+            Node.FunctionName == TEXT("Conv_IntToString") &&
+            Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary"))
+        {
+            IndexToString = &Node;
+        }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse"))
+        {
+            BodyBranch = &Node;
+        }
+        else
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, Node.Id,
+                TEXT("ForLoop conversion contains an unsupported node"));
+            return false;
+        }
+    }
+    if (BeginPlay == nullptr || Loop == nullptr || Prints.IsEmpty() ||
+        EventGraph->Nodes.Num() != 2 + Prints.Num() + (IndexToString != nullptr ? 1 : 0) +
+            (BodyBranch != nullptr ? 1 : 0) ||
+        EventGraph->ExecEdges.Num() != 1 + Prints.Num() + (BodyBranch != nullptr ? 1 : 0) ||
+        (BodyBranch != nullptr && IndexToString != nullptr) ||
+        (IndexToString == nullptr ? EventGraph->DataEdges.IsEmpty() == false : EventGraph->DataEdges.Num() != 2))
+    {
+        AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
+            TEXT("ForLoop conversion requires BeginPlay, ForLoop, one body PrintString, and optional Completed PrintString"));
+        return false;
+    }
+
+    const FBPIRPin* BeginThen = FindPin(*BeginPlay, UEdGraphSchema_K2::PN_Then, EGPD_Output);
+    const FBPIRPin* Execute = FindPin(*Loop, UEdGraphSchema_K2::PN_Execute, EGPD_Input);
+    const FBPIRPin* FirstIndex = FindPin(*Loop, TEXT("FirstIndex"), EGPD_Input);
+    const FBPIRPin* LastIndex = FindPin(*Loop, TEXT("LastIndex"), EGPD_Input);
+    const FBPIRPin* LoopBody = FindPin(*Loop, TEXT("LoopBody"), EGPD_Output);
+    const FBPIRPin* LoopIndex = FindPin(*Loop, TEXT("Index"), EGPD_Output);
+    const FBPIRPin* Completed = FindPin(*Loop, TEXT("Completed"), EGPD_Output);
+    if (BeginThen == nullptr || Execute == nullptr || FirstIndex == nullptr || LastIndex == nullptr ||
+        LoopBody == nullptr || LoopIndex == nullptr || Completed == nullptr)
+    {
+        AddDiagnostic(OutIR, EventGraph->Name, Loop->Id, TEXT("ForLoop pins are incomplete"));
+        return false;
+    }
+    int32 FirstValue = 0;
+    int32 LastValue = 0;
+    if (LexTryParseString(FirstValue, *FirstIndex->DefaultValue) == false ||
+        LexTryParseString(LastValue, *LastIndex->DefaultValue) == false)
+    {
+        AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
+            TEXT("ForLoop bounds must be unconnected int32 literals"));
+        return false;
+    }
+
+    bool bBeginConnected = false;
+    const FBPIRNode* BodyPrint = nullptr;
+    const FBPIRNode* CompletedPrint = nullptr;
+    const auto FindPrintById = [&Prints](const FGuid& Id)
+    {
+        const FBPIRNode* const* Found = Prints.FindByPredicate(
+            [&Id](const FBPIRNode* Candidate) { return Candidate != nullptr && Candidate->Id == Id; });
+        return Found != nullptr ? *Found : nullptr;
+    };
+    for (const FBPIRLink& Edge : EventGraph->ExecEdges)
+    {
+        bBeginConnected |= Edge.SourceNode == BeginPlay->Id && Edge.SourcePin == BeginThen->Id &&
+            Edge.TargetNode == Loop->Id && Edge.TargetPin == Execute->Id;
+        if (Edge.SourceNode == Loop->Id && Edge.SourcePin == LoopBody->Id)
+        {
+            BodyPrint = FindPrintById(Edge.TargetNode);
+            if (BodyPrint == nullptr && BodyBranch != nullptr && Edge.TargetNode != BodyBranch->Id)
+            {
+                BodyBranch = nullptr;
+            }
+        }
+        else if (Edge.SourceNode == Loop->Id && Edge.SourcePin == Completed->Id)
+        {
+            CompletedPrint = FindPrintById(Edge.TargetNode);
+        }
+    }
+    const FBPIRPin* BodyExecute = BodyPrint != nullptr
+        ? FindPin(*BodyPrint, UEdGraphSchema_K2::PN_Execute, EGPD_Input)
+        : (BodyBranch != nullptr
+            ? FindPin(*BodyBranch, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr);
+    const FBPIRPin* CompletedExecute = CompletedPrint != nullptr
+        ? FindPin(*CompletedPrint, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr;
+    const bool bBodyConnected = EventGraph->ExecEdges.ContainsByPredicate(
+        [Loop, LoopBody, BodyPrint, BodyBranch, BodyExecute](const FBPIRLink& Edge)
+        {
+            const FGuid TargetId = BodyPrint != nullptr ? BodyPrint->Id :
+                (BodyBranch != nullptr ? BodyBranch->Id : FGuid());
+            return TargetId.IsValid() && BodyExecute != nullptr && Edge.SourceNode == Loop->Id &&
+                Edge.SourcePin == LoopBody->Id && Edge.TargetNode == TargetId &&
+                Edge.TargetPin == BodyExecute->Id;
+        });
+    const bool bCompletedConnected = CompletedPrint == nullptr ||
+        EventGraph->ExecEdges.ContainsByPredicate(
+            [Loop, Completed, CompletedPrint, CompletedExecute](const FBPIRLink& Edge)
+            {
+                return CompletedExecute != nullptr && Edge.SourceNode == Loop->Id &&
+                    Edge.SourcePin == Completed->Id && Edge.TargetNode == CompletedPrint->Id &&
+                    Edge.TargetPin == CompletedExecute->Id;
+            });
+    if (bBeginConnected == false || bBodyConnected == false || bCompletedConnected == false ||
+        (BodyPrint != nullptr && BodyPrint == CompletedPrint))
+    {
+        AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
+            TEXT("ForLoop Exec flow does not match the supported shape"));
+        return false;
+    }
+
+    TArray<const FBPIRNode*> OrderedBodyPrints;
+    TSet<FGuid> VisitedBodyNodes;
+    const FBPIRNode* CurrentBodyPrint = BodyPrint;
+    while (CurrentBodyPrint != nullptr)
+    {
+        if (VisitedBodyNodes.Contains(CurrentBodyPrint->Id))
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, CurrentBodyPrint->Id,
+                TEXT("ForLoop body contains an Exec cycle"));
+            return false;
+        }
+        VisitedBodyNodes.Add(CurrentBodyPrint->Id);
+        OrderedBodyPrints.Add(CurrentBodyPrint);
+        const FBPIRPin* ThenPin = FindPin(
+            *CurrentBodyPrint, UEdGraphSchema_K2::PN_Then, EGPD_Output);
+        if (ThenPin == nullptr)
+        {
+            break;
+        }
+        const FBPIRLink* NextEdge = EventGraph->ExecEdges.FindByPredicate(
+            [CurrentBodyPrint, ThenPin](const FBPIRLink& Edge)
+            {
+                return Edge.SourceNode == CurrentBodyPrint->Id && Edge.SourcePin == ThenPin->Id;
+            });
+        if (NextEdge == nullptr)
+        {
+            break;
+        }
+        CurrentBodyPrint = FindPrintById(NextEdge->TargetNode);
+        const FBPIRPin* NextExecute = CurrentBodyPrint != nullptr
+            ? FindPin(*CurrentBodyPrint, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr;
+        if (CurrentBodyPrint == nullptr || CurrentBodyPrint == CompletedPrint ||
+            NextExecute == nullptr || NextEdge->TargetPin != NextExecute->Id)
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, NextEdge->SourceNode,
+                TEXT("ForLoop body Exec chain contains an unsupported target"));
+            return false;
+        }
+    }
+    if (BodyBranch == nullptr &&
+        OrderedBodyPrints.Num() + (CompletedPrint != nullptr ? 1 : 0) != Prints.Num())
+    {
+        AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
+            TEXT("ForLoop contains a disconnected or ambiguous PrintString"));
+        return false;
+    }
+
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    Block.SourceEntryNodeId = BeginPlay->Id;
+    FBPSemanticStatement LoopStatement;
+    LoopStatement.Kind = EBPSemanticStatementKind::ForLoop;
+    LoopStatement.SourceNodeId = Loop->Id;
+    LoopStatement.LoopIndexVariable = TEXT("LoopIndex");
+    LoopStatement.LoopFirstIndex = Literal(
+        EBPSemanticTypeKind::Int32, LexToString(FirstValue), *Loop, TEXT("FirstIndex"));
+    LoopStatement.LoopLastIndex = Literal(
+        EBPSemanticTypeKind::Int32, LexToString(LastValue), *Loop, TEXT("LastIndex"));
+    if (BodyBranch != nullptr)
+    {
+        const FBPIRPin* Condition = FindPin(*BodyBranch, TEXT("Condition"), EGPD_Input);
+        const FBPIRPin* Then = FindPin(*BodyBranch, UEdGraphSchema_K2::PN_Then, EGPD_Output);
+        const FBPIRPin* Else = FindPin(*BodyBranch, TEXT("else"), EGPD_Output);
+        const auto FindBranchTarget = [EventGraph, BodyBranch, &FindPrintById](const FBPIRPin* Pin)
+        {
+            const FBPIRLink* Edge = Pin != nullptr ? EventGraph->ExecEdges.FindByPredicate(
+                [BodyBranch, Pin](const FBPIRLink& Candidate)
+                {
+                    return Candidate.SourceNode == BodyBranch->Id && Candidate.SourcePin == Pin->Id;
+                }) : nullptr;
+            return Edge != nullptr ? FindPrintById(Edge->TargetNode) : nullptr;
+        };
+        const FBPIRNode* ThenPrint = FindBranchTarget(Then);
+        const FBPIRNode* ElsePrint = FindBranchTarget(Else);
+        const FBPIRPin* ThenExecute = ThenPrint != nullptr
+            ? FindPin(*ThenPrint, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr;
+        const FBPIRPin* ElseExecute = ElsePrint != nullptr
+            ? FindPin(*ElsePrint, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr;
+        const auto HasBranchEdge = [EventGraph, BodyBranch](const FBPIRPin* Source,
+            const FBPIRNode* Target, const FBPIRPin* TargetExecute)
+        {
+            return Source != nullptr && Target != nullptr && TargetExecute != nullptr &&
+                EventGraph->ExecEdges.ContainsByPredicate(
+                    [BodyBranch, Source, Target, TargetExecute](const FBPIRLink& Edge)
+                    {
+                        return Edge.SourceNode == BodyBranch->Id && Edge.SourcePin == Source->Id &&
+                            Edge.TargetNode == Target->Id && Edge.TargetPin == TargetExecute->Id;
+                    });
+        };
+        if (Condition == nullptr || ThenPrint == nullptr || ElsePrint == nullptr ||
+            ThenPrint == ElsePrint || ThenPrint == CompletedPrint || ElsePrint == CompletedPrint ||
+            HasBranchEdge(Then, ThenPrint, ThenExecute) == false ||
+            HasBranchEdge(Else, ElsePrint, ElseExecute) == false ||
+            (Condition->DefaultValue != TEXT("true") && Condition->DefaultValue != TEXT("false")) ||
+            Prints.Num() != 2 + (CompletedPrint != nullptr ? 1 : 0))
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, BodyBranch->Id,
+                TEXT("ForLoop Branch requires a bool literal and distinct True/False PrintString targets"));
+            return false;
+        }
+        FBPPrintStringCall ThenValues;
+        FBPPrintStringCall ElseValues;
+        if (AnalyzeBranchPrint(GraphIR, *EventGraph, *BeginPlay, *ThenPrint, ThenValues, OutIR) == false ||
+            AnalyzeBranchPrint(GraphIR, *EventGraph, *BeginPlay, *ElsePrint, ElseValues, OutIR) == false)
+        {
+            return false;
+        }
+        FBPSemanticStatement BranchStatement;
+        BranchStatement.Kind = EBPSemanticStatementKind::Branch;
+        BranchStatement.SourceNodeId = BodyBranch->Id;
+        BranchStatement.Expression = Literal(
+            EBPSemanticTypeKind::Bool, Condition->DefaultValue, *BodyBranch, TEXT("Condition"));
+        FBPSemanticStatement ThenStatement;
+        ThenStatement.Kind = EBPSemanticStatementKind::Expression;
+        ThenStatement.SourceNodeId = ThenPrint->Id;
+        ThenStatement.Expression = MakePrintStringExpression(
+            ThenValues, *ThenPrint, GraphIR.ParentClassPath);
+        BranchStatement.ThenStatements.Add(MoveTemp(ThenStatement));
+        FBPSemanticStatement ElseStatement;
+        ElseStatement.Kind = EBPSemanticStatementKind::Expression;
+        ElseStatement.SourceNodeId = ElsePrint->Id;
+        ElseStatement.Expression = MakePrintStringExpression(
+            ElseValues, *ElsePrint, GraphIR.ParentClassPath);
+        BranchStatement.ElseStatements.Add(MoveTemp(ElseStatement));
+        LoopStatement.LoopBodyStatements.Add(MoveTemp(BranchStatement));
+    }
+    const FBPIRNode* IndexConsumerPrint = nullptr;
+    FBPSemanticExpression IndexConversion;
+    if (IndexToString != nullptr)
+    {
+        const FBPIRPin* ConverterInput = FindPin(*IndexToString, TEXT("InInt"), EGPD_Input);
+        const FBPIRPin* ConverterOutput = FindPin(*IndexToString, TEXT("ReturnValue"), EGPD_Output);
+        const FBPIRLink* ConverterConsumerEdge = EventGraph->DataEdges.FindByPredicate(
+            [IndexToString, ConverterOutput](const FBPIRLink& Edge)
+            {
+                return ConverterOutput != nullptr && Edge.SourceNode == IndexToString->Id &&
+                    Edge.SourcePin == ConverterOutput->Id;
+            });
+        IndexConsumerPrint = ConverterConsumerEdge != nullptr
+            ? FindPrintById(ConverterConsumerEdge->TargetNode) : nullptr;
+        const FBPIRPin* PrintText = IndexConsumerPrint != nullptr
+            ? FindPin(*IndexConsumerPrint, TEXT("InString"), EGPD_Input) : nullptr;
+        const bool bIndexToConverter = EventGraph->DataEdges.ContainsByPredicate(
+            [Loop, LoopIndex, IndexToString, ConverterInput](const FBPIRLink& Edge)
+            {
+                return ConverterInput != nullptr && Edge.SourceNode == Loop->Id &&
+                    Edge.SourcePin == LoopIndex->Id && Edge.TargetNode == IndexToString->Id &&
+                    Edge.TargetPin == ConverterInput->Id;
+            });
+        const bool bConverterToPrint = EventGraph->DataEdges.ContainsByPredicate(
+            [IndexToString, ConverterOutput, IndexConsumerPrint, PrintText](const FBPIRLink& Edge)
+            {
+                return ConverterOutput != nullptr && PrintText != nullptr &&
+                    Edge.SourceNode == IndexToString->Id && Edge.SourcePin == ConverterOutput->Id &&
+                    Edge.TargetNode == IndexConsumerPrint->Id && Edge.TargetPin == PrintText->Id;
+            });
+        if (bIndexToConverter == false || bConverterToPrint == false ||
+            OrderedBodyPrints.Contains(IndexConsumerPrint) == false)
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, IndexToString->Id,
+                TEXT("ForLoop Index conversion must connect Index -> Conv_IntToString -> PrintString.InString"));
+            return false;
+        }
+        IndexConversion.Kind = EBPSemanticExpressionKind::FunctionCall;
+        IndexConversion.Type.Kind = EBPSemanticTypeKind::String;
+        IndexConversion.SourceNodeId = IndexToString->Id;
+        IndexConversion.SourcePinId = ConverterOutput->Id;
+        IndexConversion.FunctionName = TEXT("Conv_IntToString");
+        IndexConversion.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+        FBPSemanticExpression IndexReference;
+        IndexReference.Kind = EBPSemanticExpressionKind::VariableReference;
+        IndexReference.Type.Kind = EBPSemanticTypeKind::Int32;
+        IndexReference.SourceNodeId = Loop->Id;
+        IndexReference.SourcePinId = LoopIndex->Id;
+        IndexReference.VariableName = LoopStatement.LoopIndexVariable;
+        IndexConversion.Arguments.Add(MoveTemp(IndexReference));
+        // 対象Body文を構築するときに式へ差し込む。
+    }
+    for (const FBPIRNode* OrderedPrint : OrderedBodyPrints)
+    {
+        FBPPrintStringCall BodyValues;
+        if (OrderedPrint == nullptr || AnalyzeBranchPrint(
+            GraphIR, *EventGraph, *BeginPlay, *OrderedPrint, BodyValues, OutIR) == false)
+        {
+            return false;
+        }
+        FBPSemanticStatement BodyStatement;
+        BodyStatement.Kind = EBPSemanticStatementKind::Expression;
+        BodyStatement.SourceNodeId = OrderedPrint->Id;
+        BodyStatement.Expression = MakePrintStringExpression(
+            BodyValues, *OrderedPrint, GraphIR.ParentClassPath);
+        if (OrderedPrint == IndexConsumerPrint)
+        {
+            BodyStatement.Expression.Arguments[1] = MoveTemp(IndexConversion);
+        }
+        LoopStatement.LoopBodyStatements.Add(MoveTemp(BodyStatement));
+    }
+    if (CompletedPrint != nullptr)
+    {
+        FBPPrintStringCall CompletedValues;
+        if (AnalyzeBranchPrint(
+            GraphIR, *EventGraph, *BeginPlay, *CompletedPrint, CompletedValues, OutIR) == false)
+        {
+            return false;
+        }
+        FBPSemanticStatement CompletedStatement;
+        CompletedStatement.Kind = EBPSemanticStatementKind::Expression;
+        CompletedStatement.SourceNodeId = CompletedPrint->Id;
+        CompletedStatement.Expression = MakePrintStringExpression(
+            CompletedValues, *CompletedPrint, GraphIR.ParentClassPath);
+        LoopStatement.CompletedStatements.Add(MoveTemp(CompletedStatement));
+    }
+    Block.Statements.Add(MoveTemp(LoopStatement));
+    Function.Blocks.Add(MoveTemp(Block));
+    OutIR.Functions.Add(MoveTemp(Function));
+    return true;
+}
 }
 
 bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
@@ -1213,6 +1615,7 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
     bool bHasGetActorLocation = false;
     bool bHasSetActorLocation = false;
     bool bHasBranch = false;
+    bool bHasForLoop = false;
     for (const FBPIRGraph& Graph : GraphIR.Graphs)
     {
         for (const FBPIRNode& Node : Graph.Nodes)
@@ -1221,14 +1624,20 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
             bHasGetActorLocation |= Node.FunctionName == TEXT("K2_GetActorLocation");
             bHasSetActorLocation |= Node.FunctionName == TEXT("K2_SetActorLocation");
             bHasBranch |= Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
+            bHasForLoop |= Node.MacroGraphName == TEXT("ForLoop");
         }
     }
-    if (bHasBranch && bHasPrintString &&
+    if (bHasForLoop && bHasPrintString && bHasBranch == false &&
+        bHasGetActorLocation == false && bHasSetActorLocation == false)
+    {
+        return LowerForLoop(GraphIR, OutIR);
+    }
+    if (bHasBranch && bHasForLoop == false && bHasPrintString &&
         bHasGetActorLocation == false && bHasSetActorLocation == false)
     {
         return LowerBranch(Blueprint, GraphIR, OutIR);
     }
-    if (bHasBranch == false && bHasPrintString &&
+    if (bHasBranch == false && bHasForLoop == false && bHasPrintString &&
         bHasGetActorLocation == false && bHasSetActorLocation == false)
     {
         return LowerPrintString(Blueprint, GraphIR, OutIR);
@@ -1285,4 +1694,9 @@ bool FBPSemanticLowering::LowerBranch(const UBlueprint* Blueprint,
     const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
     return LowerBranchImpl(Blueprint, GraphIR, OutIR);
+}
+
+bool FBPSemanticLowering::LowerForLoop(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+{
+    return LowerForLoopImpl(GraphIR, OutIR);
 }

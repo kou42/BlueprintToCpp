@@ -160,6 +160,8 @@ bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& En
             NodeJson->SetBoolField(TEXT("function_static"), Node.bFunctionStatic);
             NodeJson->SetBoolField(TEXT("function_pure"), Node.bFunctionPure);
             NodeJson->SetBoolField(TEXT("function_const"), Node.bFunctionConst);
+            NodeJson->SetStringField(TEXT("macro_graph_name"), Node.MacroGraphName);
+            NodeJson->SetStringField(TEXT("macro_graph_path"), Node.MacroGraphPath);
             NodeJson->SetStringField(TEXT("variable_name"), Node.VariableName.ToString());
             TArray<TSharedPtr<FJsonValue>> Pins;
             TArray<FBPIRPin> SortedPins = Node.Pins;

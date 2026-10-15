@@ -34,6 +34,9 @@ struct FBPIRNode
     bool bFunctionStatic = false;
     bool bFunctionPure = false;
     bool bFunctionConst = false;
+    // Macroノードは表示名ではなく参照グラフで識別する。
+    FString MacroGraphName;
+    FString MacroGraphPath;
     FName VariableName;
     bool bVariableSelfContext = false;
     TArray<FBPIRPin> Pins;

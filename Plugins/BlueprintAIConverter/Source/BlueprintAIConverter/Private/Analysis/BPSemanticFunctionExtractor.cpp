@@ -8,56 +8,6 @@
 
 namespace
 {
-// 名前だけの一致をInterface実装と誤認しないため、Reflectionの宣言順・型・方向を照合する。
-// SameTypeはコンテナの子型やEnum/Struct/Objectの具体型も比較する。
-bool HasMatchingSignature(const UFunction* Implementation, const UFunction* Declaration)
-{
-    if (Implementation == nullptr || Declaration == nullptr)
-    {
-        return false;
-    }
-    if (Implementation->HasAnyFunctionFlags(FUNC_Static) != Declaration->HasAnyFunctionFlags(FUNC_Static)
-        || Implementation->HasAnyFunctionFlags(FUNC_Const) != Declaration->HasAnyFunctionFlags(FUNC_Const))
-    {
-        return false;
-    }
-    TArray<const FProperty*> ImplementationParams;
-    TArray<const FProperty*> DeclarationParams;
-    for (TFieldIterator<FProperty> It(Implementation); It; ++It)
-    {
-        if (It->HasAnyPropertyFlags(CPF_Parm))
-        {
-            ImplementationParams.Add(*It);
-        }
-    }
-    for (TFieldIterator<FProperty> It(Declaration); It; ++It)
-    {
-        if (It->HasAnyPropertyFlags(CPF_Parm))
-        {
-            DeclarationParams.Add(*It);
-        }
-    }
-    if (ImplementationParams.Num() != DeclarationParams.Num())
-    {
-        return false;
-    }
-    for (int32 Index = 0; Index < ImplementationParams.Num(); ++Index)
-    {
-        const FProperty* Actual = ImplementationParams[Index];
-        const FProperty* Expected = DeclarationParams[Index];
-        if (Actual->GetFName() != Expected->GetFName()
-            || Actual->SameType(Expected) == false
-            || Actual->HasAnyPropertyFlags(CPF_ReturnParm) != Expected->HasAnyPropertyFlags(CPF_ReturnParm)
-            || Actual->HasAnyPropertyFlags(CPF_OutParm) != Expected->HasAnyPropertyFlags(CPF_OutParm)
-            || Actual->HasAnyPropertyFlags(CPF_ReferenceParm) != Expected->HasAnyPropertyFlags(CPF_ReferenceParm)
-            || Actual->HasAnyPropertyFlags(CPF_ConstParm) != Expected->HasAnyPropertyFlags(CPF_ConstParm))
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
 // コンテナはkind=unresolvedでもよいため、子要素まで検査する。
 bool HasUnresolvedType(const FBPSemanticType& Type, int32 Depth = 0)
 {
@@ -176,6 +126,55 @@ FBPSemanticType ResolvePropertyType(const FProperty* Property, int32 Depth = 0)
 }
 }
 
+bool FBPSemanticFunctionExtractor::HasMatchingInterfaceSignature(
+    const UFunction* Implementation, const UFunction* Declaration)
+{
+    if (Implementation == nullptr || Declaration == nullptr)
+    {
+        return false;
+    }
+    if (Implementation->HasAnyFunctionFlags(FUNC_Static) != Declaration->HasAnyFunctionFlags(FUNC_Static)
+        || Implementation->HasAnyFunctionFlags(FUNC_Const) != Declaration->HasAnyFunctionFlags(FUNC_Const))
+    {
+        return false;
+    }
+    TArray<const FProperty*> ImplementationParams;
+    TArray<const FProperty*> DeclarationParams;
+    for (TFieldIterator<FProperty> It(Implementation); It; ++It)
+    {
+        if (It->HasAnyPropertyFlags(CPF_Parm))
+        {
+            ImplementationParams.Add(*It);
+        }
+    }
+    for (TFieldIterator<FProperty> It(Declaration); It; ++It)
+    {
+        if (It->HasAnyPropertyFlags(CPF_Parm))
+        {
+            DeclarationParams.Add(*It);
+        }
+    }
+    if (ImplementationParams.Num() != DeclarationParams.Num())
+    {
+        return false;
+    }
+    for (int32 Index = 0; Index < ImplementationParams.Num(); ++Index)
+    {
+        const FProperty* Actual = ImplementationParams[Index];
+        const FProperty* Expected = DeclarationParams[Index];
+        if (Actual->GetFName() != Expected->GetFName()
+            || Actual->SameType(Expected) == false
+            || Actual->HasAnyPropertyFlags(CPF_ReturnParm) != Expected->HasAnyPropertyFlags(CPF_ReturnParm)
+            || Actual->HasAnyPropertyFlags(CPF_OutParm) != Expected->HasAnyPropertyFlags(CPF_OutParm)
+            || Actual->HasAnyPropertyFlags(CPF_ReferenceParm) != Expected->HasAnyPropertyFlags(CPF_ReferenceParm)
+            || Actual->HasAnyPropertyFlags(CPF_ConstParm) != Expected->HasAnyPropertyFlags(CPF_ConstParm))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemanticIR& IR)
 {
     if (Blueprint == nullptr || Blueprint->GeneratedClass == nullptr)
@@ -237,7 +236,7 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             {
                 continue;
             }
-            if (HasMatchingSignature(Function, InterfaceFunction) == false)
+            if (HasMatchingInterfaceSignature(Function, InterfaceFunction) == false)
             {
                 // 名前だけ一致した候補は実装確定せず、後続の一致候補を探索する。
                 FBPSemanticDiagnostic Diagnostic;

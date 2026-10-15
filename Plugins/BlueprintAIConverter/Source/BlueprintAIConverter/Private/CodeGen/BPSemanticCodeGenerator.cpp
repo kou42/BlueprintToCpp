@@ -645,13 +645,44 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
     }
 
     FString Text;
+    FString TextExpression;
     FString Screen;
     FString Log;
     FString Color;
     FString DurationText;
     FString Key;
-    if (ReadArgument(Call.Arguments[1], EBPSemanticTypeKind::String, Text, Diagnostics) == false ||
-        ReadArgument(Call.Arguments[2], EBPSemanticTypeKind::Bool, Screen, Diagnostics) == false ||
+    const FBPSemanticExpression& TextArgument = Call.Arguments[1];
+    if (TextArgument.Kind == EBPSemanticExpressionKind::Literal)
+    {
+        if (ReadArgument(TextArgument, EBPSemanticTypeKind::String, Text, Diagnostics) == false)
+        {
+            return false;
+        }
+        FString EscapedText;
+        if (EscapeString(Text, EscapedText, Diagnostics) == false)
+        {
+            return false;
+        }
+        TextExpression = FString::Printf(TEXT("TEXT(\"%s\")"), *EscapedText);
+    }
+    else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
+        TextArgument.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+        TextArgument.FunctionName == TEXT("Conv_IntToString") &&
+        TextArgument.Arguments.Num() == 1 &&
+        TextArgument.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
+        TextArgument.Arguments[0].Type.Kind == EBPSemanticTypeKind::Int32 &&
+        IsIdentifier(TextArgument.Arguments[0].VariableName.ToString()))
+    {
+        TextExpression = FString::Printf(TEXT("UKismetStringLibrary::Conv_IntToString(%s)"),
+            *TextArgument.Arguments[0].VariableName.ToString());
+    }
+    else
+    {
+        Diagnostics.Add(TEXT("Unsupported PrintString text expression"));
+        return false;
+    }
+    if (ReadArgument(Call.Arguments[2], EBPSemanticTypeKind::Bool, Screen, Diagnostics) == false ||
         ReadArgument(Call.Arguments[3], EBPSemanticTypeKind::Bool, Log, Diagnostics) == false ||
         ReadArgument(Call.Arguments[4], EBPSemanticTypeKind::Struct, Color, Diagnostics) == false ||
         ReadArgument(Call.Arguments[5], EBPSemanticTypeKind::Float, DurationText, Diagnostics) == false ||
@@ -677,16 +708,14 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         Diagnostics.Add(TEXT("Invalid PrintString duration or color"));
         return false;
     }
-    FString EscapedText;
     FString EscapedKey;
-    if (EscapeString(Text, EscapedText, Diagnostics) == false ||
-        EscapeString(Key, EscapedKey, Diagnostics) == false)
+    if (EscapeString(Key, EscapedKey, Diagnostics) == false)
     {
         return false;
     }
     OutStatement = FString::Printf(
-        TEXT("%sUKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n"),
-        *Indent, *EscapedText, *Screen, *Log,
+        TEXT("%sUKismetSystemLibrary::PrintString(this, %s, %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n"),
+        *Indent, *TextExpression, *Screen, *Log,
         *FloatLiteral(LinearColor.R), *FloatLiteral(LinearColor.G),
         *FloatLiteral(LinearColor.B), *FloatLiteral(LinearColor.A),
         *FloatLiteral(Duration), *EscapedKey);
@@ -813,6 +842,111 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     }
     const FBPSemanticStatement& Statement = Function.Blocks[0].Statements[0];
     const FBPSemanticExpression& Call = Statement.Expression;
+    if (Statement.Kind == EBPSemanticStatementKind::ForLoop)
+    {
+        int32 FirstIndex = 0;
+        int32 LastIndex = 0;
+        if (Statement.LoopIndexVariable.IsNone() ||
+            IsIdentifier(Statement.LoopIndexVariable.ToString()) == false ||
+            Statement.LoopFirstIndex.Kind != EBPSemanticExpressionKind::Literal ||
+            Statement.LoopFirstIndex.Type.Kind != EBPSemanticTypeKind::Int32 ||
+            Statement.LoopLastIndex.Kind != EBPSemanticExpressionKind::Literal ||
+            Statement.LoopLastIndex.Type.Kind != EBPSemanticTypeKind::Int32 ||
+            LexTryParseString(FirstIndex, *Statement.LoopFirstIndex.LiteralValue) == false ||
+            LexTryParseString(LastIndex, *Statement.LoopLastIndex.LiteralValue) == false ||
+            Statement.LoopBodyStatements.IsEmpty() ||
+            Statement.CompletedStatements.Num() > 1)
+        {
+            OutDiagnostics.Add(TEXT("ForLoop requires literal int32 bounds and one supported body statement"));
+            return false;
+        }
+        FString BodyCode;
+        for (const FBPSemanticStatement& BodyStatement : Statement.LoopBodyStatements)
+        {
+            FString StatementCode;
+            if (BodyStatement.Kind == EBPSemanticStatementKind::Expression)
+            {
+                if (EmitPrintStringStatement(BodyStatement.Expression, IR.ParentClassPath,
+                    TEXT("        "), StatementCode, OutDiagnostics) == false)
+                {
+                    return false;
+                }
+            }
+            else if (BodyStatement.Kind == EBPSemanticStatementKind::Branch &&
+                BodyStatement.ThenStatements.Num() == 1 && BodyStatement.ElseStatements.Num() == 1)
+            {
+                FString Condition;
+                FString ThenCode;
+                FString ElseCode;
+                if (EmitBranchCondition(BodyStatement.Expression, IR.Variables,
+                        Condition, OutDiagnostics) == false ||
+                    EmitPrintStringStatement(BodyStatement.ThenStatements[0].Expression,
+                        IR.ParentClassPath, TEXT("            "), ThenCode, OutDiagnostics) == false ||
+                    EmitPrintStringStatement(BodyStatement.ElseStatements[0].Expression,
+                        IR.ParentClassPath, TEXT("            "), ElseCode, OutDiagnostics) == false)
+                {
+                    return false;
+                }
+                StatementCode = FString::Printf(
+                    TEXT("        if (%s)\n        {\n%s        }\n        else\n        {\n%s        }\n"),
+                    *Condition, *ThenCode, *ElseCode);
+            }
+            else
+            {
+                OutDiagnostics.Add(TEXT("ForLoop body contains an unsupported semantic statement"));
+                return false;
+            }
+            BodyCode += StatementCode;
+        }
+        FString CompletedCode;
+        if (Statement.CompletedStatements.Num() == 1)
+        {
+            const FBPSemanticStatement& CompletedStatement = Statement.CompletedStatements[0];
+            if (CompletedStatement.Kind != EBPSemanticStatementKind::Expression ||
+                EmitPrintStringStatement(CompletedStatement.Expression, IR.ParentClassPath,
+                    TEXT("    "), CompletedCode, OutDiagnostics) == false)
+            {
+                OutDiagnostics.Add(TEXT("ForLoop Completed contains an unsupported semantic statement"));
+                return false;
+            }
+        }
+
+        FString VariableDeclarations;
+        FString ConstructorBody;
+        if (EmitVariables(IR.Variables, ClassName, VariableDeclarations,
+            ConstructorBody, OutDiagnostics, VariableFallbackMode) == false)
+        {
+            return false;
+        }
+        const FString BaseName = ClassName.Mid(1);
+        const FString ApiPrefix = ModuleApiMacro.IsEmpty()
+            ? FString() : ModuleApiMacro + TEXT(" ");
+        const FString ConstructorDeclaration = ConstructorBody.IsEmpty()
+            ? FString()
+            : FString::Printf(TEXT("public:\n    %s();\n\n"), *ClassName);
+        const FString UnrealTypeInclude = ConstructorBody.IsEmpty()
+            ? FString()
+            : TEXT("#include \"UObject/UnrealType.h\"\n");
+        const FString ConstructorDefinition = ConstructorBody.IsEmpty()
+            ? FString()
+            : FString::Printf(TEXT("\n%s::%s()\n{\n%s}\n"),
+                *ClassName, *ClassName, *ConstructorBody);
+        FBPGeneratedActorFiles Files;
+        Files.HeaderFileName = BaseName + TEXT(".h");
+        Files.SourceFileName = BaseName + TEXT(".cpp");
+        Files.HeaderContent = FString::Printf(
+            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%sprotected:\n    virtual void BeginPlay() override;\n};\n"),
+            *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
+            *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration);
+        Files.SourceContent = FString::Printf(
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    for (int32 %s = %d; %s <= %d; ++%s)\n    {\n%s    }\n%s}\n"),
+            *BaseName, *UnrealTypeInclude, *ConstructorDefinition, *ClassName,
+            *Statement.LoopIndexVariable.ToString(), FirstIndex,
+            *Statement.LoopIndexVariable.ToString(), LastIndex,
+            *Statement.LoopIndexVariable.ToString(), *BodyCode, *CompletedCode);
+        OutFiles = MoveTemp(Files);
+        return true;
+    }
     if (Statement.Kind == EBPSemanticStatementKind::Branch)
     {
         FString Condition;

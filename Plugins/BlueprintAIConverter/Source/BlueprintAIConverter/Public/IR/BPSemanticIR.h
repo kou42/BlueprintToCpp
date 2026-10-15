@@ -69,7 +69,8 @@ enum class EBPSemanticStatementKind : uint8
     Expression,
     Assignment,
     Return,
-    Branch
+    Branch,
+    ForLoop
 };
 
 struct FBPSemanticStatement
@@ -81,6 +82,12 @@ struct FBPSemanticStatement
     // BranchではExpressionをbool条件として使用し、各枝の文を順序付きで保持する。
     TArray<FBPSemanticStatement> ThenStatements;
     TArray<FBPSemanticStatement> ElseStatements;
+    // ForLoopはFirstIndexからLastIndexまで両端を含めて反復する。
+    FName LoopIndexVariable;
+    FBPSemanticExpression LoopFirstIndex;
+    FBPSemanticExpression LoopLastIndex;
+    TArray<FBPSemanticStatement> LoopBodyStatements;
+    TArray<FBPSemanticStatement> CompletedStatements;
 };
 
 struct FBPSemanticBasicBlock

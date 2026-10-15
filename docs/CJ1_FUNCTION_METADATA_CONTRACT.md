@@ -66,3 +66,15 @@ GeneratedClass直下の`UFunction`に対して、親クラス階層の`FindFunct
 直接宣言されたInterfaceとの関数名一致候補に対し、`UFunction`の`FUNC_Static`/`FUNC_Const`、`CPF_Parm`の宣言順・個数・引数名、`FProperty::SameType`による型、`CPF_ReturnParm`/`CPF_OutParm`/`CPF_ReferenceParm`/`CPF_ConstParm`を比較する。一致しない候補は`is_interface_implementation`を立てず、warning診断を記録する。複数の一致候補が残る場合は従来どおり曖昧として扱う。
 
 この判定はReflection上の宣言一致を示すもので、Blueprintの実装グラフの有無や実際の呼び出し成功を証明するものではない。UE 5.7.4では引数名変更、型変更、out/ref/const差、複数Interface、Event形式のInterface関数、継承Interfaceをテストする。特にBlueprintでの関数名・Pin名のコンパイル後正規化差を確認すること。
+
+### 専用Automation Test
+
+`BlueprintAIConverter.SemanticIR.Function.InterfaceSignature` を追加し、Reflectionで取得したInterface宣言と実装候補について、次を検証する。
+
+- 宣言順・引数名・型・戻り値・out/ref・constが一致する候補を受理する
+- 引数型の不一致を拒否する
+- out/ref方向の不一致を拒否する
+- 関数const属性の不一致を拒否する
+- nullの実装候補を拒否する
+
+照合本体は `FBPSemanticFunctionExtractor::HasMatchingInterfaceSignature` に集約し、抽出処理とテストが同一の判定規則を使用する。2026-10-16にUE 5.7で全Automation Test 62件の成功を確認した。複数Interfaceの曖昧性、継承Interface、実Blueprintの実装グラフ有無は別途統合テストで確認する。
