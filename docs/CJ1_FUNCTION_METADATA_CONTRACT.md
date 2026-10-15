@@ -23,6 +23,12 @@
 
 ## 未対応・検証
 
-Enum/Array/Set/Map/Delegate型、Blueprint FunctionGraphの引数既定値、継承UFunctionの署名統合、Override/Interface判定は引き続き課題。型や値を推測して埋めない。
+Array/Set/Map/Delegate型、Blueprint FunctionGraphの引数既定値、継承UFunctionの署名統合、Override/Interface判定は引き続き課題。型や値を推測して埋めない。
 
 UE Automation Test: `BlueprintAIConverter.SemanticJson.SerializeV2`。UE 5.7.4実機での実行、ビルド、実Blueprintとの照合は未実施。
+
+## Enum型の追加対応
+
+`FEnumProperty` は `type.kind=enum` と `type.type_path=<UEnumの正式パス>` を出力する。`FByteProperty` は `Enum` 参照が存在する場合のみ同様に扱う。通常の `uint8` は依然として `unresolved` となり、既存の診断が残る。
+
+この拡張はEnum値のシリアライズやC++コード生成の対応を意味しない。UE実機で `FEnumProperty`、`TEnumAsByte`、通常の `uint8` を別々に確認すること。
