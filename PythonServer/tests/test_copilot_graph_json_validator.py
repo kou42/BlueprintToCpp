@@ -131,6 +131,29 @@ class CopilotGraphValidatorTests(unittest.TestCase):
         self.assertTrue(any("invalid target linked pin GUID" in e
                             for e in validate(data)))
 
+    def test_interface_dispatch_requires_resolution(self):
+        data = fixture()
+        node = data["graphs"][0]["nodes"][0]
+        node["function_dispatch_kind"] = "interface_message"
+        self.assertTrue(any("interface dispatch requires resolved function" in e
+                            for e in validate(data)))
+        node["function_resolved"] = True
+        node["function_path"] = "/Script/Test.IExample:Run"
+        node["function_owner_path"] = "/Script/Test.IExample"
+        self.assertEqual(validate(data), [])
+        node["function_dispatch_kind"] = "interface_call"
+        self.assertEqual(validate(data), [])
+
+    def test_unresolved_dispatch_cannot_claim_resolution(self):
+        data = fixture()
+        node = data["graphs"][0]["nodes"][0]
+        node["function_dispatch_kind"] = "unresolved"
+        node["function_resolved"] = True
+        node["function_path"] = "/Script/Test.Class:Run"
+        node["function_owner_path"] = "/Script/Test.Class"
+        self.assertTrue(any("unresolved dispatch contradicts" in e
+                            for e in validate(data)))
+
     def test_invalid_version(self):
         data = fixture()
         data["schema_version"] = 2
