@@ -72,8 +72,62 @@ void AppendGraph(const UEdGraph* Graph, const FString& Kind, FBPGraphIR& IR)
             }
             else
             {
+                IRNode.FunctionTargetKind = TEXT("unresolved");
                 IR.Diagnostics.Add(FString::Printf(TEXT("%s: unresolved function reference %s"),
                     *Node->GetPathName(), *IRNode.FunctionName.ToString()));
+            }
+            if (TargetFunction != nullptr)
+            {
+                if (IRNode.bFunctionStatic)
+                {
+                    IRNode.FunctionTargetKind = TEXT("static");
+                }
+                else
+                {
+                    // Self Pinの接続を一次情報として保持する。接続されていないSelfは
+                    // Blueprintの暗黙Selfである場合があるが、非Selfの無接続は推測しない。
+                    const UEdGraphPin* SelfPin = Call->FindPin(UEdGraphSchema_K2::PN_Self);
+                    if (SelfPin == nullptr)
+                    {
+                        IRNode.FunctionTargetKind = TEXT("unresolved");
+                        IR.Diagnostics.Add(FString::Printf(
+                            TEXT("%s: instance function has no Self pin"), *Node->GetPathName()));
+                    }
+                    else
+                    {
+                        IRNode.FunctionTargetPinId = SelfPin->PinId;
+                        for (const UEdGraphPin* LinkedPin : SelfPin->LinkedTo)
+                        {
+                            if (LinkedPin != nullptr)
+                            {
+                                IRNode.FunctionTargetLinkedPinIds.Add(LinkedPin->PinId);
+                            }
+                        }
+                        IRNode.FunctionTargetLinkedPinIds.Sort(
+                            [](const FGuid& A, const FGuid& B)
+                            {
+                                return A.ToString() < B.ToString();
+                            });
+                        if (IRNode.FunctionTargetLinkedPinIds.IsEmpty() == false)
+                        {
+                            IRNode.FunctionTargetKind = TEXT("explicit_target");
+                        }
+                        else if (SelfPin->DefaultObject != nullptr)
+                        {
+                            IRNode.FunctionTargetKind = TEXT("explicit_target");
+                        }
+                        else if (SelfPin->PinType.PinSubCategory == UEdGraphSchema_K2::PSC_Self)
+                        {
+                            IRNode.FunctionTargetKind = TEXT("self");
+                        }
+                        else
+                        {
+                            IRNode.FunctionTargetKind = TEXT("unconnected_target");
+                            IR.Diagnostics.Add(FString::Printf(
+                                TEXT("%s: instance function target is unconnected"), *Node->GetPathName()));
+                        }
+                    }
+                }
             }
         }
         if (const UK2Node_Variable* Variable = Cast<UK2Node_Variable>(Node))
