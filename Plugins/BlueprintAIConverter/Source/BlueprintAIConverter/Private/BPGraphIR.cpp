@@ -6,6 +6,7 @@
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_Message.h"
 #include "K2Node_Event.h"
 #include "K2Node_Variable.h"
 
@@ -71,6 +72,10 @@ void AppendGraph(const UEdGraph* Graph, const FString& Kind, FBPGraphIR& IR)
                 IRNode.bFunctionConst = TargetFunction->HasAnyFunctionFlags(FUNC_Const);
                 IRNode.bFunctionLatent = TargetFunction->HasMetaData(TEXT("Latent"));
                 IRNode.FunctionDispatchKind = TEXT("regular");
+                if (Call->IsA(UK2Node_Message::StaticClass()))
+                {
+                    IRNode.FunctionDispatchKind = TEXT("interface_message");
+                }
             }
             else
             {
