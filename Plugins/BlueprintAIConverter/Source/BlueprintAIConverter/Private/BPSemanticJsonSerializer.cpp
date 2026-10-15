@@ -185,6 +185,9 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
             FunctionJson->SetBoolField(TEXT("is_const"), Function.bIsConst);
             FunctionJson->SetBoolField(TEXT("is_blueprint_event"), Function.bIsBlueprintEvent);
             FunctionJson->SetBoolField(TEXT("is_override"), Function.bIsOverride);
+            FunctionJson->SetBoolField(TEXT("is_interface_implementation"), Function.bIsInterfaceImplementation);
+            FunctionJson->SetField(TEXT("interface_class_path"), OptionalString(Function.InterfaceClassPath));
+            FunctionJson->SetField(TEXT("interface_function_path"), OptionalString(Function.InterfaceFunctionPath));
             FunctionJson->SetField(TEXT("overridden_function_path"), OptionalString(Function.OverriddenFunctionPath));
             // 属性は個別のboolを維持しつつ、反射由来であることを明示する。
             FunctionJson->SetStringField(TEXT("function_attributes_source"), Function.SignatureSource);
