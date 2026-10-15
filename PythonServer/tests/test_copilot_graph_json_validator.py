@@ -154,6 +154,18 @@ class CopilotGraphValidatorTests(unittest.TestCase):
         self.assertTrue(any("unresolved dispatch contradicts" in e
                             for e in validate(data)))
 
+    def test_invalid_dispatch_and_target_types_do_not_raise(self):
+        data = fixture()
+        node = data["graphs"][0]["nodes"][0]
+        node["function_dispatch_kind"] = {"unexpected": "object"}
+        node["function_target_kind"] = ["self"]
+        node["function_target_pin_id"] = {"invalid": "pin"}
+        node["function_target_linked_pin_ids"] = []
+        errors = validate(data)
+        self.assertTrue(any("invalid function_dispatch_kind" in e for e in errors))
+        self.assertTrue(any("invalid function_target_kind" in e for e in errors))
+        self.assertTrue(any("invalid function_target_pin_id" in e for e in errors))
+
     def test_invalid_version(self):
         data = fixture()
         data["schema_version"] = 2
