@@ -13,6 +13,7 @@ def fixture():
     return {
         "schema_version": 1, "format": "blueprint_copilot_graph",
         "semantic_status": "partial", "asset_path": "/Game/BP_Test",
+        "diagnostics": [],
         "graphs": [{
             "path": "EventGraph",
             "nodes": [
@@ -39,6 +40,16 @@ class CopilotGraphValidatorTests(unittest.TestCase):
         data = fixture()
         data["graphs"][0]["nodes"][1]["pins"][0]["id"] = B
         self.assertTrue(any("duplicate pin GUID" in e for e in validate(data)))
+
+    def test_resolved_function_requires_identity(self):
+        data = fixture()
+        data["graphs"][0]["nodes"][0]["function_resolved"] = True
+        self.assertTrue(any("missing identity" in e for e in validate(data)))
+
+    def test_diagnostics_sorted(self):
+        data = fixture()
+        data["diagnostics"] = ["z", "a"]
+        self.assertIn("diagnostics are not sorted", validate(data))
 
     def test_invalid_version(self):
         data = fixture()
