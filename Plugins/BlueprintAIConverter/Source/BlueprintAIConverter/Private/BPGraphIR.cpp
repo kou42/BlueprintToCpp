@@ -74,7 +74,15 @@ void AppendGraph(const UEdGraph* Graph, const FString& Kind, FBPGraphIR& IR)
                 IRNode.FunctionDispatchKind = TEXT("regular");
                 if (Call->IsA(UK2Node_Message::StaticClass()))
                 {
+                    // MessageはInterface実装先へ実行時ディスパッチする。
                     IRNode.FunctionDispatchKind = TEXT("interface_message");
+                }
+                else if (TargetFunction->GetOwnerClass() != nullptr
+                    && TargetFunction->GetOwnerClass()->HasAnyClassFlags(CLASS_Interface))
+                {
+                    // 通常のCallFunctionでも宣言元がInterfaceなら区別する。
+                    // Messageとは異なるため、同一カテゴリにまとめない。
+                    IRNode.FunctionDispatchKind = TEXT("interface_call");
                 }
             }
             else
