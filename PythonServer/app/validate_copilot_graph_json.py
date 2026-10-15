@@ -42,6 +42,7 @@ def validate(document):
             continue
         node_pins = {}
         pin_ids = set()
+        target_references = []
         for ni, node in enumerate(nodes):
             loc = f"{prefix}.nodes[{ni}]"
             if not isinstance(node, dict):
@@ -95,8 +96,20 @@ def validate(document):
                 elif any(not isinstance(link, str) or GUID.fullmatch(link) is None
                          for link in links):
                     errors.append(f"{loc}: invalid target linked pin GUID")
-                if kind == "explicit_target" and target_pin is None:
-                    errors.append(f"{loc}: explicit target missing Self pin")
+                if kind in ("self", "explicit_target", "unconnected_target") and target_pin is None:
+                    errors.append(f"{loc}: target kind requires Self pin")
+                if kind in ("static", "unresolved", "not_applicable") and target_pin is not None:
+                    errors.append(f"{loc}: target kind must not have Self pin")
+                if isinstance(links, list):
+                    if len(links) != len(set(links)):
+                        errors.append(f"{loc}: duplicate target linked pin GUID")
+                    if links != sorted(links):
+                        errors.append(f"{loc}: target links are not sorted")
+                    if target_pin is None and links:
+                        errors.append(f"{loc}: target links without Self pin")
+                    if kind in ("self", "unconnected_target") and links:
+                        errors.append(f"{loc}: unconnected target has linked pins")
+                    target_references.append((loc, nid, target_pin, links))
             if node.get("function_resolved") is True and (not node.get("function_path") or not node.get("function_owner_path")):
                 errors.append(f"{loc}: resolved function missing identity")
         for kind in ("exec_edges", "data_edges"):
@@ -115,6 +128,22 @@ def validate(document):
                     errors.append(f"{loc}: invalid source endpoint")
                 if target not in node_pins or edge.get("target_pin_id") not in node_pins.get(target, set()):
                     errors.append(f"{loc}: invalid target endpoint")
+        # ノード収集後に全接続を検査する。出力ノードの登場順には依存しない。
+        data_links = {
+            (edge.get("source_node_id"), edge.get("source_pin_id"),
+             edge.get("target_node_id"), edge.get("target_pin_id"))
+            for edge in graph.get("data_edges", [])
+            if isinstance(edge, dict)
+        } if isinstance(graph.get("data_edges"), list) else set()
+        for loc, nid, target_pin, links in target_references:
+            if target_pin is None:
+                continue
+            for linked_pin in links:
+                if not any(
+                    source_pin == linked_pin and target_node == nid and target_id == target_pin
+                    for source_node, source_pin, target_node, target_id in data_links
+                ):
+                    errors.append(f"{loc}: target linked pin missing data edge")
     diagnostics = document.get("diagnostics")
     if not isinstance(diagnostics, list) or any(not isinstance(d, str) for d in diagnostics):
         errors.append("diagnostics must be an array of strings")
