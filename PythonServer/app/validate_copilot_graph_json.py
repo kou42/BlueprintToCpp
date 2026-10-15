@@ -1,0 +1,119 @@
+"""Copilot Graph JSON v1 の構造・参照整合性を検証する。
+
+UE実機での意味的な正しさは判定しない。欠落を推測して補完しない。
+"""
+import json
+import re
+import sys
+from pathlib import Path
+
+GUID = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+
+
+def validate(document):
+    errors = []
+    if not isinstance(document, dict):
+        return ["root must be an object"]
+    if document.get("format") != "blueprint_copilot_graph":
+        errors.append("unexpected format")
+    if type(document.get("schema_version")) is not int or document["schema_version"] != 1:
+        errors.append("unsupported schema_version")
+    if document.get("semantic_status") not in ("partial", "unsupported"):
+        errors.append("invalid semantic_status")
+    if not isinstance(document.get("asset_path"), str) or not document["asset_path"]:
+        errors.append("missing asset_path")
+    graphs = document.get("graphs")
+    if not isinstance(graphs, list):
+        return errors + ["graphs must be an array"]
+    paths = []
+    for gi, graph in enumerate(graphs):
+        prefix = f"graphs[{gi}]"
+        if not isinstance(graph, dict):
+            errors.append(f"{prefix}: not an object")
+            continue
+        path = graph.get("path")
+        if not isinstance(path, str):
+            errors.append(f"{prefix}: invalid path")
+        else:
+            paths.append(path)
+        nodes = graph.get("nodes")
+        if not isinstance(nodes, list):
+            errors.append(f"{prefix}: nodes must be an array")
+            continue
+        node_pins = {}
+        pin_ids = set()
+        for ni, node in enumerate(nodes):
+            loc = f"{prefix}.nodes[{ni}]"
+            if not isinstance(node, dict):
+                errors.append(f"{loc}: not an object")
+                continue
+            nid = node.get("id")
+            if not isinstance(nid, str) or GUID.fullmatch(nid) is None:
+                errors.append(f"{loc}: invalid node GUID")
+                continue
+            if nid in node_pins:
+                errors.append(f"{loc}: duplicate node GUID")
+            pins = node.get("pins")
+            if not isinstance(pins, list):
+                errors.append(f"{loc}: pins must be an array")
+                continue
+            current = set()
+            for pi, pin in enumerate(pins):
+                ploc = f"{loc}.pins[{pi}]"
+                if not isinstance(pin, dict):
+                    errors.append(f"{ploc}: not an object")
+                    continue
+                pid = pin.get("id")
+                if not isinstance(pid, str) or GUID.fullmatch(pid) is None:
+                    errors.append(f"{ploc}: invalid pin GUID")
+                    continue
+                if pid in pin_ids:
+                    errors.append(f"{ploc}: duplicate pin GUID")
+                pin_ids.add(pid)
+                current.add(pid)
+                if pin.get("direction") not in ("input", "output"):
+                    errors.append(f"{ploc}: invalid direction")
+            node_pins[nid] = current
+        for kind in ("exec_edges", "data_edges"):
+            edges = graph.get(kind)
+            if not isinstance(edges, list):
+                errors.append(f"{prefix}: {kind} must be an array")
+                continue
+            for ei, edge in enumerate(edges):
+                loc = f"{prefix}.{kind}[{ei}]"
+                if not isinstance(edge, dict):
+                    errors.append(f"{loc}: not an object")
+                    continue
+                source = edge.get("source_node_id")
+                target = edge.get("target_node_id")
+                if source not in node_pins or edge.get("source_pin_id") not in node_pins.get(source, set()):
+                    errors.append(f"{loc}: invalid source endpoint")
+                if target not in node_pins or edge.get("target_pin_id") not in node_pins.get(target, set()):
+                    errors.append(f"{loc}: invalid target endpoint")
+        if "function_resolved" in document:
+            errors.append("function_resolved must be a node field")
+    if paths != sorted(paths):
+        errors.append("graphs are not sorted by path")
+    return errors
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python validate_copilot_graph_json.py FILE", file=sys.stderr)
+        return 2
+    try:
+        document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    errors = validate(document)
+    for error in errors:
+        print(error, file=sys.stderr)
+    if errors:
+        return 1
+    print("Copilot Graph JSON v1: valid (structural checks only)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
