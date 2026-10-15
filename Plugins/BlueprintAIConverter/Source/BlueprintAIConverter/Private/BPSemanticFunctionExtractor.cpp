@@ -1,6 +1,9 @@
 #include "BPSemanticFunctionExtractor.h"
 
 #include "Engine/Blueprint.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphPin.h"
+#include "K2Node_FunctionEntry.h"
 #include "UObject/UnrealType.h"
 
 namespace
@@ -147,11 +150,55 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
                 if (Parameter.bHasDefaultValue)
                 {
                     Parameter.DefaultValue = Function->GetMetaData(*DefaultKey);
+                    Parameter.DefaultValueSource = TEXT("cpp_default_metadata");
+                    Parameter.DefaultValueStatus = TEXT("specified");
                 }
             }
             if (Parameter.bIsReturn)
             {
                 Target->ReturnType = Parameter.Type;
+            }
+            else if (Parameter.bHasDefaultValue == false)
+            {
+                // FunctionGraphのEntry出力Pinから取得する。空文字は未指定か空値か
+                // 区別できないため、推測でspecifiedにしない。
+                for (const UEdGraph* Graph : Blueprint->FunctionGraphs)
+                {
+                    if (Graph == nullptr || Graph->GetFName() != Function->GetFName())
+                    {
+                        continue;
+                    }
+                    for (const UEdGraphNode* Node : Graph->Nodes)
+                    {
+                        const UK2Node_FunctionEntry* Entry = Cast<UK2Node_FunctionEntry>(Node);
+                        if (Entry == nullptr)
+                        {
+                            continue;
+                        }
+                        for (const UEdGraphPin* Pin : Entry->Pins)
+                        {
+                            if (Pin == nullptr || Pin->Direction != EGPD_Output ||
+                                Pin->PinName != Parameter.Name)
+                            {
+                                continue;
+                            }
+                            // 接続中のPinの値は実行時入力により決まるため、既定値と断定しない。
+                            if (Pin->LinkedTo.IsEmpty() == false)
+                            {
+                                continue;
+                            }
+                            if (Pin->DefaultValue.IsEmpty() == false)
+                            {
+                                Parameter.bHasDefaultValue = true;
+                                Parameter.DefaultValue = Pin->DefaultValue;
+                                Parameter.DefaultValueSource = TEXT("function_entry_pin");
+                                Parameter.DefaultValueStatus = TEXT("specified");
+                                Parameter.DefaultValueSourceNodeId = Entry->NodeGuid;
+                                Parameter.DefaultValueSourcePinId = Pin->PinId;
+                            }
+                        }
+                    }
+                }
             }
             if (HasUnresolvedType(Parameter.Type))
             {
