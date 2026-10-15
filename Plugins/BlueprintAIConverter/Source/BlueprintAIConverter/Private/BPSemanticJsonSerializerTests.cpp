@@ -23,6 +23,11 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Function.SignatureSource = TEXT("generated_class_reflection");
     Function.bIsNative = true;
     Function.bIsStatic = true;
+    Function.bIsOverride = true;
+    Function.OverriddenFunctionPath = TEXT("/Script/Engine.Actor.ReceiveBeginPlay");
+    Function.bIsInterfaceImplementation = true;
+    Function.InterfaceClassPath = TEXT("/Script/Test.TestInterface");
+    Function.InterfaceFunctionPath = TEXT("/Script/Test.TestInterface.BeginPlay");
     FBPSemanticParameter Input;
     Input.Name = TEXT("Amount");
     Input.DeclarationIndex = 0;
@@ -30,6 +35,7 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Input.bHasDefaultValue = true;
     Input.DefaultValueStatus = TEXT("specified");
     Input.DefaultValue = TEXT("0");
+    Input.DefaultValueSource = TEXT("cpp_default_metadata");
     Function.Parameters.Add(Input);
     FBPSemanticParameter ArrayInput;
     ArrayInput.Name = TEXT("Names");
@@ -174,6 +180,10 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Multicast Delegate署名"), JsonParameters[4]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("type_path")), FString(TEXT("/Script/Test.OnChanged__DelegateSignature")));
     TestTrue(TEXT("Native属性"), FunctionJson->GetBoolField(TEXT("is_native")));
     TestTrue(TEXT("Static属性"), FunctionJson->GetBoolField(TEXT("is_static")));
+    TestTrue(TEXT("Override属性"), FunctionJson->GetBoolField(TEXT("is_override")));
+    TestTrue(TEXT("Interface属性"), FunctionJson->GetBoolField(TEXT("is_interface_implementation")));
+    TestEqual(TEXT("Interfaceパス"), FunctionJson->GetStringField(TEXT("interface_class_path")), FString(TEXT("/Script/Test.TestInterface")));
+    TestEqual(TEXT("既定値出典"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_source")), FString(TEXT("cpp_default_metadata")));
     TestTrue(TEXT("引数既定値の存在"), JsonParameters[0]->AsObject()->GetBoolField(TEXT("has_default_value")));
     TestEqual(TEXT("既定値の取得状態"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_status")),
         FString(TEXT("specified")));

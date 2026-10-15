@@ -104,6 +104,10 @@ struct FBPSemanticParameter
     // specified / absent / unavailable のいずれかを保持する。
     FString DefaultValueStatus = TEXT("unavailable");
     FString DefaultValue;
+    // 既定値の出典と元のGraph GUIDを記録する。
+    FString DefaultValueSource = TEXT("unavailable");
+    FGuid DefaultValueSourceNodeId;
+    FGuid DefaultValueSourcePinId;
 };
 
 struct FBPSemanticFunction
@@ -117,6 +121,11 @@ struct FBPSemanticFunction
     bool bIsStatic = false;
     bool bIsConst = false;
     bool bIsBlueprintEvent = false;
+    bool bIsOverride = false;
+    FString OverriddenFunctionPath;
+    bool bIsInterfaceImplementation = false;
+    FString InterfaceClassPath;
+    FString InterfaceFunctionPath;
     TArray<FBPSemanticParameter> Parameters;
     TArray<FBPSemanticBasicBlock> Blocks;
 };

@@ -1,10 +1,63 @@
 #include "BPSemanticFunctionExtractor.h"
 
 #include "Engine/Blueprint.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphPin.h"
+#include "K2Node_FunctionEntry.h"
 #include "UObject/UnrealType.h"
 
 namespace
 {
+// 名前だけの一致をInterface実装と誤認しないため、Reflectionの宣言順・型・方向を照合する。
+// SameTypeはコンテナの子型やEnum/Struct/Objectの具体型も比較する。
+bool HasMatchingSignature(const UFunction* Implementation, const UFunction* Declaration)
+{
+    if (Implementation == nullptr || Declaration == nullptr)
+    {
+        return false;
+    }
+    if (Implementation->HasAnyFunctionFlags(FUNC_Static) != Declaration->HasAnyFunctionFlags(FUNC_Static)
+        || Implementation->HasAnyFunctionFlags(FUNC_Const) != Declaration->HasAnyFunctionFlags(FUNC_Const))
+    {
+        return false;
+    }
+    TArray<const FProperty*> ImplementationParams;
+    TArray<const FProperty*> DeclarationParams;
+    for (TFieldIterator<FProperty> It(Implementation); It; ++It)
+    {
+        if (It->HasAnyPropertyFlags(CPF_Parm))
+        {
+            ImplementationParams.Add(*It);
+        }
+    }
+    for (TFieldIterator<FProperty> It(Declaration); It; ++It)
+    {
+        if (It->HasAnyPropertyFlags(CPF_Parm))
+        {
+            DeclarationParams.Add(*It);
+        }
+    }
+    if (ImplementationParams.Num() != DeclarationParams.Num())
+    {
+        return false;
+    }
+    for (int32 Index = 0; Index < ImplementationParams.Num(); ++Index)
+    {
+        const FProperty* Actual = ImplementationParams[Index];
+        const FProperty* Expected = DeclarationParams[Index];
+        if (Actual->GetFName() != Expected->GetFName()
+            || Actual->SameType(Expected) == false
+            || Actual->HasAnyPropertyFlags(CPF_ReturnParm) != Expected->HasAnyPropertyFlags(CPF_ReturnParm)
+            || Actual->HasAnyPropertyFlags(CPF_OutParm) != Expected->HasAnyPropertyFlags(CPF_OutParm)
+            || Actual->HasAnyPropertyFlags(CPF_ReferenceParm) != Expected->HasAnyPropertyFlags(CPF_ReferenceParm)
+            || Actual->HasAnyPropertyFlags(CPF_ConstParm) != Expected->HasAnyPropertyFlags(CPF_ConstParm))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 // コンテナはkind=unresolvedでもよいため、子要素まで検査する。
 bool HasUnresolvedType(const FBPSemanticType& Type, int32 Depth = 0)
 {
@@ -160,6 +213,63 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         Target->bIsStatic = Function->HasAnyFunctionFlags(FUNC_Static);
         Target->bIsConst = Function->HasAnyFunctionFlags(FUNC_Const);
         Target->bIsBlueprintEvent = Function->HasAnyFunctionFlags(FUNC_BlueprintEvent);
+        // 親クラスに同名の宣言がある場合のみOverrideとする。Interface実装とは別概念。
+        const UClass* SuperClass = GeneratedClass->GetSuperClass();
+        const UFunction* ParentFunction = SuperClass != nullptr
+            ? SuperClass->FindFunctionByName(Function->GetFName()) : nullptr;
+        Target->bIsOverride = ParentFunction != nullptr;
+        Target->OverriddenFunctionPath = ParentFunction != nullptr ? ParentFunction->GetPathName() : FString();
+        // Blueprintが直接実装を宣言したInterfaceだけを照合する。
+        // 親クラスから継承したInterfaceや同名の無関係な関数は推測で扱わない。
+        Target->bIsInterfaceImplementation = false;
+        Target->InterfaceClassPath.Reset();
+        Target->InterfaceFunctionPath.Reset();
+        bool bAmbiguousInterface = false;
+        for (const FBPInterfaceDescription& Description : Blueprint->ImplementedInterfaces)
+        {
+            const UClass* InterfaceClass = Description.Interface;
+            if (InterfaceClass == nullptr)
+            {
+                continue;
+            }
+            const UFunction* InterfaceFunction = InterfaceClass->FindFunctionByName(Function->GetFName());
+            if (InterfaceFunction == nullptr)
+            {
+                continue;
+            }
+            if (HasMatchingSignature(Function, InterfaceFunction) == false)
+            {
+                // 名前だけ一致した候補は実装確定せず、後続の一致候補を探索する。
+                FBPSemanticDiagnostic Diagnostic;
+                Diagnostic.Severity = EBPSemanticDiagnosticSeverity::Warning;
+                Diagnostic.Message = FString::Printf(
+                    TEXT("Function %s has a mismatched interface signature in %s"),
+                    *Function->GetName(), *InterfaceClass->GetName());
+                IR.Diagnostics.Add(MoveTemp(Diagnostic));
+                continue;
+            }
+            // 複数Interfaceに同名関数がある場合、単一の所有者を確定しない。
+            if (Target->bIsInterfaceImplementation)
+            {
+                bAmbiguousInterface = true;
+                Target->InterfaceClassPath.Reset();
+                Target->InterfaceFunctionPath.Reset();
+                Target->bIsInterfaceImplementation = false;
+                FBPSemanticDiagnostic Diagnostic;
+                Diagnostic.Message = FString::Printf(
+                    TEXT("Function %s matches multiple implemented interfaces"), *Function->GetName());
+                IR.Diagnostics.Add(MoveTemp(Diagnostic));
+                break;
+            }
+            if (bAmbiguousInterface)
+            {
+                break;
+            }
+            Target->bIsInterfaceImplementation = true;
+            Target->InterfaceClassPath = InterfaceClass->GetPathName();
+            Target->InterfaceFunctionPath = InterfaceFunction->GetPathName();
+        }
+
         Target->Parameters.Reset();
         // 再抽出時に古いコンテナ要素型・型パスを残さない。
         Target->ReturnType = FBPSemanticType();
@@ -193,6 +303,7 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
                 if (Parameter.bHasDefaultValue)
                 {
                     Parameter.DefaultValue = Function->GetMetaData(*DefaultKey);
+                    Parameter.DefaultValueSource = TEXT("cpp_default_metadata");
                 }
             }
             if (Parameter.bIsReturn)
@@ -202,6 +313,48 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             if (Parameter.bIsReturn)
             {
                 Target->ReturnType = Parameter.Type;
+            }
+            else if (Parameter.bHasDefaultValue == false)
+            {
+                // FunctionGraphのEntry出力Pinから取得する。空文字は未指定か空値か
+                // 区別できないため、推測でspecifiedにしない。
+                for (const UEdGraph* Graph : Blueprint->FunctionGraphs)
+                {
+                    if (Graph == nullptr || Graph->GetFName() != Function->GetFName())
+                    {
+                        continue;
+                    }
+                    for (const UEdGraphNode* Node : Graph->Nodes)
+                    {
+                        const UK2Node_FunctionEntry* Entry = Cast<UK2Node_FunctionEntry>(Node);
+                        if (Entry == nullptr)
+                        {
+                            continue;
+                        }
+                        for (const UEdGraphPin* Pin : Entry->Pins)
+                        {
+                            if (Pin == nullptr || Pin->Direction != EGPD_Output ||
+                                Pin->PinName != Parameter.Name)
+                            {
+                                continue;
+                            }
+                            // 接続中のPinの値は実行時入力により決まるため、既定値と断定しない。
+                            if (Pin->LinkedTo.IsEmpty() == false)
+                            {
+                                continue;
+                            }
+                            if (Pin->DefaultValue.IsEmpty() == false)
+                            {
+                                Parameter.bHasDefaultValue = true;
+                                Parameter.DefaultValue = Pin->DefaultValue;
+                                Parameter.DefaultValueSource = TEXT("function_entry_pin");
+                                Parameter.DefaultValueStatus = TEXT("specified");
+                                Parameter.DefaultValueSourceNodeId = Entry->NodeGuid;
+                                Parameter.DefaultValueSourcePinId = Pin->PinId;
+                            }
+                        }
+                    }
+                }
             }
             if (HasUnresolvedType(Parameter.Type))
             {

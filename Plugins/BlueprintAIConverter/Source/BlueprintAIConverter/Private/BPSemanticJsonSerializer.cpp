@@ -197,6 +197,13 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
             FunctionJson->SetBoolField(TEXT("is_static"), Function.bIsStatic);
             FunctionJson->SetBoolField(TEXT("is_const"), Function.bIsConst);
             FunctionJson->SetBoolField(TEXT("is_blueprint_event"), Function.bIsBlueprintEvent);
+            FunctionJson->SetBoolField(TEXT("is_override"), Function.bIsOverride);
+            FunctionJson->SetBoolField(TEXT("is_interface_implementation"), Function.bIsInterfaceImplementation);
+            FunctionJson->SetField(TEXT("interface_class_path"), OptionalString(Function.InterfaceClassPath));
+            FunctionJson->SetField(TEXT("interface_function_path"), OptionalString(Function.InterfaceFunctionPath));
+            FunctionJson->SetField(TEXT("overridden_function_path"), OptionalString(Function.OverriddenFunctionPath));
+            // 属性は個別のboolを維持しつつ、反射由来であることを明示する。
+            FunctionJson->SetStringField(TEXT("function_attributes_source"), Function.SignatureSource);
             TArray<TSharedPtr<FJsonValue>> Parameters;
             for (const FBPSemanticParameter& Parameter : Function.Parameters)
             {
@@ -207,8 +214,14 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
                 ParamJson->SetBoolField(TEXT("is_out"), Parameter.bIsOut);
                 ParamJson->SetBoolField(TEXT("is_return"), Parameter.bIsReturn);
                 ParamJson->SetBoolField(TEXT("has_default_value"), Parameter.bHasDefaultValue);
-                // 従来のboolを維持しつつ、未取得と未指定を混同しない。
-                ParamJson->SetStringField(TEXT("default_value_status"), Parameter.DefaultValueStatus);
+                ParamJson->SetStringField(TEXT("default_value_source"),
+                    Parameter.DefaultValueSource);
+                ParamJson->SetStringField(TEXT("default_value_status"),
+                    Parameter.DefaultValueStatus);
+                ParamJson->SetField(TEXT("default_value_source_node_id"),
+                    GuidValue(Parameter.DefaultValueSourceNodeId));
+                ParamJson->SetField(TEXT("default_value_source_pin_id"),
+                    GuidValue(Parameter.DefaultValueSourcePinId));
                 if (Parameter.bHasDefaultValue)
                 {
                     ParamJson->SetStringField(TEXT("default_value"), Parameter.DefaultValue);
