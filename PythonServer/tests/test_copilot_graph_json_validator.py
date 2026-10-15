@@ -87,6 +87,41 @@ class CopilotGraphValidatorTests(unittest.TestCase):
         node["function_latent"] = "true"
         self.assertTrue(any("invalid function_latent" in e for e in validate(data)))
 
+    def test_explicit_target_matches_data_edge(self):
+        data = fixture()
+        data["graphs"][0]["exec_edges"] = []
+        data["graphs"][0]["data_edges"] = [{
+            "source_node_id": A, "source_pin_id": B,
+            "target_node_id": C, "target_pin_id": D,
+        }]
+        node = data["graphs"][0]["nodes"][1]
+        node["function_target_kind"] = "explicit_target"
+        node["function_target_pin_id"] = D
+        node["function_target_linked_pin_ids"] = [B]
+        self.assertEqual(validate(data), [])
+
+        data["graphs"][0]["data_edges"] = []
+        self.assertTrue(any("target linked pin missing data edge" in e
+                            for e in validate(data)))
+
+    def test_target_link_without_self_pin(self):
+        data = fixture()
+        node = data["graphs"][0]["nodes"][0]
+        node["function_target_kind"] = "static"
+        node["function_target_pin_id"] = None
+        node["function_target_linked_pin_ids"] = [D]
+        self.assertTrue(any("target links without Self pin" in e
+                            for e in validate(data)))
+
+    def test_duplicate_target_link(self):
+        data = fixture()
+        node = data["graphs"][0]["nodes"][1]
+        node["function_target_kind"] = "explicit_target"
+        node["function_target_pin_id"] = D
+        node["function_target_linked_pin_ids"] = [B, B]
+        self.assertTrue(any("duplicate target linked pin GUID" in e
+                            for e in validate(data)))
+
     def test_invalid_version(self):
         data = fixture()
         data["schema_version"] = 2
