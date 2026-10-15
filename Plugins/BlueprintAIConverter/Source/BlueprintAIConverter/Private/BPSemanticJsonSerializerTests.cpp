@@ -214,6 +214,36 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
         FString(TEXT("unsupported")));
     TestEqual(TEXT("診断重大度"), Failed->GetArrayField(TEXT("diagnostics"))[0]->AsObject()
         ->GetStringField(TEXT("severity")), FString(TEXT("error")));
+    // 空文字が明示的に指定された場合は、値未取得のnullと混同しない。
+    FBPSemanticIR EmptyDefaultIR;
+    FBPSemanticFunction EmptyDefaultFunction;
+    EmptyDefaultFunction.Name = TEXT("EmptyDefaults");
+    FBPSemanticParameter EmptyString;
+    EmptyString.Name = TEXT("EmptyString");
+    EmptyString.Type.Kind = EBPSemanticTypeKind::String;
+    EmptyString.bHasDefaultValue = true;
+    EmptyString.DefaultValueStatus = TEXT("specified");
+    EmptyString.DefaultValueSource = TEXT("cpp_default_metadata");
+    EmptyDefaultFunction.Parameters.Add(EmptyString);
+    FBPSemanticParameter UnknownText;
+    UnknownText.Name = TEXT("UnknownText");
+    UnknownText.Type.Kind = EBPSemanticTypeKind::Text;
+    EmptyDefaultFunction.Parameters.Add(UnknownText);
+    FBPSemanticParameter UnknownObject;
+    UnknownObject.Name = TEXT("UnknownObject");
+    UnknownObject.Type.Kind = EBPSemanticTypeKind::Object;
+    UnknownObject.Type.TypePath = TEXT("/Script/Engine.Object");
+    EmptyDefaultFunction.Parameters.Add(UnknownObject);
+    EmptyDefaultIR.Functions.Add(MoveTemp(EmptyDefaultFunction));
+    const TSharedRef<FJsonObject> EmptyRoot = FBPSemanticJsonSerializer::ToJson(EmptyDefaultIR, TEXT("5.7.4"));
+    const TArray<TSharedPtr<FJsonValue>>& Defaults = EmptyRoot->GetArrayField(TEXT("functions"))[0]
+        ->AsObject()->GetArrayField(TEXT("parameters"));
+    TestTrue(TEXT("明示的な空文字は既定値あり"), Defaults[0]->AsObject()->GetBoolField(TEXT("has_default_value")));
+    TestEqual(TEXT("明示的な空文字を保持"), Defaults[0]->AsObject()->GetStringField(TEXT("default_value")), FString());
+    TestEqual(TEXT("空文字の状態"), Defaults[0]->AsObject()->GetStringField(TEXT("default_value_status")), FString(TEXT("specified")));
+    TestTrue(TEXT("未取得FTextはnull"), Defaults[1]->AsObject()->GetField<EJson::Null>(TEXT("default_value"))->IsNull());
+    TestEqual(TEXT("未取得FTextの状態"), Defaults[1]->AsObject()->GetStringField(TEXT("default_value_status")), FString(TEXT("unavailable")));
+    TestTrue(TEXT("未取得Objectはnull"), Defaults[2]->AsObject()->GetField<EJson::Null>(TEXT("default_value"))->IsNull());
     return true;
 }
 
