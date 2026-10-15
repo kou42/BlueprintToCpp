@@ -5,6 +5,26 @@
 
 namespace
 {
+// コンテナはkind=unresolvedでもよいため、子要素まで検査する。
+bool HasUnresolvedType(const FBPSemanticType& Type, int32 Depth = 0)
+{
+    if (Depth >= 16)
+    {
+        return true;
+    }
+    if (Type.ContainerKind == TEXT("array") || Type.ContainerKind == TEXT("set"))
+    {
+        return Type.ElementType.IsValid() == false || HasUnresolvedType(*Type.ElementType, Depth + 1);
+    }
+    if (Type.ContainerKind == TEXT("map"))
+    {
+        return Type.KeyTypeInfo.IsValid() == false || Type.ValueTypeInfo.IsValid() == false ||
+            HasUnresolvedType(*Type.KeyTypeInfo, Depth + 1) ||
+            HasUnresolvedType(*Type.ValueTypeInfo, Depth + 1);
+    }
+    return Type.Kind == EBPSemanticTypeKind::Unresolved;
+}
+
 FBPSemanticType ResolvePropertyType(const FProperty* Property, int32 Depth = 0)
 {
     FBPSemanticType Type;
@@ -172,14 +192,7 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             {
                 Target->ReturnType = Parameter.Type;
             }
-            // コンテナ自身のkindは未解決でも、要素型が存在すれば正常とする。
-            const bool bIsContainer = Parameter.Type.ContainerKind != TEXT("none");
-            const bool bMissingElement = (Parameter.Type.ContainerKind == TEXT("array") ||
-                Parameter.Type.ContainerKind == TEXT("set")) && Parameter.Type.ElementType.IsValid() == false;
-            const bool bMissingMapPart = Parameter.Type.ContainerKind == TEXT("map") &&
-                (Parameter.Type.KeyTypeInfo.IsValid() == false || Parameter.Type.ValueTypeInfo.IsValid() == false);
-            if ((bIsContainer == false && Parameter.Type.Kind == EBPSemanticTypeKind::Unresolved) ||
-                bMissingElement || bMissingMapPart)
+            if (HasUnresolvedType(Parameter.Type))
             {
                 FBPSemanticDiagnostic Diagnostic;
                 Diagnostic.Message = FString::Printf(TEXT("Function %s parameter %s has unresolved type"),
