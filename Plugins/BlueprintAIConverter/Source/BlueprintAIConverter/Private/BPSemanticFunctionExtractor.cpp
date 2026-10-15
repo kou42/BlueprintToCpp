@@ -71,6 +71,55 @@ FBPSemanticType ResolvePropertyType(const FProperty* Property)
     return Type;
 }
 
+// 名前だけの一致をInterface実装と誤認しないため、Reflectionの宣言順・型・方向を照合する。
+// SameTypeはコンテナの子型やEnum/Struct/Objectの具体型も比較する。
+bool HasMatchingSignature(const UFunction* Implementation, const UFunction* Declaration)
+{
+    if (Implementation == nullptr || Declaration == nullptr)
+    {
+        return false;
+    }
+    if (Implementation->HasAnyFunctionFlags(FUNC_Static) != Declaration->HasAnyFunctionFlags(FUNC_Static)
+        || Implementation->HasAnyFunctionFlags(FUNC_Const) != Declaration->HasAnyFunctionFlags(FUNC_Const))
+    {
+        return false;
+    }
+    TArray<const FProperty*> ImplementationParams;
+    TArray<const FProperty*> DeclarationParams;
+    for (TFieldIterator<FProperty> It(Implementation); It; ++It)
+    {
+        if (It->HasAnyPropertyFlags(CPF_Parm))
+        {
+            ImplementationParams.Add(*It);
+        }
+    }
+    for (TFieldIterator<FProperty> It(Declaration); It; ++It)
+    {
+        if (It->HasAnyPropertyFlags(CPF_Parm))
+        {
+            DeclarationParams.Add(*It);
+        }
+    }
+    if (ImplementationParams.Num() != DeclarationParams.Num())
+    {
+        return false;
+    }
+    for (int32 Index = 0; Index < ImplementationParams.Num(); ++Index)
+    {
+        const FProperty* Actual = ImplementationParams[Index];
+        const FProperty* Expected = DeclarationParams[Index];
+        if (Actual->SameType(Expected) == false
+            || Actual->HasAnyPropertyFlags(CPF_ReturnParm) != Expected->HasAnyPropertyFlags(CPF_ReturnParm)
+            || Actual->HasAnyPropertyFlags(CPF_OutParm) != Expected->HasAnyPropertyFlags(CPF_OutParm)
+            || Actual->HasAnyPropertyFlags(CPF_ReferenceParm) != Expected->HasAnyPropertyFlags(CPF_ReferenceParm)
+            || Actual->HasAnyPropertyFlags(CPF_ConstParm) != Expected->HasAnyPropertyFlags(CPF_ConstParm))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 // 子型が未解決のコンテナも、診断を残して意味的な完全性を主張しない。
 bool HasUnresolvedType(const FBPSemanticType& Type)
 {
@@ -150,6 +199,17 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             const UFunction* InterfaceFunction = InterfaceClass->FindFunctionByName(Function->GetFName());
             if (InterfaceFunction == nullptr)
             {
+                continue;
+            }
+            if (HasMatchingSignature(Function, InterfaceFunction) == false)
+            {
+                // 名前だけ一致した候補は実装確定せず、後続の一致候補を探索する。
+                FBPSemanticDiagnostic Diagnostic;
+                Diagnostic.Severity = EBPSemanticDiagnosticSeverity::Warning;
+                Diagnostic.Message = FString::Printf(
+                    TEXT("Function %s has a mismatched interface signature in %s"),
+                    *Function->GetName(), *InterfaceClass->GetName());
+                IR.Diagnostics.Add(MoveTemp(Diagnostic));
                 continue;
             }
             // 複数Interfaceに同名関数がある場合、単一の所有者を確定しない。
