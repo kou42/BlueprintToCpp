@@ -161,6 +161,7 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         Target->bIsConst = Function->HasAnyFunctionFlags(FUNC_Const);
         Target->bIsBlueprintEvent = Function->HasAnyFunctionFlags(FUNC_BlueprintEvent);
         Target->Parameters.Reset();
+        Target->ReturnType = FBPSemanticType();
         Target->ReturnType.Kind = EBPSemanticTypeKind::Void;
         int32 DeclarationIndex = 0;
         for (TFieldIterator<FProperty> ParamIt(Function); ParamIt; ++ParamIt)
