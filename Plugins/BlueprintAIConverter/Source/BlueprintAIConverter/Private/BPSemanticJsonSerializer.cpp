@@ -23,6 +23,7 @@ FString TypeKindName(EBPSemanticTypeKind Kind)
     case EBPSemanticTypeKind::Text: return TEXT("text");
     case EBPSemanticTypeKind::Object: return TEXT("object");
     case EBPSemanticTypeKind::Struct: return TEXT("struct");
+    case EBPSemanticTypeKind::Enum: return TEXT("enum");
     }
     return TEXT("unresolved");
 }
