@@ -339,11 +339,33 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
                             {
                                 continue;
                             }
-                            if (Pin->DefaultValue.IsEmpty() == false)
+                            // Object参照はDefaultValue文字列ではなく、実際の参照先を一次情報とする。
+                            // 明示的なNoneと未取得は区別できないため、nullを推測でspecifiedにしない。
+                            FString ResolvedDefault;
+                            FString ResolvedSource;
+                            if (Parameter.Type.Kind == EBPSemanticTypeKind::Object)
+                            {
+                                if (Pin->DefaultObject != nullptr)
+                                {
+                                    ResolvedDefault = Pin->DefaultObject->GetPathName();
+                                    ResolvedSource = TEXT("function_entry_pin_object");
+                                }
+                            }
+                            else if (Parameter.Type.Kind == EBPSemanticTypeKind::Text)
+                            {
+                                // FTextの表示文字列だけではNamespace/Keyなどの識別情報が失われる。
+                                // ExportTextItemで保持できる形式が検証されるまで、空値も含めて未取得とする。
+                            }
+                            else if (Pin->DefaultValue.IsEmpty() == false)
+                            {
+                                ResolvedDefault = Pin->DefaultValue;
+                                ResolvedSource = TEXT("function_entry_pin");
+                            }
+                            if (ResolvedSource.IsEmpty() == false)
                             {
                                 Parameter.bHasDefaultValue = true;
-                                Parameter.DefaultValue = Pin->DefaultValue;
-                                Parameter.DefaultValueSource = TEXT("function_entry_pin");
+                                Parameter.DefaultValue = MoveTemp(ResolvedDefault);
+                                Parameter.DefaultValueSource = MoveTemp(ResolvedSource);
                                 Parameter.DefaultValueStatus = TEXT("specified");
                                 Parameter.DefaultValueSourceNodeId = Entry->NodeGuid;
                                 Parameter.DefaultValueSourcePinId = Pin->PinId;
