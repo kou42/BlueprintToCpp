@@ -41,6 +41,7 @@ def validate(document):
             errors.append(f"{prefix}: nodes must be an array")
             continue
         node_pins = {}
+        pin_owners = {}
         pin_ids = set()
         target_references = []
         for ni, node in enumerate(nodes):
@@ -71,6 +72,7 @@ def validate(document):
                 if pid in pin_ids:
                     errors.append(f"{ploc}: duplicate pin GUID")
                 pin_ids.add(pid)
+                pin_owners[pid] = nid
                 current.add(pid)
                 if pin.get("direction") not in ("input", "output"):
                     errors.append(f"{ploc}: invalid direction")
@@ -147,10 +149,7 @@ def validate(document):
             if target_pin is None:
                 continue
             for linked_pin in links:
-                if not any(
-                    source_pin == linked_pin and target_node == nid and target_id == target_pin
-                    for source_node, source_pin, target_node, target_id in data_links
-                ):
+                if (pin_owners.get(linked_pin), linked_pin, nid, target_pin) not in data_links:
                     errors.append(f"{loc}: target linked pin missing data edge")
     diagnostics = document.get("diagnostics")
     if not isinstance(diagnostics, list) or any(not isinstance(d, str) for d in diagnostics):
