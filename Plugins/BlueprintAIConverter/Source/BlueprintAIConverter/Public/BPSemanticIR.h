@@ -114,6 +114,10 @@ struct FBPSemanticFunction
     // 同名の親クラス関数が存在するときのみOverrideを確定する。
     bool bIsOverride = false;
     FString OverriddenFunctionPath;
+    // Blueprintが直接宣言したInterfaceの関数との一致を別途記録する。
+    bool bIsInterfaceImplementation = false;
+    FString InterfaceClassPath;
+    FString InterfaceFunctionPath;
     TArray<FBPSemanticParameter> Parameters;
     TArray<FBPSemanticBasicBlock> Blocks;
 };
