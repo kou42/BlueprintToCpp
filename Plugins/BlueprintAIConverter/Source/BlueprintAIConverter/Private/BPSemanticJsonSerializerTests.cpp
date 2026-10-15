@@ -28,11 +28,19 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Input.Type.Kind = EBPSemanticTypeKind::Int32;
     Input.bHasDefaultValue = true;
     Input.DefaultValue = TEXT("0");
+    Input.DefaultValueSource = TEXT("cpp_default_metadata");
+    Input.DefaultValueStatus = TEXT("specified");
     Function.Parameters.Add(Input);
     FBPSemanticParameter EnumInput;
     EnumInput.Name = TEXT("Mode");
     EnumInput.Type.Kind = EBPSemanticTypeKind::Enum;
     EnumInput.Type.TypePath = TEXT("/Script/Engine.ECollisionEnabled");
+    EnumInput.bHasDefaultValue = true;
+    EnumInput.DefaultValue = TEXT("QueryOnly");
+    EnumInput.DefaultValueSource = TEXT("function_entry_pin");
+    EnumInput.DefaultValueStatus = TEXT("specified");
+    EnumInput.DefaultValueSourceNodeId = FGuid(21, 22, 23, 24);
+    EnumInput.DefaultValueSourcePinId = FGuid(31, 32, 33, 34);
     Function.Parameters.Add(EnumInput);
     FBPSemanticParameter MapInput;
     MapInput.Name = TEXT("Scores");
@@ -152,6 +160,18 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
         FString(TEXT("int32")));
     TestEqual(TEXT("Enum型"), JsonParameters[1]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
         FString(TEXT("enum")));
+    TestEqual(TEXT("Entry Pin既定値の取得元"),
+        JsonParameters[1]->AsObject()->GetStringField(TEXT("default_value_source")),
+        FString(TEXT("function_entry_pin")));
+    TestEqual(TEXT("Entry Pin既定値"),
+        JsonParameters[1]->AsObject()->GetStringField(TEXT("default_value")),
+        FString(TEXT("QueryOnly")));
+    TestEqual(TEXT("Entry Pin Node GUID"),
+        JsonParameters[1]->AsObject()->GetStringField(TEXT("default_value_source_node_id")),
+        FGuid(21, 22, 23, 24).ToString(EGuidFormats::DigitsWithHyphens));
+    TestEqual(TEXT("Entry Pin GUID"),
+        JsonParameters[1]->AsObject()->GetStringField(TEXT("default_value_source_pin_id")),
+        FGuid(31, 32, 33, 34).ToString(EGuidFormats::DigitsWithHyphens));
     TestEqual(TEXT("Enum型のパス"), JsonParameters[1]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("type_path")),
         FString(TEXT("/Script/Engine.ECollisionEnabled")));
     const TSharedPtr<FJsonObject> MapType = JsonParameters[2]->AsObject()->GetObjectField(TEXT("type"));
