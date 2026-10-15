@@ -74,6 +74,8 @@ def validate(document):
                 if pin.get("direction") not in ("input", "output"):
                     errors.append(f"{ploc}: invalid direction")
             node_pins[nid] = current
+            if node.get("function_resolved") is True and (not node.get("function_path") or not node.get("function_owner_path")):
+                errors.append(f"{loc}: resolved function missing identity")
         for kind in ("exec_edges", "data_edges"):
             edges = graph.get(kind)
             if not isinstance(edges, list):
@@ -90,8 +92,11 @@ def validate(document):
                     errors.append(f"{loc}: invalid source endpoint")
                 if target not in node_pins or edge.get("target_pin_id") not in node_pins.get(target, set()):
                     errors.append(f"{loc}: invalid target endpoint")
-        if "function_resolved" in document:
-            errors.append("function_resolved must be a node field")
+    diagnostics = document.get("diagnostics")
+    if not isinstance(diagnostics, list) or any(not isinstance(d, str) for d in diagnostics):
+        errors.append("diagnostics must be an array of strings")
+    elif diagnostics != sorted(diagnostics):
+        errors.append("diagnostics are not sorted")
     if paths != sorted(paths):
         errors.append("graphs are not sorted by path")
     return errors
