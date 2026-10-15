@@ -1,7 +1,28 @@
 import unittest
 
 from app.compare_copilot_graph_golden import compare_golden
-from tests.test_copilot_graph_json_validator import fixture
+def fixture():
+    a = "00000001-0000-0000-0000-000000000001"
+    b = "00000002-0000-0000-0000-000000000002"
+    c = "00000003-0000-0000-0000-000000000003"
+    d = "00000004-0000-0000-0000-000000000004"
+    return {
+        "schema_version": 1, "format": "blueprint_copilot_graph",
+        "semantic_status": "partial", "asset_path": "/Game/BP_Test",
+        "diagnostics": [],
+        "graphs": [{
+            "path": "EventGraph",
+            "nodes": [
+                {"id": a, "pins": [{"id": b, "direction": "output"}]},
+                {"id": c, "pins": [{"id": d, "direction": "input"}]},
+            ],
+            "exec_edges": [{
+                "source_node_id": a, "source_pin_id": b,
+                "target_node_id": c, "target_pin_id": d,
+            }],
+            "data_edges": [],
+        }],
+    }
 
 
 class GoldenComparisonTests(unittest.TestCase):
