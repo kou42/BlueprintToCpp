@@ -40,3 +40,11 @@ UE Automation Test: `BlueprintAIConverter.SemanticJson.SerializeV2`。UE 5.7.4�
 例: `TMap<FString, TArray<int32>>` は `map(key_type=string, value_type=array(element_type=int32))`。子型が未解決の場合も `unresolved` を残し、関数パラメータに診断を追加する。これらは**宣言の抽出**であり、コンテナの既定値・C++生成への対応を意味しない。
 
 再帰的なJSON型は共有所有の子型ポインタで保持するため、IRを複製する際に子型を変更する処理では共有の影響に注意する。UE実機ではArray/Set/Map、ネスト型、未対応のDelegate要素、空コンテナ既定値を検証する。
+
+## FunctionGraph Entry Pinからの既定値（追加）
+
+GeneratedClass直下の関数について、`CPP_Default_<Param>` がない非Return引数に限り、同名FunctionGraph内の `UK2Node_FunctionEntry` 出力Pinを照合する。Pin名が引数名と一致し、未接続かつ `DefaultValue` が非空の場合だけ `default_value_source=function_entry_pin` / `default_value_status=specified` とする。
+
+新しい `default_value_source_node_id` / `default_value_source_pin_id` は出典GUID（それ以外はnull）。`CPP_Default_` を優先し、空文字や接続中のPinを値が指定された証拠とはみなさない。Pinの`DefaultObject` / `DefaultTextValue` やUserDefinedPinの既定値との照合は未対応であり、UE 5.7.4で実Blueprintを用いた確認が必要。
+
+**重要:** Entry Pinに表示される値が関数宣言のデフォルト引数と同じ意味かどうかはBlueprintのノード種別とコンパイル状態に依存し得るため、現段階ではCopilotがC++デフォルト引数を無条件に生成する根拠にしない。
