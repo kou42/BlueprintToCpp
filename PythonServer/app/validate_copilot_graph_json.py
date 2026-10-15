@@ -74,6 +74,25 @@ def validate(document):
                 if pin.get("direction") not in ("input", "output"):
                     errors.append(f"{ploc}: invalid direction")
             node_pins[nid] = current
+            # 追加フィールドは旧JSONとの互換性のため任意。
+            # 存在する場合はSelf Pinが実際にそのNodeに属することを検証する。
+            if "function_target_kind" in node:
+                kind = node["function_target_kind"]
+                allowed = ("self", "explicit_target", "unconnected_target",
+                           "static", "unresolved", "not_applicable")
+                if kind not in allowed:
+                    errors.append(f"{loc}: invalid function_target_kind")
+                target_pin = node.get("function_target_pin_id")
+                links = node.get("function_target_linked_pin_ids")
+                if target_pin is not None and target_pin not in current:
+                    errors.append(f"{loc}: invalid function_target_pin_id")
+                if not isinstance(links, list):
+                    errors.append(f"{loc}: target links must be an array")
+                elif any(not isinstance(link, str) or GUID.fullmatch(link) is None
+                         for link in links):
+                    errors.append(f"{loc}: invalid target linked pin GUID")
+                if kind == "explicit_target" and target_pin is None:
+                    errors.append(f"{loc}: explicit target missing Self pin")
             if node.get("function_resolved") is True and (not node.get("function_path") or not node.get("function_owner_path")):
                 errors.append(f"{loc}: resolved function missing identity")
         for kind in ("exec_edges", "data_edges"):
