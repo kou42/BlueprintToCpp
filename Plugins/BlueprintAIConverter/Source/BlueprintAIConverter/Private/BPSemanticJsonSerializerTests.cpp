@@ -24,44 +24,60 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Function.bIsNative = true;
     Function.bIsStatic = true;
     Function.bIsOverride = true;
+    Function.OverriddenFunctionPath = TEXT("/Script/Engine.Actor.ReceiveBeginPlay");
     Function.bIsInterfaceImplementation = true;
     Function.InterfaceClassPath = TEXT("/Script/Test.TestInterface");
     Function.InterfaceFunctionPath = TEXT("/Script/Test.TestInterface.BeginPlay");
-    Function.OverriddenFunctionPath = TEXT("/Script/Engine.Actor.ReceiveBeginPlay");
     FBPSemanticParameter Input;
     Input.Name = TEXT("Amount");
+    Input.DeclarationIndex = 0;
     Input.Type.Kind = EBPSemanticTypeKind::Int32;
     Input.bHasDefaultValue = true;
+    Input.DefaultValueStatus = TEXT("specified");
     Input.DefaultValue = TEXT("0");
     Input.DefaultValueSource = TEXT("cpp_default_metadata");
-    Input.DefaultValueStatus = TEXT("specified");
     Function.Parameters.Add(Input);
-    FBPSemanticParameter EnumInput;
-    EnumInput.Name = TEXT("Mode");
-    EnumInput.Type.Kind = EBPSemanticTypeKind::Enum;
-    EnumInput.Type.TypePath = TEXT("/Script/Engine.ECollisionEnabled");
-    EnumInput.bHasDefaultValue = true;
-    EnumInput.DefaultValue = TEXT("QueryOnly");
-    EnumInput.DefaultValueSource = TEXT("function_entry_pin");
-    EnumInput.DefaultValueStatus = TEXT("specified");
-    EnumInput.DefaultValueSourceNodeId = FGuid(21, 22, 23, 24);
-    EnumInput.DefaultValueSourcePinId = FGuid(31, 32, 33, 34);
-    Function.Parameters.Add(EnumInput);
+    FBPSemanticParameter ArrayInput;
+    ArrayInput.Name = TEXT("Names");
+    ArrayInput.DeclarationIndex = 1;
+    ArrayInput.Type.ContainerKind = TEXT("array");
+    ArrayInput.Type.InnerType = TEXT("FString");
+    ArrayInput.Type.ElementType = MakeShared<FBPSemanticType>();
+    ArrayInput.Type.ElementType->Kind = EBPSemanticTypeKind::String;
+    Function.Parameters.Add(ArrayInput);
+    // Mapのキー・値、およびネストしたSetの型情報を確認する。
     FBPSemanticParameter MapInput;
-    MapInput.Name = TEXT("Scores");
-    MapInput.Type.Kind = EBPSemanticTypeKind::Map;
-    MapInput.Type.KeyType = MakeShared<FBPSemanticType>();
-    MapInput.Type.KeyType->Kind = EBPSemanticTypeKind::String;
-    MapInput.Type.ValueType = MakeShared<FBPSemanticType>();
-    MapInput.Type.ValueType->Kind = EBPSemanticTypeKind::Array;
-    MapInput.Type.ValueType->ElementType = MakeShared<FBPSemanticType>();
-    MapInput.Type.ValueType->ElementType->Kind = EBPSemanticTypeKind::Int32;
+    MapInput.Name = TEXT("Lookup");
+    MapInput.DeclarationIndex = 2;
+    MapInput.Type.ContainerKind = TEXT("map");
+    MapInput.Type.KeyType = TEXT("FName");
+    MapInput.Type.KeyTypeInfo = MakeShared<FBPSemanticType>();
+    MapInput.Type.KeyTypeInfo->Kind = EBPSemanticTypeKind::Name;
+    MapInput.Type.ValueType = TEXT("TSet<int32>");
+    MapInput.Type.ValueTypeInfo = MakeShared<FBPSemanticType>();
+    MapInput.Type.ValueTypeInfo->ContainerKind = TEXT("set");
+    MapInput.Type.ValueTypeInfo->ElementType = MakeShared<FBPSemanticType>();
+    MapInput.Type.ValueTypeInfo->ElementType->Kind = EBPSemanticTypeKind::Int32;
     Function.Parameters.Add(MapInput);
+    // Delegateの種別と署名関数のパスを検証する。
+    FBPSemanticParameter DelegateInput;
+    DelegateInput.Name = TEXT("Callback");
+    DelegateInput.DeclarationIndex = 3;
+    DelegateInput.Type.Kind = EBPSemanticTypeKind::Delegate;
+    DelegateInput.Type.TypePath = TEXT("/Script/Test.Callback__DelegateSignature");
+    Function.Parameters.Add(DelegateInput);
+    FBPSemanticParameter MulticastInput;
+    MulticastInput.Name = TEXT("OnChanged");
+    MulticastInput.DeclarationIndex = 4;
+    MulticastInput.Type.Kind = EBPSemanticTypeKind::MulticastDelegate;
+    MulticastInput.Type.TypePath = TEXT("/Script/Test.OnChanged__DelegateSignature");
+    Function.Parameters.Add(MulticastInput);
     FBPSemanticParameter Output;
     Output.Name = TEXT("ReturnValue");
     Output.Type.Kind = EBPSemanticTypeKind::Bool;
     Output.bIsOut = true;
     Output.bIsReturn = true;
+    Output.DefaultValueStatus = TEXT("absent");
     Function.Parameters.Add(Output);
     FBPSemanticBasicBlock Block;
     Block.SourceEntryNodeId = FGuid(1, 2, 3, 4);
@@ -145,57 +161,40 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     const TSharedPtr<FJsonObject> FunctionJson = Functions[0]->AsObject();
     TestEqual(TEXT("所有クラス"), FunctionJson->GetStringField(TEXT("owner_class_path")),
         FString(TEXT("/Game/BP_Test.BP_Test_C")));
-    TestEqual(TEXT("関数属性の出典"), FunctionJson->GetStringField(TEXT("function_attributes_source")),
-        FString(TEXT("generated_class_reflection")));
     const TArray<TSharedPtr<FJsonValue>>& JsonParameters = FunctionJson->GetArrayField(TEXT("parameters"));
-    TestEqual(TEXT("引数と戻り値"), JsonParameters.Num(), 4);
+    TestEqual(TEXT("引数と戻り値"), JsonParameters.Num(), 6);
+    TestEqual(TEXT("引数宣言順"), static_cast<int32>(JsonParameters[0]->AsObject()->GetNumberField(TEXT("declaration_index"))), 0);
+    TestEqual(TEXT("戻り値の宣言順は対象外"), static_cast<int32>(JsonParameters[5]->AsObject()->GetNumberField(TEXT("declaration_index"))), INDEX_NONE);
+    TestEqual(TEXT("非コンテナ"), JsonParameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("container_kind")), FString(TEXT("none")));
+    TestEqual(TEXT("配列種別"), JsonParameters[1]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("container_kind")), FString(TEXT("array")));
+    TestEqual(TEXT("配列要素型"), JsonParameters[1]->AsObject()->GetObjectField(TEXT("type"))->GetObjectField(TEXT("element_type_info"))->GetStringField(TEXT("kind")), FString(TEXT("string")));
+    TestTrue(TEXT("非コンテナの子型はnull"), JsonParameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetField<EJson::Null>(TEXT("element_type_info"))->IsNull());
+    const TSharedPtr<FJsonObject> MapType = JsonParameters[2]->AsObject()->GetObjectField(TEXT("type"));
+    TestEqual(TEXT("Mapのキー型"), MapType->GetObjectField(TEXT("key_type_info"))->GetStringField(TEXT("kind")), FString(TEXT("name")));
+    const TSharedPtr<FJsonObject> NestedSet = MapType->GetObjectField(TEXT("value_type_info"));
+    TestEqual(TEXT("Map内のSet"), NestedSet->GetStringField(TEXT("container_kind")), FString(TEXT("set")));
+    TestEqual(TEXT("Set要素型"), NestedSet->GetObjectField(TEXT("element_type_info"))->GetStringField(TEXT("kind")), FString(TEXT("int32")));
+    TestEqual(TEXT("Delegate種別"), JsonParameters[3]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")), FString(TEXT("delegate")));
+    TestEqual(TEXT("Delegate署名パス"), JsonParameters[3]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("type_path")), FString(TEXT("/Script/Test.Callback__DelegateSignature")));
+    TestEqual(TEXT("Multicast Delegate種別"), JsonParameters[4]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")), FString(TEXT("multicast_delegate")));
+    TestEqual(TEXT("Multicast Delegate署名"), JsonParameters[4]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("type_path")), FString(TEXT("/Script/Test.OnChanged__DelegateSignature")));
     TestTrue(TEXT("Native属性"), FunctionJson->GetBoolField(TEXT("is_native")));
     TestTrue(TEXT("Static属性"), FunctionJson->GetBoolField(TEXT("is_static")));
     TestTrue(TEXT("Override属性"), FunctionJson->GetBoolField(TEXT("is_override")));
-    TestTrue(TEXT("Interface一致属性"), FunctionJson->GetBoolField(TEXT("is_interface_implementation")));
-    TestEqual(TEXT("Interfaceクラス"), FunctionJson->GetStringField(TEXT("interface_class_path")),
-        FString(TEXT("/Script/Test.TestInterface")));
-    TestEqual(TEXT("Interface関数"), FunctionJson->GetStringField(TEXT("interface_function_path")),
-        FString(TEXT("/Script/Test.TestInterface.BeginPlay")));
-    TestEqual(TEXT("Override元のパス"), FunctionJson->GetStringField(TEXT("overridden_function_path")),
-        FString(TEXT("/Script/Engine.Actor.ReceiveBeginPlay")));
+    TestTrue(TEXT("Interface属性"), FunctionJson->GetBoolField(TEXT("is_interface_implementation")));
+    TestEqual(TEXT("Interfaceパス"), FunctionJson->GetStringField(TEXT("interface_class_path")), FString(TEXT("/Script/Test.TestInterface")));
+    TestEqual(TEXT("既定値出典"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_source")), FString(TEXT("cpp_default_metadata")));
     TestTrue(TEXT("引数既定値の存在"), JsonParameters[0]->AsObject()->GetBoolField(TEXT("has_default_value")));
-    TestEqual(TEXT("引数既定値"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value")), FString(TEXT("0")));
-    TestEqual(TEXT("既定値の取得元"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_source")),
-        FString(TEXT("cpp_default_metadata")));
-    TestEqual(TEXT("既定値の状態"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_status")),
+    TestEqual(TEXT("既定値の取得状態"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_status")),
         FString(TEXT("specified")));
-    TestEqual(TEXT("未取得の状態"), JsonParameters[3]->AsObject()->GetStringField(TEXT("default_value_status")),
-        FString(TEXT("unavailable")));
-    TestFalse(TEXT("戻り値には既定値なし"), JsonParameters[3]->AsObject()->GetBoolField(TEXT("has_default_value")));
-    TestTrue(TEXT("既定値なしはnull"), JsonParameters[3]->AsObject()->GetField<EJson::Null>(TEXT("default_value"))->IsNull());
+    TestEqual(TEXT("戻り値の既定値状態"), JsonParameters[5]->AsObject()->GetStringField(TEXT("default_value_status")),
+        FString(TEXT("absent")));
+    TestEqual(TEXT("引数既定値"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value")), FString(TEXT("0")));
+    TestFalse(TEXT("戻り値には既定値なし"), JsonParameters[5]->AsObject()->GetBoolField(TEXT("has_default_value")));
+    TestTrue(TEXT("既定値なしはnull"), JsonParameters[5]->AsObject()->GetField<EJson::Null>(TEXT("default_value"))->IsNull());
     TestEqual(TEXT("入力型"), JsonParameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
         FString(TEXT("int32")));
-    TestEqual(TEXT("Enum型"), JsonParameters[1]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
-        FString(TEXT("enum")));
-    TestEqual(TEXT("Entry Pin既定値の取得元"),
-        JsonParameters[1]->AsObject()->GetStringField(TEXT("default_value_source")),
-        FString(TEXT("function_entry_pin")));
-    TestEqual(TEXT("Entry Pin既定値"),
-        JsonParameters[1]->AsObject()->GetStringField(TEXT("default_value")),
-        FString(TEXT("QueryOnly")));
-    TestEqual(TEXT("Entry Pin Node GUID"),
-        JsonParameters[1]->AsObject()->GetStringField(TEXT("default_value_source_node_id")),
-        FGuid(21, 22, 23, 24).ToString(EGuidFormats::DigitsWithHyphens));
-    TestEqual(TEXT("Entry Pin GUID"),
-        JsonParameters[1]->AsObject()->GetStringField(TEXT("default_value_source_pin_id")),
-        FGuid(31, 32, 33, 34).ToString(EGuidFormats::DigitsWithHyphens));
-    TestEqual(TEXT("Enum型のパス"), JsonParameters[1]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("type_path")),
-        FString(TEXT("/Script/Engine.ECollisionEnabled")));
-    const TSharedPtr<FJsonObject> MapType = JsonParameters[2]->AsObject()->GetObjectField(TEXT("type"));
-    TestEqual(TEXT("Map型"), MapType->GetStringField(TEXT("kind")), FString(TEXT("map")));
-    TestEqual(TEXT("Mapキー型"), MapType->GetObjectField(TEXT("key_type"))->GetStringField(TEXT("kind")),
-        FString(TEXT("string")));
-    const TSharedPtr<FJsonObject> ArrayType = MapType->GetObjectField(TEXT("value_type"));
-    TestEqual(TEXT("Map値のArray型"), ArrayType->GetStringField(TEXT("kind")), FString(TEXT("array")));
-    TestEqual(TEXT("Array要素型"), ArrayType->GetObjectField(TEXT("element_type"))->GetStringField(TEXT("kind")),
-        FString(TEXT("int32")));
-    TestTrue(TEXT("戻り値フラグ"), JsonParameters[3]->AsObject()->GetBoolField(TEXT("is_return")));
+    TestTrue(TEXT("戻り値フラグ"), JsonParameters[5]->AsObject()->GetBoolField(TEXT("is_return")));
     const TSharedPtr<FJsonObject> Expression = Functions[0]->AsObject()
         ->GetArrayField(TEXT("blocks"))[0]->AsObject()
         ->GetArrayField(TEXT("statements"))[0]->AsObject()

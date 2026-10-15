@@ -24,9 +24,9 @@ FString TypeKindName(EBPSemanticTypeKind Kind)
     case EBPSemanticTypeKind::Object: return TEXT("object");
     case EBPSemanticTypeKind::Struct: return TEXT("struct");
     case EBPSemanticTypeKind::Enum: return TEXT("enum");
-    case EBPSemanticTypeKind::Array: return TEXT("array");
-    case EBPSemanticTypeKind::Set: return TEXT("set");
-    case EBPSemanticTypeKind::Map: return TEXT("map");
+    case EBPSemanticTypeKind::Byte: return TEXT("byte");
+    case EBPSemanticTypeKind::Delegate: return TEXT("delegate");
+    case EBPSemanticTypeKind::MulticastDelegate: return TEXT("multicast_delegate");
     }
     return TEXT("unresolved");
 }
@@ -87,24 +87,37 @@ TSharedRef<FJsonObject> TypeToJson(const FBPSemanticType& Type)
     TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
     Json->SetStringField(TEXT("kind"), TypeKindName(Type.Kind));
     Json->SetStringField(TEXT("type_path"), Type.TypePath);
+    Json->SetStringField(TEXT("container_kind"), Type.ContainerKind);
+    Json->SetStringField(TEXT("inner_type"), Type.InnerType);
+    Json->SetStringField(TEXT("key_type"), Type.KeyType);
+    Json->SetStringField(TEXT("value_type"), Type.ValueType);
+    // 従来の文字列フィールドに加えて、ネストした型の意味情報を保持する。
+    if (Type.ElementType.IsValid())
+    {
+        Json->SetObjectField(TEXT("element_type_info"), TypeToJson(*Type.ElementType));
+    }
+    else
+    {
+        Json->SetField(TEXT("element_type_info"), MakeShared<FJsonValueNull>());
+    }
+    if (Type.KeyTypeInfo.IsValid())
+    {
+        Json->SetObjectField(TEXT("key_type_info"), TypeToJson(*Type.KeyTypeInfo));
+    }
+    else
+    {
+        Json->SetField(TEXT("key_type_info"), MakeShared<FJsonValueNull>());
+    }
+    if (Type.ValueTypeInfo.IsValid())
+    {
+        Json->SetObjectField(TEXT("value_type_info"), TypeToJson(*Type.ValueTypeInfo));
+    }
+    else
+    {
+        Json->SetField(TEXT("value_type_info"), MakeShared<FJsonValueNull>());
+    }
     Json->SetBoolField(TEXT("is_reference"), Type.bIsReference);
     Json->SetBoolField(TEXT("is_const"), Type.bIsConst);
-    // 既存のスカラー型フィールドを維持し、コンテナ型にだけ子型を追加する。
-    if (Type.Kind == EBPSemanticTypeKind::Array || Type.Kind == EBPSemanticTypeKind::Set)
-    {
-        Json->SetField(TEXT("element_type"), Type.ElementType.IsValid()
-            ? MakeShared<FJsonValueObject>(TypeToJson(*Type.ElementType))
-            : MakeShared<FJsonValueNull>());
-    }
-    if (Type.Kind == EBPSemanticTypeKind::Map)
-    {
-        Json->SetField(TEXT("key_type"), Type.KeyType.IsValid()
-            ? MakeShared<FJsonValueObject>(TypeToJson(*Type.KeyType))
-            : MakeShared<FJsonValueNull>());
-        Json->SetField(TEXT("value_type"), Type.ValueType.IsValid()
-            ? MakeShared<FJsonValueObject>(TypeToJson(*Type.ValueType))
-            : MakeShared<FJsonValueNull>());
-    }
     return Json;
 }
 
@@ -197,11 +210,20 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
                 TSharedRef<FJsonObject> ParamJson = MakeShared<FJsonObject>();
                 ParamJson->SetStringField(TEXT("name"), Parameter.Name.ToString());
                 ParamJson->SetObjectField(TEXT("type"), TypeToJson(Parameter.Type));
+                ParamJson->SetNumberField(TEXT("declaration_index"), Parameter.DeclarationIndex);
                 ParamJson->SetBoolField(TEXT("is_out"), Parameter.bIsOut);
                 ParamJson->SetBoolField(TEXT("is_return"), Parameter.bIsReturn);
                 ParamJson->SetBoolField(TEXT("has_default_value"), Parameter.bHasDefaultValue);
-                // CPP_Default_メタデータがない場合、Blueprint側に既定値がないとは断定できない。
-                // 既存のhas_default_valueは維持し、取得状態を追加フィールドで区別する。
+                // 従来のboolを維持しつつ、未取得と未指定を混同しない。
+                ParamJson->SetStringField(TEXT("default_value_status"), Parameter.DefaultValueStatus);
+                if (Parameter.bHasDefaultValue)
+                {
+                    ParamJson->SetStringField(TEXT("default_value"), Parameter.DefaultValue);
+                }
+                else
+                {
+                    ParamJson->SetField(TEXT("default_value"), MakeShared<FJsonValueNull>());
+                }
                 ParamJson->SetStringField(TEXT("default_value_source"),
                     Parameter.DefaultValueSource);
                 ParamJson->SetStringField(TEXT("default_value_status"),
