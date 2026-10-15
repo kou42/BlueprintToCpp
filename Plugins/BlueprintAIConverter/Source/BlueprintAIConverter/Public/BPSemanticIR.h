@@ -18,7 +18,8 @@ enum class EBPSemanticTypeKind : uint8
     Name,
     Text,
     Object,
-    Struct
+    Struct,
+    Enum
 };
 
 struct FBPSemanticType
