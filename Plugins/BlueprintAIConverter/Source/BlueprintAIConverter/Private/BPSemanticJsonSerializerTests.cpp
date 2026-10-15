@@ -117,12 +117,20 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     const TSharedPtr<FJsonObject> FunctionJson = Functions[0]->AsObject();
     TestEqual(TEXT("所有クラス"), FunctionJson->GetStringField(TEXT("owner_class_path")),
         FString(TEXT("/Game/BP_Test.BP_Test_C")));
+    TestEqual(TEXT("関数属性の出典"), FunctionJson->GetStringField(TEXT("function_attributes_source")),
+        FString(TEXT("generated_class_reflection")));
     const TArray<TSharedPtr<FJsonValue>>& JsonParameters = FunctionJson->GetArrayField(TEXT("parameters"));
     TestEqual(TEXT("引数と戻り値"), JsonParameters.Num(), 2);
     TestTrue(TEXT("Native属性"), FunctionJson->GetBoolField(TEXT("is_native")));
     TestTrue(TEXT("Static属性"), FunctionJson->GetBoolField(TEXT("is_static")));
     TestTrue(TEXT("引数既定値の存在"), JsonParameters[0]->AsObject()->GetBoolField(TEXT("has_default_value")));
     TestEqual(TEXT("引数既定値"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value")), FString(TEXT("0")));
+    TestEqual(TEXT("既定値の取得元"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_source")),
+        FString(TEXT("cpp_default_metadata")));
+    TestEqual(TEXT("既定値の状態"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_status")),
+        FString(TEXT("specified")));
+    TestEqual(TEXT("未取得の状態"), JsonParameters[1]->AsObject()->GetStringField(TEXT("default_value_status")),
+        FString(TEXT("unavailable")));
     TestFalse(TEXT("戻り値には既定値なし"), JsonParameters[1]->AsObject()->GetBoolField(TEXT("has_default_value")));
     TestTrue(TEXT("既定値なしはnull"), JsonParameters[1]->AsObject()->GetField<EJson::Null>(TEXT("default_value"))->IsNull());
     TestEqual(TEXT("入力型"), JsonParameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
