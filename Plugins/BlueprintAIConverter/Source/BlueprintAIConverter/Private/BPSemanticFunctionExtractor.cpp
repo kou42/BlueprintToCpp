@@ -108,7 +108,8 @@ bool HasMatchingSignature(const UFunction* Implementation, const UFunction* Decl
     {
         const FProperty* Actual = ImplementationParams[Index];
         const FProperty* Expected = DeclarationParams[Index];
-        if (Actual->SameType(Expected) == false
+        if (Actual->GetFName() != Expected->GetFName()
+            || Actual->SameType(Expected) == false
             || Actual->HasAnyPropertyFlags(CPF_ReturnParm) != Expected->HasAnyPropertyFlags(CPF_ReturnParm)
             || Actual->HasAnyPropertyFlags(CPF_OutParm) != Expected->HasAnyPropertyFlags(CPF_OutParm)
             || Actual->HasAnyPropertyFlags(CPF_ReferenceParm) != Expected->HasAnyPropertyFlags(CPF_ReferenceParm)
