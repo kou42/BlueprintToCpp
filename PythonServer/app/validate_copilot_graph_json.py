@@ -118,7 +118,7 @@ def validate(document):
                         errors.append(f"{loc}: target links without Self pin")
                     if isinstance(kind, str) and kind in ("self", "unconnected_target") and links:
                         errors.append(f"{loc}: unconnected target has linked pins")
-                    if all(isinstance(link, str) for link in links):
+                    if (target_pin is None or isinstance(target_pin, str)) and all(isinstance(link, str) for link in links):
                         target_references.append((loc, nid, target_pin, links))
             if node.get("function_resolved") is True and (not node.get("function_path") or not node.get("function_owner_path")):
                 errors.append(f"{loc}: resolved function missing identity")
