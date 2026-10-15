@@ -160,6 +160,14 @@ bool FBPCopilotGraphJsonExporter::Export(const FBPGraphIR& IR, const FString& En
             NodeJson->SetBoolField(TEXT("function_static"), Node.bFunctionStatic);
             NodeJson->SetBoolField(TEXT("function_pure"), Node.bFunctionPure);
             NodeJson->SetBoolField(TEXT("function_const"), Node.bFunctionConst);
+            NodeJson->SetStringField(TEXT("function_target_kind"), Node.FunctionTargetKind);
+            NodeJson->SetField(TEXT("function_target_pin_id"), GuidJson(Node.FunctionTargetPinId));
+            TArray<TSharedPtr<FJsonValue>> TargetLinks;
+            for (const FGuid& LinkedPinId : Node.FunctionTargetLinkedPinIds)
+            {
+                TargetLinks.Add(GuidJson(LinkedPinId));
+            }
+            NodeJson->SetArrayField(TEXT("function_target_linked_pin_ids"), TargetLinks);
             NodeJson->SetStringField(TEXT("variable_name"), Node.VariableName.ToString());
             TArray<TSharedPtr<FJsonValue>> Pins;
             TArray<FBPIRPin> SortedPins = Node.Pins;
