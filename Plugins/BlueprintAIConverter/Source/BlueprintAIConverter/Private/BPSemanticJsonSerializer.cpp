@@ -164,6 +164,8 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
             FunctionJson->SetBoolField(TEXT("is_static"), Function.bIsStatic);
             FunctionJson->SetBoolField(TEXT("is_const"), Function.bIsConst);
             FunctionJson->SetBoolField(TEXT("is_blueprint_event"), Function.bIsBlueprintEvent);
+            // 属性は個別のboolを維持しつつ、反射由来であることを明示する。
+            FunctionJson->SetStringField(TEXT("function_attributes_source"), TEXT("generated_class_reflection"));
             TArray<TSharedPtr<FJsonValue>> Parameters;
             for (const FBPSemanticParameter& Parameter : Function.Parameters)
             {
@@ -173,6 +175,12 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
                 ParamJson->SetBoolField(TEXT("is_out"), Parameter.bIsOut);
                 ParamJson->SetBoolField(TEXT("is_return"), Parameter.bIsReturn);
                 ParamJson->SetBoolField(TEXT("has_default_value"), Parameter.bHasDefaultValue);
+                // CPP_Default_メタデータがない場合、Blueprint側に既定値がないとは断定できない。
+                // 既存のhas_default_valueは維持し、取得状態を追加フィールドで区別する。
+                ParamJson->SetStringField(TEXT("default_value_source"),
+                    Parameter.bHasDefaultValue ? TEXT("cpp_default_metadata") : TEXT("unavailable"));
+                ParamJson->SetStringField(TEXT("default_value_status"),
+                    Parameter.bHasDefaultValue ? TEXT("specified") : TEXT("unavailable"));
                 if (Parameter.bHasDefaultValue)
                 {
                     ParamJson->SetStringField(TEXT("default_value"), Parameter.DefaultValue);
