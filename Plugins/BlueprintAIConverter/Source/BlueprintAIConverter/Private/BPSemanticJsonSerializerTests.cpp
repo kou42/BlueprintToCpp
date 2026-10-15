@@ -39,6 +39,20 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     ArrayInput.Type.ElementType = MakeShared<FBPSemanticType>();
     ArrayInput.Type.ElementType->Kind = EBPSemanticTypeKind::String;
     Function.Parameters.Add(ArrayInput);
+    // Mapのキー・値、およびネストしたSetの型情報を確認する。
+    FBPSemanticParameter MapInput;
+    MapInput.Name = TEXT("Lookup");
+    MapInput.DeclarationIndex = 2;
+    MapInput.Type.ContainerKind = TEXT("map");
+    MapInput.Type.KeyType = TEXT("FName");
+    MapInput.Type.KeyTypeInfo = MakeShared<FBPSemanticType>();
+    MapInput.Type.KeyTypeInfo->Kind = EBPSemanticTypeKind::Name;
+    MapInput.Type.ValueType = TEXT("TSet<int32>");
+    MapInput.Type.ValueTypeInfo = MakeShared<FBPSemanticType>();
+    MapInput.Type.ValueTypeInfo->ContainerKind = TEXT("set");
+    MapInput.Type.ValueTypeInfo->ElementType = MakeShared<FBPSemanticType>();
+    MapInput.Type.ValueTypeInfo->ElementType->Kind = EBPSemanticTypeKind::Int32;
+    Function.Parameters.Add(MapInput);
     FBPSemanticParameter Output;
     Output.Name = TEXT("ReturnValue");
     Output.Type.Kind = EBPSemanticTypeKind::Bool;
@@ -129,26 +143,31 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("所有クラス"), FunctionJson->GetStringField(TEXT("owner_class_path")),
         FString(TEXT("/Game/BP_Test.BP_Test_C")));
     const TArray<TSharedPtr<FJsonValue>>& JsonParameters = FunctionJson->GetArrayField(TEXT("parameters"));
-    TestEqual(TEXT("引数と戻り値"), JsonParameters.Num(), 3);
+    TestEqual(TEXT("引数と戻り値"), JsonParameters.Num(), 4);
     TestEqual(TEXT("引数宣言順"), static_cast<int32>(JsonParameters[0]->AsObject()->GetNumberField(TEXT("declaration_index"))), 0);
-    TestEqual(TEXT("戻り値の宣言順は対象外"), static_cast<int32>(JsonParameters[2]->AsObject()->GetNumberField(TEXT("declaration_index"))), INDEX_NONE);
+    TestEqual(TEXT("戻り値の宣言順は対象外"), static_cast<int32>(JsonParameters[3]->AsObject()->GetNumberField(TEXT("declaration_index"))), INDEX_NONE);
     TestEqual(TEXT("非コンテナ"), JsonParameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("container_kind")), FString(TEXT("none")));
     TestEqual(TEXT("配列種別"), JsonParameters[1]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("container_kind")), FString(TEXT("array")));
     TestEqual(TEXT("配列要素型"), JsonParameters[1]->AsObject()->GetObjectField(TEXT("type"))->GetObjectField(TEXT("element_type_info"))->GetStringField(TEXT("kind")), FString(TEXT("string")));
     TestTrue(TEXT("非コンテナの子型はnull"), JsonParameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetField<EJson::Null>(TEXT("element_type_info"))->IsNull());
+    const TSharedPtr<FJsonObject> MapType = JsonParameters[2]->AsObject()->GetObjectField(TEXT("type"));
+    TestEqual(TEXT("Mapのキー型"), MapType->GetObjectField(TEXT("key_type_info"))->GetStringField(TEXT("kind")), FString(TEXT("name")));
+    const TSharedPtr<FJsonObject> NestedSet = MapType->GetObjectField(TEXT("value_type_info"));
+    TestEqual(TEXT("Map内のSet"), NestedSet->GetStringField(TEXT("container_kind")), FString(TEXT("set")));
+    TestEqual(TEXT("Set要素型"), NestedSet->GetObjectField(TEXT("element_type_info"))->GetStringField(TEXT("kind")), FString(TEXT("int32")));
     TestTrue(TEXT("Native属性"), FunctionJson->GetBoolField(TEXT("is_native")));
     TestTrue(TEXT("Static属性"), FunctionJson->GetBoolField(TEXT("is_static")));
     TestTrue(TEXT("引数既定値の存在"), JsonParameters[0]->AsObject()->GetBoolField(TEXT("has_default_value")));
     TestEqual(TEXT("既定値の取得状態"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_status")),
         FString(TEXT("specified")));
-    TestEqual(TEXT("戻り値の既定値状態"), JsonParameters[2]->AsObject()->GetStringField(TEXT("default_value_status")),
+    TestEqual(TEXT("戻り値の既定値状態"), JsonParameters[3]->AsObject()->GetStringField(TEXT("default_value_status")),
         FString(TEXT("absent")));
     TestEqual(TEXT("引数既定値"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value")), FString(TEXT("0")));
-    TestFalse(TEXT("戻り値には既定値なし"), JsonParameters[2]->AsObject()->GetBoolField(TEXT("has_default_value")));
-    TestTrue(TEXT("既定値なしはnull"), JsonParameters[2]->AsObject()->GetField<EJson::Null>(TEXT("default_value"))->IsNull());
+    TestFalse(TEXT("戻り値には既定値なし"), JsonParameters[3]->AsObject()->GetBoolField(TEXT("has_default_value")));
+    TestTrue(TEXT("既定値なしはnull"), JsonParameters[3]->AsObject()->GetField<EJson::Null>(TEXT("default_value"))->IsNull());
     TestEqual(TEXT("入力型"), JsonParameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
         FString(TEXT("int32")));
-    TestTrue(TEXT("戻り値フラグ"), JsonParameters[2]->AsObject()->GetBoolField(TEXT("is_return")));
+    TestTrue(TEXT("戻り値フラグ"), JsonParameters[3]->AsObject()->GetBoolField(TEXT("is_return")));
     const TSharedPtr<FJsonObject> Expression = Functions[0]->AsObject()
         ->GetArrayField(TEXT("blocks"))[0]->AsObject()
         ->GetArrayField(TEXT("statements"))[0]->AsObject()
