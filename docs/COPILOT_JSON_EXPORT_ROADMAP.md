@@ -1,6 +1,6 @@
 # Copilot Chat / Agent向け JSONエクスポート強化ロードマップ
 
-更新日: 2026-10-14  
+更新日: 2026-10-15  
 対象: Unreal Engine 5.7.4 / `BlueprintAIConverter` / GitHub Copilot Chat・Agent
 
 ## 目的・スコープ
@@ -37,10 +37,10 @@ Blueprintの**関数宣言・実装元・ノード・Pin・接続・変数・依
 
 ### CJ0 — JSON現状監査とゴールデンケース（最優先）
 
-- [ ] Snapshot v1 / Graph IR / Semantic JSON v2のフィールド対応表を作る。既存Serializerと実際の出力例を照合する
-- [ ] 関数宣言、Native関数呼び出し、Blueprint自作関数、Branch、Return、未対応ノードの代表BPケースを定義する
-- [ ] 各ケースで「抽出済み / 部分対応 / 欠落 / 対象外」を明記し、元ノード・Pin GUIDを追跡する
-- [ ] JSONのスキーマ・例・検証手順を `docs/` に整備する
+- [x] Snapshot v1 / Graph IR / Semantic JSON v2のフィールド対応表を作る（静的監査済み。実JSONとの照合は未実施）
+- [x] 関数宣言、Native関数呼び出し、Blueprint自作関数、Branch、Return、未対応ノードの代表BPケースを定義する（G01〜G07。実Blueprintは未検証）
+- [ ] 各ケースの判定と元ノード・Pin GUIDを実JSONで検証する（静的監査の暫定判定は記録済み）
+- [ ] JSONのスキーマ・例・検証手順を `docs/` に整備する（監査表・手順・テンプレート作成済み、実JSON例は未作成）
 
 **完了条件:** 代表ケースごとにJSON出力の不足項目と再現手順があり、未対応を成功と誤判定しない。
 
@@ -84,6 +84,20 @@ Blueprintの**関数宣言・実装元・ノード・Pin・接続・変数・依
 
 **完了条件:** 少なくともNative関数呼び出しとBlueprint自作関数の各1ケースで手動縦断手順が再現可能。生成コードのビルド合格と動作一致は別々に記録する。
 
+## 進捗状況（2026-10-15）
+
+| フェーズ | 状態 | 実装・文書化済み | 残課題 |
+| --- | --- | --- | --- |
+| CJ0 | 一部完了 | `docs/CJ0_JSON_AUDIT.md` にフィールド対応表・G01〜G07・検証手順を記載 | 実Blueprint・実JSONとの照合、GUID追跡、ゴールデン出力 |
+| CJ1 | 部分実装 | 関数署名・宣言順・既定値状態・再帰型（Array/Set/Map）・Enum/Delegate・型パス診断・再抽出時の戻り値初期化・JSONテスト拡充 | 実FPropertyテスト、型付き既定値、継承/Interface/Override/表示名、UEビルド |
+| CJ2 | 既存基盤あり | Graph IR / Copilot Graph JSONのノード・Pin・Exec/Dataリンクと一部CallFunction情報 | Target/Self、接続順、未対応分類、実機検証 |
+| CJ3 | 未完了 | 既存Snapshot等の変数出力を再利用可能 | 依存・manifest・保存契約 |
+| CJ4 | 未着手 | — | Copilot運用指示、UHT/UBT、動作比較 |
+
+**検証状態:** コードとAutomation Testの追加はUE 5.7.4でのビルド・テスト成功を意味しない。CJ0/CJ1は実JSON照合・実機検証まで完了扱いにしない。
+
+**次の作業:** CJ1のFProperty型抽出・再抽出・異常系テスト、CJ0のG01〜G07実JSON照合、CJ2のTarget/Selfと接続順の拡充。
+
 ## テストマトリクス
 
 | ケース | JSONの確認 | 生成C++の確認 |
@@ -102,4 +116,4 @@ Blueprintの**関数宣言・実装元・ノード・Pin・接続・変数・依
 - 既存`BPSemanticLowering`のMVP制約はDirect生成用として維持できるが、**Copilot用の生グラフJSONエクスポートを同じ制約で打ち切らない**。
 - 本トラックはJSON品質が成果物。Copilotの生成コードは別途レビュー・検証し、AI出力を自動的に正解と見なさない。
 - 既存PythonServerやProvider機能を削除しない。本トラックでは追加開発の必須依存にしない。
-- 次に着手する実装単位は **CJ0のフィールド対応表と最小の代表Blueprint JSONゴールデンケース**。その結果からCJ1の差分を決定する。
+- CJ0の静的対応表は作成済み。次は **CJ1のReflectionテストとCJ0代表ケースの実JSON照合** を行い、CJ2の拡充に進む。

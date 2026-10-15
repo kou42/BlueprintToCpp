@@ -18,7 +18,11 @@ enum class EBPSemanticTypeKind : uint8
     Name,
     Text,
     Object,
-    Struct
+    Struct,
+    Enum,
+    Byte,
+    Delegate,
+    MulticastDelegate
 };
 
 struct FBPSemanticType
@@ -26,6 +30,15 @@ struct FBPSemanticType
     EBPSemanticTypeKind Kind = EBPSemanticTypeKind::Unresolved;
     // Object/Structなどの具体的な型をリフレクションで解決した際に設定する。
     FString TypePath;
+    // コンテナの要素型は未対応の場合でも型名を失わないよう記録する。
+    FString ContainerKind = TEXT("none");
+    FString InnerType;
+    FString KeyType;
+    FString ValueType;
+    // 再帰的な型ツリー。子要素が存在しない場合はnullptrを使用する。
+    TSharedPtr<FBPSemanticType> ElementType;
+    TSharedPtr<FBPSemanticType> KeyTypeInfo;
+    TSharedPtr<FBPSemanticType> ValueTypeInfo;
     bool bIsReference = false;
     bool bIsConst = false;
 };
@@ -81,10 +94,15 @@ struct FBPSemanticParameter
 {
     FName Name;
     FBPSemanticType Type;
+    // UFunctionにおけるCPF_Parmの列挙順を明示する（戻り値は除外）。
+    int32 DeclarationIndex = INDEX_NONE;
     bool bIsOut = false;
     bool bIsReturn = false;
     // メタデータが存在しない場合と空文字の既定値を区別する。
     bool bHasDefaultValue = false;
+    // CJ1: 既定値が存在しない場合と、取得方法が未対応の場合を区別する。
+    // specified / absent / unavailable のいずれかを保持する。
+    FString DefaultValueStatus = TEXT("unavailable");
     FString DefaultValue;
 };
 
