@@ -122,6 +122,15 @@ class CopilotGraphValidatorTests(unittest.TestCase):
         self.assertTrue(any("duplicate target linked pin GUID" in e
                             for e in validate(data)))
 
+    def test_malformed_target_links_are_diagnostics_not_exceptions(self):
+        data = fixture()
+        node = data["graphs"][0]["nodes"][1]
+        node["function_target_kind"] = "explicit_target"
+        node["function_target_pin_id"] = D
+        node["function_target_linked_pin_ids"] = [{"invalid": "guid"}]
+        self.assertTrue(any("invalid target linked pin GUID" in e
+                            for e in validate(data)))
+
     def test_invalid_version(self):
         data = fixture()
         data["schema_version"] = 2
