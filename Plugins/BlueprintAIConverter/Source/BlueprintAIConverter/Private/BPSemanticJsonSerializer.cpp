@@ -214,16 +214,6 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
                 ParamJson->SetBoolField(TEXT("is_out"), Parameter.bIsOut);
                 ParamJson->SetBoolField(TEXT("is_return"), Parameter.bIsReturn);
                 ParamJson->SetBoolField(TEXT("has_default_value"), Parameter.bHasDefaultValue);
-                // 従来のboolを維持しつつ、未取得と未指定を混同しない。
-                ParamJson->SetStringField(TEXT("default_value_status"), Parameter.DefaultValueStatus);
-                if (Parameter.bHasDefaultValue)
-                {
-                    ParamJson->SetStringField(TEXT("default_value"), Parameter.DefaultValue);
-                }
-                else
-                {
-                    ParamJson->SetField(TEXT("default_value"), MakeShared<FJsonValueNull>());
-                }
                 ParamJson->SetStringField(TEXT("default_value_source"),
                     Parameter.DefaultValueSource);
                 ParamJson->SetStringField(TEXT("default_value_status"),
