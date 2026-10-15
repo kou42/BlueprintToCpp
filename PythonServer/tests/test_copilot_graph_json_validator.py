@@ -75,6 +75,18 @@ class CopilotGraphValidatorTests(unittest.TestCase):
         node["function_target_linked_pin_ids"] = []
         self.assertTrue(any("invalid function_target_kind" in e for e in validate(data)))
 
+    def test_dispatch_and_latent(self):
+        data = fixture()
+        node = data["graphs"][0]["nodes"][0]
+        node["function_dispatch_kind"] = "regular"
+        node["function_latent"] = True
+        self.assertEqual(validate(data), [])
+        node["function_dispatch_kind"] = "unknown"
+        self.assertTrue(any("invalid function_dispatch_kind" in e for e in validate(data)))
+        node["function_dispatch_kind"] = "regular"
+        node["function_latent"] = "true"
+        self.assertTrue(any("invalid function_latent" in e for e in validate(data)))
+
     def test_invalid_version(self):
         data = fixture()
         data["schema_version"] = 2
