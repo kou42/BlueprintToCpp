@@ -29,6 +29,11 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Input.bHasDefaultValue = true;
     Input.DefaultValue = TEXT("0");
     Function.Parameters.Add(Input);
+    FBPSemanticParameter EnumInput;
+    EnumInput.Name = TEXT("Mode");
+    EnumInput.Type.Kind = EBPSemanticTypeKind::Enum;
+    EnumInput.Type.TypePath = TEXT("/Script/Engine.ECollisionEnabled");
+    Function.Parameters.Add(EnumInput);
     FBPSemanticParameter Output;
     Output.Name = TEXT("ReturnValue");
     Output.Type.Kind = EBPSemanticTypeKind::Bool;
@@ -120,7 +125,7 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("関数属性の出典"), FunctionJson->GetStringField(TEXT("function_attributes_source")),
         FString(TEXT("generated_class_reflection")));
     const TArray<TSharedPtr<FJsonValue>>& JsonParameters = FunctionJson->GetArrayField(TEXT("parameters"));
-    TestEqual(TEXT("引数と戻り値"), JsonParameters.Num(), 2);
+    TestEqual(TEXT("引数と戻り値"), JsonParameters.Num(), 3);
     TestTrue(TEXT("Native属性"), FunctionJson->GetBoolField(TEXT("is_native")));
     TestTrue(TEXT("Static属性"), FunctionJson->GetBoolField(TEXT("is_static")));
     TestTrue(TEXT("引数既定値の存在"), JsonParameters[0]->AsObject()->GetBoolField(TEXT("has_default_value")));
@@ -129,13 +134,17 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
         FString(TEXT("cpp_default_metadata")));
     TestEqual(TEXT("既定値の状態"), JsonParameters[0]->AsObject()->GetStringField(TEXT("default_value_status")),
         FString(TEXT("specified")));
-    TestEqual(TEXT("未取得の状態"), JsonParameters[1]->AsObject()->GetStringField(TEXT("default_value_status")),
+    TestEqual(TEXT("未取得の状態"), JsonParameters[2]->AsObject()->GetStringField(TEXT("default_value_status")),
         FString(TEXT("unavailable")));
-    TestFalse(TEXT("戻り値には既定値なし"), JsonParameters[1]->AsObject()->GetBoolField(TEXT("has_default_value")));
-    TestTrue(TEXT("既定値なしはnull"), JsonParameters[1]->AsObject()->GetField<EJson::Null>(TEXT("default_value"))->IsNull());
+    TestFalse(TEXT("戻り値には既定値なし"), JsonParameters[2]->AsObject()->GetBoolField(TEXT("has_default_value")));
+    TestTrue(TEXT("既定値なしはnull"), JsonParameters[2]->AsObject()->GetField<EJson::Null>(TEXT("default_value"))->IsNull());
     TestEqual(TEXT("入力型"), JsonParameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
         FString(TEXT("int32")));
-    TestTrue(TEXT("戻り値フラグ"), JsonParameters[1]->AsObject()->GetBoolField(TEXT("is_return")));
+    TestEqual(TEXT("Enum型"), JsonParameters[1]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
+        FString(TEXT("enum")));
+    TestEqual(TEXT("Enum型のパス"), JsonParameters[1]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("type_path")),
+        FString(TEXT("/Script/Engine.ECollisionEnabled")));
+    TestTrue(TEXT("戻り値フラグ"), JsonParameters[2]->AsObject()->GetBoolField(TEXT("is_return")));
     const TSharedPtr<FJsonObject> Expression = Functions[0]->AsObject()
         ->GetArrayField(TEXT("blocks"))[0]->AsObject()
         ->GetArrayField(TEXT("statements"))[0]->AsObject()
