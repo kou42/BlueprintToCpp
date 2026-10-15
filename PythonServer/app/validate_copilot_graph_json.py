@@ -134,9 +134,9 @@ def validate(document):
                     continue
                 source = edge.get("source_node_id")
                 target = edge.get("target_node_id")
-                if source not in node_pins or edge.get("source_pin_id") not in node_pins.get(source, set()):
+                if not isinstance(source, str) or source not in node_pins or not isinstance(edge.get("source_pin_id"), str) or edge.get("source_pin_id") not in node_pins.get(source, set()):
                     errors.append(f"{loc}: invalid source endpoint")
-                if target not in node_pins or edge.get("target_pin_id") not in node_pins.get(target, set()):
+                if not isinstance(target, str) or target not in node_pins or not isinstance(edge.get("target_pin_id"), str) or edge.get("target_pin_id") not in node_pins.get(target, set()):
                     errors.append(f"{loc}: invalid target endpoint")
         # ノード収集後に全接続を検査する。出力ノードの登場順には依存しない。
         data_links = {
