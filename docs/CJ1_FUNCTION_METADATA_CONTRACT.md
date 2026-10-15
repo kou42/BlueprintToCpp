@@ -32,3 +32,11 @@ UE Automation Test: `BlueprintAIConverter.SemanticJson.SerializeV2`。UE 5.7.4�
 `FEnumProperty` は `type.kind=enum` と `type.type_path=<UEnumの正式パス>` を出力する。`FByteProperty` は `Enum` 参照が存在する場合のみ同様に扱う。通常の `uint8` は依然として `unresolved` となり、既存の診断が残る。
 
 この拡張はEnum値のシリアライズやC++コード生成の対応を意味しない。UE実機で `FEnumProperty`、`TEnumAsByte`、通常の `uint8` を別々に確認すること。
+
+## 再帰コンテナ型
+
+`FArrayProperty` / `FSetProperty` は `type.kind=array/set` と `element_type`、`FMapProperty` は `type.kind=map` と `key_type` / `value_type` を出力する。子型も通常の `type` オブジェクトと同じ形式で再帰的に保持する。
+
+例: `TMap<FString, TArray<int32>>` は `map(key_type=string, value_type=array(element_type=int32))`。子型が未解決の場合も `unresolved` を残し、関数パラメータに診断を追加する。これらは**宣言の抽出**であり、コンテナの既定値・C++生成への対応を意味しない。
+
+再帰的なJSON型は共有所有の子型ポインタで保持するため、IRを複製する際に子型を変更する処理では共有の影響に注意する。UE実機ではArray/Set/Map、ネスト型、未対応のDelegate要素、空コンテナ既定値を検証する。
