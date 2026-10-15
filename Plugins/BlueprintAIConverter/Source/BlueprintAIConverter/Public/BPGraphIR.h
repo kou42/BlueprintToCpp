@@ -34,6 +34,11 @@ struct FBPIRNode
     bool bFunctionStatic = false;
     bool bFunctionPure = false;
     bool bFunctionConst = false;
+    // CallFunctionのSelf/Targetは関数所有クラスとは別情報。
+    // self / explicit_target / unconnected_target / static / unresolved / not_applicable
+    FString FunctionTargetKind = TEXT("not_applicable");
+    FGuid FunctionTargetPinId;
+    TArray<FGuid> FunctionTargetLinkedPinIds;
     FName VariableName;
     bool bVariableSelfContext = false;
     TArray<FBPIRPin> Pins;
