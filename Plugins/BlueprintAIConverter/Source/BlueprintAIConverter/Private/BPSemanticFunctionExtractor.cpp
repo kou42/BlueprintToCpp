@@ -128,6 +128,12 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         Target->bIsStatic = Function->HasAnyFunctionFlags(FUNC_Static);
         Target->bIsConst = Function->HasAnyFunctionFlags(FUNC_Const);
         Target->bIsBlueprintEvent = Function->HasAnyFunctionFlags(FUNC_BlueprintEvent);
+        // 親クラスに同名の宣言がある場合のみOverrideとする。Interface実装とは別概念。
+        const UClass* SuperClass = GeneratedClass->GetSuperClass();
+        const UFunction* ParentFunction = SuperClass != nullptr
+            ? SuperClass->FindFunctionByName(Function->GetFName()) : nullptr;
+        Target->bIsOverride = ParentFunction != nullptr;
+        Target->OverriddenFunctionPath = GetPathNameSafe(ParentFunction);
         Target->Parameters.Reset();
         Target->ReturnType.Kind = EBPSemanticTypeKind::Void;
         for (TFieldIterator<FProperty> ParamIt(Function); ParamIt; ++ParamIt)
