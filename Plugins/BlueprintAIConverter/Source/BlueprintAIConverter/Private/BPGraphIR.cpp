@@ -69,10 +69,13 @@ void AppendGraph(const UEdGraph* Graph, const FString& Kind, FBPGraphIR& IR)
                 IRNode.bFunctionStatic = TargetFunction->HasAnyFunctionFlags(FUNC_Static);
                 IRNode.bFunctionPure = TargetFunction->HasAnyFunctionFlags(FUNC_BlueprintPure);
                 IRNode.bFunctionConst = TargetFunction->HasAnyFunctionFlags(FUNC_Const);
+                IRNode.bFunctionLatent = TargetFunction->HasMetaData(TEXT("Latent"));
+                IRNode.FunctionDispatchKind = TEXT("regular");
             }
             else
             {
                 IRNode.FunctionTargetKind = TEXT("unresolved");
+                IRNode.FunctionDispatchKind = TEXT("unresolved");
                 IR.Diagnostics.Add(FString::Printf(TEXT("%s: unresolved function reference %s"),
                     *Node->GetPathName(), *IRNode.FunctionName.ToString()));
             }
