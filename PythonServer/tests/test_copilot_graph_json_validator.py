@@ -51,6 +51,30 @@ class CopilotGraphValidatorTests(unittest.TestCase):
         data["diagnostics"] = ["z", "a"]
         self.assertIn("diagnostics are not sorted", validate(data))
 
+    def test_target_self_pin_is_valid(self):
+        data = fixture()
+        node = data["graphs"][0]["nodes"][0]
+        node["function_target_kind"] = "self"
+        node["function_target_pin_id"] = B
+        node["function_target_linked_pin_ids"] = []
+        self.assertEqual(validate(data), [])
+
+    def test_target_pin_must_belong_to_node(self):
+        data = fixture()
+        node = data["graphs"][0]["nodes"][0]
+        node["function_target_kind"] = "explicit_target"
+        node["function_target_pin_id"] = D
+        node["function_target_linked_pin_ids"] = [D]
+        self.assertTrue(any("invalid function_target_pin_id" in e for e in validate(data)))
+
+    def test_invalid_target_kind(self):
+        data = fixture()
+        node = data["graphs"][0]["nodes"][0]
+        node["function_target_kind"] = "guessed"
+        node["function_target_pin_id"] = None
+        node["function_target_linked_pin_ids"] = []
+        self.assertTrue(any("invalid function_target_kind" in e for e in validate(data)))
+
     def test_invalid_version(self):
         data = fixture()
         data["schema_version"] = 2
