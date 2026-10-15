@@ -25,7 +25,8 @@ bool FBPParentClassResolverNativeTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("プラグイン内ネイティブActorを解決"), FBPParentClassResolver::ResolveActorParent(
         ABPEmitterTestActor::StaticClass()->GetPathName(), Parent, Diagnostics));
     TestEqual(TEXT("プラグイン親C++名"), Parent.CppClassName, FString(TEXT("ABPEmitterTestActor")));
-    TestEqual(TEXT("プラグイン親ヘッダー"), Parent.HeaderPath, FString(TEXT("BPEmitterTestActor.h")));
+    TestEqual(TEXT("プラグイン親ヘッダー"), Parent.HeaderPath,
+        FString(TEXT("Tests/BPEmitterTestActor.h")));
     return true;
 }
 
