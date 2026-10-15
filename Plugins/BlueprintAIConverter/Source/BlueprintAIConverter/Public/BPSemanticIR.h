@@ -94,6 +94,10 @@ struct FBPSemanticParameter
     // メタデータが存在しない場合と空文字の既定値を区別する。
     bool bHasDefaultValue = false;
     FString DefaultValue;
+    FString DefaultValueSource = TEXT("unavailable");
+    FString DefaultValueStatus = TEXT("unavailable");
+    FGuid DefaultValueSourceNodeId;
+    FGuid DefaultValueSourcePinId;
 };
 
 struct FBPSemanticFunction
