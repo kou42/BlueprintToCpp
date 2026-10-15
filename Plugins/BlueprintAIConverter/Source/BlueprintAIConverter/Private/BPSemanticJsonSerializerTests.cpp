@@ -24,6 +24,9 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Function.bIsNative = true;
     Function.bIsStatic = true;
     Function.bIsOverride = true;
+    Function.bIsInterfaceImplementation = true;
+    Function.InterfaceClassPath = TEXT("/Script/Test.TestInterface");
+    Function.InterfaceFunctionPath = TEXT("/Script/Test.TestInterface.BeginPlay");
     Function.OverriddenFunctionPath = TEXT("/Script/Engine.Actor.ReceiveBeginPlay");
     FBPSemanticParameter Input;
     Input.Name = TEXT("Amount");
@@ -149,6 +152,11 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Native属性"), FunctionJson->GetBoolField(TEXT("is_native")));
     TestTrue(TEXT("Static属性"), FunctionJson->GetBoolField(TEXT("is_static")));
     TestTrue(TEXT("Override属性"), FunctionJson->GetBoolField(TEXT("is_override")));
+    TestTrue(TEXT("Interface一致属性"), FunctionJson->GetBoolField(TEXT("is_interface_implementation")));
+    TestEqual(TEXT("Interfaceクラス"), FunctionJson->GetStringField(TEXT("interface_class_path")),
+        FString(TEXT("/Script/Test.TestInterface")));
+    TestEqual(TEXT("Interface関数"), FunctionJson->GetStringField(TEXT("interface_function_path")),
+        FString(TEXT("/Script/Test.TestInterface.BeginPlay")));
     TestEqual(TEXT("Override元のパス"), FunctionJson->GetStringField(TEXT("overridden_function_path")),
         FString(TEXT("/Script/Engine.Actor.ReceiveBeginPlay")));
     TestTrue(TEXT("引数既定値の存在"), JsonParameters[0]->AsObject()->GetBoolField(TEXT("has_default_value")));
