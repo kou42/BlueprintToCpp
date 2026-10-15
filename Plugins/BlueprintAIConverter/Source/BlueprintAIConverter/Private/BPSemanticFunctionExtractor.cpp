@@ -22,6 +22,21 @@ FBPSemanticType ResolvePropertyType(const FProperty* Property)
     else if (CastField<FStrProperty>(Property) != nullptr) { Type.Kind = EBPSemanticTypeKind::String; }
     else if (CastField<FNameProperty>(Property) != nullptr) { Type.Kind = EBPSemanticTypeKind::Name; }
     else if (CastField<FTextProperty>(Property) != nullptr) { Type.Kind = EBPSemanticTypeKind::Text; }
+    else if (const FEnumProperty* Enum = CastField<FEnumProperty>(Property))
+    {
+        // Enumの整数基底型だけでなく、UEnumの正式パスを保持する。
+        Type.Kind = EBPSemanticTypeKind::Enum;
+        Type.TypePath = GetPathNameSafe(Enum->GetEnum());
+    }
+    else if (const FByteProperty* Byte = CastField<FByteProperty>(Property))
+    {
+        // 旧形式のTEnumAsByteと通常のuint8を混同しない。
+        if (Byte->Enum != nullptr)
+        {
+            Type.Kind = EBPSemanticTypeKind::Enum;
+            Type.TypePath = GetPathNameSafe(Byte->Enum);
+        }
+    }
     else if (const FStructProperty* Struct = CastField<FStructProperty>(Property))
     {
         Type.Kind = EBPSemanticTypeKind::Struct;
@@ -32,7 +47,7 @@ FBPSemanticType ResolvePropertyType(const FProperty* Property)
         Type.Kind = EBPSemanticTypeKind::Object;
         Type.TypePath = GetPathNameSafe(Object->PropertyClass);
     }
-    // コンテナ・Enum・Delegate等は型情報を推測せず未解決とする。
+    // Enum以外の未対応コンテナ・Delegate等は推測せず未解決とする。
     return Type;
 }
 }
