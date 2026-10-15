@@ -195,6 +195,7 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             if (HasUnresolvedType(Parameter.Type))
             {
                 FBPSemanticDiagnostic Diagnostic;
+                Diagnostic.GraphName = Function->GetName();
                 Diagnostic.Message = FString::Printf(TEXT("Function %s parameter %s has unresolved type"),
                     *Function->GetName(), *Property->GetName());
                 IR.Diagnostics.Add(MoveTemp(Diagnostic));
