@@ -22,6 +22,15 @@ bool HasUnresolvedType(const FBPSemanticType& Type, int32 Depth = 0)
             HasUnresolvedType(*Type.KeyTypeInfo, Depth + 1) ||
             HasUnresolvedType(*Type.ValueTypeInfo, Depth + 1);
     }
+    // 型パスを持つ種別は、参照先が空なら解決済みとはみなさない。
+    if (Type.Kind == EBPSemanticTypeKind::Object ||
+        Type.Kind == EBPSemanticTypeKind::Struct ||
+        Type.Kind == EBPSemanticTypeKind::Enum ||
+        Type.Kind == EBPSemanticTypeKind::Delegate ||
+        Type.Kind == EBPSemanticTypeKind::MulticastDelegate)
+    {
+        return Type.TypePath.IsEmpty();
+    }
     return Type.Kind == EBPSemanticTypeKind::Unresolved;
 }
 
