@@ -1391,11 +1391,18 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
         AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop requires one direct array getter connection"));
         return false;
     }
-    if (Event->ExecEdges.Num() < 2 ||
-        Event->ExecEdges[0].SourceNode != Begin->Id ||
-        Event->ExecEdges[0].SourcePin != BeginThen->Id ||
-        Event->ExecEdges[0].TargetNode != Loop->Id ||
-        Event->ExecEdges[0].TargetPin != Execute->Id)
+    // Edge配列の列挙順はBlueprintの実行順序ではない。
+    // GUIDによって入口を一意に検証し、LoopBody/Completedは後段で追跡する。
+    int32 EntryEdgeCount = 0;
+    for (const FBPIRLink& Edge : Event->ExecEdges)
+    {
+        if (Edge.SourceNode == Begin->Id && Edge.SourcePin == BeginThen->Id &&
+            Edge.TargetNode == Loop->Id && Edge.TargetPin == Execute->Id)
+        {
+            ++EntryEdgeCount;
+        }
+    }
+    if (Event->ExecEdges.Num() < 2 || EntryEdgeCount != 1)
     {
         AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop entry Exec is invalid"));
         return false;
