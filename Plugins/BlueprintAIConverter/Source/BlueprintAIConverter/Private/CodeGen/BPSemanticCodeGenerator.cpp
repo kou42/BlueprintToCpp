@@ -777,6 +777,59 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
         return EmitPrintStringStatement(Statement.Expression, ParentClassPath,
             Indent, OutCode, Diagnostics);
     }
+    if (Statement.Kind == EBPSemanticStatementKind::ForLoop)
+    {
+        // 内側ループは独立したIndex名を必須とし、外側Indexのシャドーイングを防ぐ。
+        // 現段階ではループ境界をint32リテラルに限定する。
+        int32 First = 0;
+        int32 Last = 0;
+        if (Statement.LoopIndexVariable.IsNone() ||
+            IsIdentifier(Statement.LoopIndexVariable.ToString()) == false ||
+            Statement.LoopIndexVariable == LocalIndex ||
+            Statement.LoopFirstIndex.Kind != EBPSemanticExpressionKind::Literal ||
+            Statement.LoopFirstIndex.Type.Kind != EBPSemanticTypeKind::Int32 ||
+            Statement.LoopLastIndex.Kind != EBPSemanticExpressionKind::Literal ||
+            Statement.LoopLastIndex.Type.Kind != EBPSemanticTypeKind::Int32 ||
+            LexTryParseString(First, *Statement.LoopFirstIndex.LiteralValue) == false ||
+            LexTryParseString(Last, *Statement.LoopLastIndex.LiteralValue) == false ||
+            Statement.LoopBodyStatements.IsEmpty())
+        {
+            Diagnostics.Add(TEXT("Nested ForLoop requires distinct index names and literal int32 bounds"));
+            return false;
+        }
+        const FString InnerIndent = Indent + TEXT("    ");
+        FString InnerCode;
+        for (const FBPSemanticStatement& Body : Statement.LoopBodyStatements)
+        {
+            FString Part;
+            if (EmitForLoopBodyStatement(Body, ParentClassPath, Variables,
+                    Statement.LoopIndexVariable, InnerIndent, Depth + 1,
+                    Part, Diagnostics) == false)
+            {
+                return false;
+            }
+            InnerCode += Part;
+        }
+        OutCode = FString::Printf(
+            TEXT("%sfor (int32 %s = %d; %s <= %d; ++%s)\\n%s{\\n%s%s}\\n"),
+            *Indent, *Statement.LoopIndexVariable.ToString(), First,
+            *Statement.LoopIndexVariable.ToString(), Last,
+            *Statement.LoopIndexVariable.ToString(), *Indent, *InnerCode, *Indent);
+        // Completedは内側ループ終了後、外側ループの同じ反復内で実行する。
+        for (const FBPSemanticStatement& Completed : Statement.CompletedStatements)
+        {
+            FString Part;
+            if (Completed.Kind != EBPSemanticStatementKind::Expression ||
+                EmitPrintStringStatement(Completed.Expression, ParentClassPath,
+                    Indent, Part, Diagnostics) == false)
+            {
+                Diagnostics.Add(TEXT("Nested ForLoop Completed supports PrintString only"));
+                return false;
+            }
+            OutCode += Part;
+        }
+        return true;
+    }
     if (Statement.Kind != EBPSemanticStatementKind::Branch ||
         Statement.ThenStatements.Num() != 1 || Statement.ElseStatements.Num() != 1)
     {
