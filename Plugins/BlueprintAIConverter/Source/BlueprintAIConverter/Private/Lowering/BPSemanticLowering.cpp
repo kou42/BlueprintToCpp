@@ -1269,7 +1269,9 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
             if (Begin != nullptr) { AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Multiple BeginPlay nodes")); return false; }
             Begin = &Node;
         }
-        else if (Node.MacroGraphName == TEXT("ForEachLoop"))
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
+            Node.MacroGraphName == TEXT("ForEachLoop") &&
+            Node.MacroGraphPath.StartsWith(TEXT("/Engine/EditorBlueprintResources/StandardMacros.")))
         {
             if (Loop != nullptr) { AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Multiple ForEachLoop nodes")); return false; }
             Loop = &Node;
@@ -1280,7 +1282,8 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
             if (Getter != nullptr) { AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Multiple array getters")); return false; }
             Getter = &Node;
         }
-        else if (Node.FunctionName == TEXT("Conv_IntToString") &&
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+            Node.FunctionName == TEXT("Conv_IntToString") &&
             Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary"))
         {
             if (IndexConverter != nullptr)
@@ -1290,7 +1293,8 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
             }
             IndexConverter = &Node;
         }
-        else if (Node.FunctionName == TEXT("Conv_IntToString") &&
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+            Node.FunctionName == TEXT("Conv_IntToString") &&
             Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
             IndexConverter != nullptr)
         {
@@ -1301,7 +1305,9 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
             }
             ElementConverter = &Node;
         }
-        else if (Node.FunctionName == TEXT("PrintString"))
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+            Node.FunctionName == TEXT("PrintString") &&
+            Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetSystemLibrary"))
         {
             Prints.Add(&Node);
         }
@@ -1544,7 +1550,8 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     const FBPSemanticVariable* Variable = OutIR.Variables.FindByPredicate(
         [Getter](const FBPSemanticVariable& Item) { return Item.Name == Getter->VariableName; });
     if (Variable == nullptr || Variable->Type.Kind != EBPSemanticTypeKind::Int32 ||
-        Variable->Type.ContainerKind != TEXT("array"))
+        Variable->Type.ContainerKind != TEXT("array") ||
+        Variable->ReflectedCppType != TEXT("TArray<int32>"))
     {
         AddDiagnostic(OutIR, Event->Name, Getter->Id, TEXT("ForEachLoop array member type is not verified int32[]"));
         return false;
