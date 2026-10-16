@@ -496,7 +496,7 @@ bool ReadBoolLiteral(const FBPSemanticExpression& Expression, FString& OutValue)
 bool EmitNumericExpression(const FBPSemanticExpression& Expression,
     const EBPSemanticTypeKind OperandType,
     const TArray<FBPSemanticVariable>& Variables, FString& OutOperand,
-    TArray<FString>& Diagnostics)
+    TArray<FString>& Diagnostics, const FName LocalIndex = NAME_None)
 {
     if (Expression.Type.Kind != OperandType ||
         Expression.Type.bIsReference || Expression.Type.bIsConst)
@@ -551,6 +551,13 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         Diagnostics.Add(TEXT("Numeric comparison variable name is invalid"));
         return false;
     }
+    // ForLoopのIndexは反射メンバーではなくfor文のローカル変数。
+    if (LocalIndex.IsNone() == false && Expression.VariableName == LocalIndex &&
+        OperandType == EBPSemanticTypeKind::Int32)
+    {
+        OutOperand = Name;
+        return true;
+    }
     const FBPSemanticVariable* Match = nullptr;
     for (const FBPSemanticVariable& Variable : Variables)
     {
@@ -579,6 +586,37 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         return false;
     }
     OutOperand = Name;
+    return true;
+}
+
+bool EmitForLoopCondition(const FBPSemanticExpression& Expression,
+    const TArray<FBPSemanticVariable>& Variables, const FName LocalIndex,
+    FString& OutCondition, TArray<FString>& Diagnostics)
+{
+    if (ReadBoolLiteral(Expression, OutCondition))
+    {
+        return true;
+    }
+    FBPNumericComparison Comparison;
+    if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
+        Expression.Type.Kind != EBPSemanticTypeKind::Bool ||
+        Expression.Arguments.Num() != 2 ||
+        FBPNumericComparisonResolver::Resolve(Expression.FunctionOwnerPath,
+            Expression.FunctionName, Comparison, Diagnostics) == false)
+    {
+        Diagnostics.Add(TEXT("Unsupported ForLoop Branch comparison"));
+        return false;
+    }
+    FString A;
+    FString B;
+    if (EmitNumericExpression(Expression.Arguments[0], Comparison.OperandType,
+            Variables, A, Diagnostics, LocalIndex) == false ||
+        EmitNumericExpression(Expression.Arguments[1], Comparison.OperandType,
+            Variables, B, Diagnostics, LocalIndex) == false)
+    {
+        return false;
+    }
+    OutCondition = FString::Printf(TEXT("%s %s %s"), *A, *Comparison.OperatorToken, *B);
     return true;
 }
 
@@ -877,8 +915,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
                 FString Condition;
                 FString ThenCode;
                 FString ElseCode;
-                if (EmitBranchCondition(BodyStatement.Expression, IR.Variables,
-                        Condition, OutDiagnostics) == false ||
+                if (EmitForLoopCondition(BodyStatement.Expression, IR.Variables,
+                        Statement.LoopIndexVariable, Condition, OutDiagnostics) == false ||
                     EmitPrintStringStatement(BodyStatement.ThenStatements[0].Expression,
                         IR.ParentClassPath, TEXT("            "), ThenCode, OutDiagnostics) == false ||
                     EmitPrintStringStatement(BodyStatement.ElseStatements[0].Expression,
