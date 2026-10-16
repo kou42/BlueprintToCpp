@@ -1068,7 +1068,13 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             // 未解決の要素参照を暗黙に文字列へ変換しない。
             if (Body.Kind != EBPSemanticStatementKind::Expression ||
                 Body.Expression.Arguments.Num() != 7 ||
-                Body.Expression.Arguments[1].Kind != EBPSemanticExpressionKind::Literal ||
+                (Body.Expression.Arguments[1].Kind != EBPSemanticExpressionKind::Literal &&
+                    (Body.Expression.Arguments[1].Kind != EBPSemanticExpressionKind::FunctionCall ||
+                        Body.Expression.Arguments[1].FunctionName != TEXT("Conv_IntToString") ||
+                        Body.Expression.Arguments[1].FunctionOwnerPath != TEXT("/Script/Engine.KismetStringLibrary") ||
+                        Body.Expression.Arguments[1].Arguments.Num() != 1 ||
+                        Body.Expression.Arguments[1].Arguments[0].Kind != EBPSemanticExpressionKind::VariableReference ||
+                        Body.Expression.Arguments[1].Arguments[0].VariableName != Statement.LoopIndexVariable)) ||
                 EmitPrintStringStatement(Body.Expression, IR.ParentClassPath,
                     TEXT("        "), Part, OutDiagnostics) == false)
             {
@@ -1119,7 +1125,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         // インデックス付き反復でBlueprintのArray Indexを保持する。
         // 要素変数はこの限定形状では未使用なので、値のコピーを作らない。
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    for (int32 %s = 0; %s < %s.Num(); ++%s)\n    {\n%s    }\n%s}\n"),
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    for (int32 %s = 0; %s < %s.Num(); ++%s)\n    {\n%s    }\n%s}\n"),
             *BaseName, *UnrealTypeInclude, *ConstructorDefinition, *ClassName,
             *Statement.LoopIndexVariable.ToString(), *Array.VariableName.ToString(),
             *Statement.LoopIndexVariable.ToString(), *BodyCode, *CompletedCode);
