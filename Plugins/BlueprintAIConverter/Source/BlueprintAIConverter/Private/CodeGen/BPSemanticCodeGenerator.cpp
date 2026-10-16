@@ -1046,6 +1046,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             SourceVariable == nullptr ||
             SourceVariable->Type.ContainerKind != TEXT("array") ||
             SourceVariable->Type.Kind != EBPSemanticTypeKind::Int32 ||
+            SourceVariable->ReflectedCppType != TEXT("TArray<int32>") ||
             Statement.LoopElementType.Kind != EBPSemanticTypeKind::Int32 ||
             Statement.LoopElementVariable.IsNone() ||
             IsIdentifier(Statement.LoopElementVariable.ToString()) == false ||
