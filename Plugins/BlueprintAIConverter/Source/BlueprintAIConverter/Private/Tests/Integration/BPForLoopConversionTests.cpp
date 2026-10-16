@@ -1646,4 +1646,62 @@ bool FBPForEachCodeGenRejectsUnresolvedTest::RunTest(const FString& Parameters)
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachIndexCodeGenTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.IndexToStringCodeGen",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachIndexCodeGenTest::RunTest(const FString& Parameters)
+{
+    // 既存のForLoopテストから検証済みPrintString式を再利用する。
+    // Index参照がForEachローカル変数として生成されることを確認する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintString式を含むIRの生成"),
+        FBPSemanticLowering::LowerForLoop(MakeForLoopGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Loop = IR.Functions[0].Blocks[0].Statements[0];
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Loop.LoopElementVariable = TEXT("ForEachArrayElement");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("Numbers");
+    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+    Variable.Type.ContainerKind = TEXT("array");
+    Variable.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Variable);
+    // 元のForLoopのIndex式をForEachローカルIndexへ置換する。
+    FBPSemanticExpression& IndexText = Loop.LoopBodyStatements[0].Expression.Arguments[1];
+    if (TestTrue(TEXT("Index文字列変換式が存在"),
+        IndexText.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        IndexText.Arguments.Num() == 1) == false)
+    {
+        return false;
+    }
+    IndexText.Arguments[0].VariableName = Loop.LoopIndexVariable;
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ForEach Indexのコード生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachIndexActor"),
+            TEXT("TEST_API"), Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("配列長で反復"), Files.SourceContent.Contains(TEXT("Numbers.Num()")));
+    TestTrue(TEXT("Indexを文字列化"),
+        Files.SourceContent.Contains(TEXT("Conv_IntToString(ForEachArrayIndex)")));
+    return true;
+}
+
 #endif
