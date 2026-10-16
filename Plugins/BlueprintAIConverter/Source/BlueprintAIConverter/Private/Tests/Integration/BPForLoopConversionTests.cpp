@@ -282,6 +282,55 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopIndexComparisonBranchTest,
+    "BlueprintAIConverter.Conversion.ForLoop.IndexComparisonBranch",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopIndexComparisonBranchTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR GraphIR = MakeForLoopBranchGraph();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    FBPIRNode Comparison;
+    Comparison.Id = FGuid::NewGuid();
+    Comparison.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Comparison.FunctionName = TEXT("Less_IntInt");
+    Comparison.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Comparison.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+    Comparison.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), TEXT("3")));
+    Comparison.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("bool")));
+    FBPIRLink ConditionEdge;
+    ConditionEdge.SourceNode = Comparison.Id;
+    ConditionEdge.SourcePin = Comparison.Pins[2].Id;
+    ConditionEdge.TargetNode = Graph.Nodes[2].Id;
+    ConditionEdge.TargetPin = Graph.Nodes[2].Pins[1].Id;
+    Graph.DataEdges.Add(ConditionEdge);
+    FBPIRLink IndexEdge;
+    IndexEdge.SourceNode = Graph.Nodes[1].Id;
+    IndexEdge.SourcePin = Graph.Nodes[1].Pins[4].Id;
+    IndexEdge.TargetNode = Comparison.Id;
+    IndexEdge.TargetPin = Comparison.Pins[0].Id;
+    Graph.DataEdges.Add(IndexEdge);
+    Graph.Nodes.Add(MoveTemp(Comparison));
+
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("LoopIndex比較のLowering"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("LoopIndex比較のC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopIndexActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("LoopIndexを条件式へ生成"),
+        Files.SourceContent.Contains(TEXT("if (LoopIndex < 3)")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopComparisonBranchTest,
     "BlueprintAIConverter.Conversion.ForLoop.NumericComparisonBranch",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
