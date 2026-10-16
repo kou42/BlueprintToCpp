@@ -1061,6 +1061,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             return false;
         }
         FString BodyCode;
+        bool bUsesElement = false;
         for (const FBPSemanticStatement& Body : Statement.LoopBodyStatements)
         {
             FString Part;
@@ -1074,12 +1075,18 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
                         Body.Expression.Arguments[1].FunctionOwnerPath != TEXT("/Script/Engine.KismetStringLibrary") ||
                         Body.Expression.Arguments[1].Arguments.Num() != 1 ||
                         Body.Expression.Arguments[1].Arguments[0].Kind != EBPSemanticExpressionKind::VariableReference ||
-                        Body.Expression.Arguments[1].Arguments[0].VariableName != Statement.LoopIndexVariable)) ||
+                        (Body.Expression.Arguments[1].Arguments[0].VariableName != Statement.LoopIndexVariable &&
+                            Body.Expression.Arguments[1].Arguments[0].VariableName != Statement.LoopElementVariable))) ||
                 EmitPrintStringStatement(Body.Expression, IR.ParentClassPath,
                     TEXT("        "), Part, OutDiagnostics) == false)
             {
                 OutDiagnostics.Add(TEXT("ForEachLoop body requires a literal PrintString without element references"));
                 return false;
+            }
+            if (Body.Expression.Arguments[1].Kind == EBPSemanticExpressionKind::FunctionCall &&
+                Body.Expression.Arguments[1].Arguments[0].VariableName == Statement.LoopElementVariable)
+            {
+                bUsesElement = true;
             }
             BodyCode += Part;
         }
@@ -1122,13 +1129,18 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%sprotected:\n    virtual void BeginPlay() override;\n};\n"),
             *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration);
-        // インデックス付き反復でBlueprintのArray Indexを保持する。
-        // 要素変数はこの限定形状では未使用なので、値のコピーを作らない。
+        // 配列要素の参照がある場合のみローカル変数を生成する。
+        // 未使用の要素コピーを避け、要素参照は現在の反復位置に限定する。
+        const FString ElementDeclaration = bUsesElement
+            ? FString::Printf(TEXT("        const int32 %s = %s[%s];\\n"),
+                *Statement.LoopElementVariable.ToString(),
+                *Array.VariableName.ToString(), *Statement.LoopIndexVariable.ToString())
+            : FString();
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    for (int32 %s = 0; %s < %s.Num(); ++%s)\n    {\n%s    }\n%s}\n"),
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    for (int32 %s = 0; %s < %s.Num(); ++%s)\n    {\n%s%s    }\n%s}\n"),
             *BaseName, *UnrealTypeInclude, *ConstructorDefinition, *ClassName,
             *Statement.LoopIndexVariable.ToString(), *Array.VariableName.ToString(),
-            *Statement.LoopIndexVariable.ToString(), *BodyCode, *CompletedCode);
+            *Statement.LoopIndexVariable.ToString(), *ElementDeclaration, *BodyCode, *CompletedCode);
         OutFiles = MoveTemp(Files);
         return true;
     }
