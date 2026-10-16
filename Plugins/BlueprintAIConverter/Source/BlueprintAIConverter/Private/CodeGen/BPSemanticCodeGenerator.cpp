@@ -1032,7 +1032,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     if (Statement.Kind == EBPSemanticStatementKind::ForEachLoop)
     {
         // 配列の実体と要素型が確定したSemantic IRに限定する。
-        // Array Elementを使用する式やBreakはまだ扱わず、未対応を成功扱いしない。
+        // ループローカル変数とBlueprintメンバーの衝突はC++の名前隠蔽を招くため拒否する。
+        // Breakと未知の式は未対応として成功扱いしない。
         const FBPSemanticExpression& Array = Statement.LoopArray;
         const FBPSemanticVariable* SourceVariable = IR.Variables.FindByPredicate(
             [&Array](const FBPSemanticVariable& Variable)
@@ -1058,6 +1059,12 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             Statement.LoopIndexVariable == Statement.LoopElementVariable ||
             Statement.LoopIndexVariable == Array.VariableName ||
             Statement.LoopElementVariable == Array.VariableName ||
+            IR.Variables.ContainsByPredicate(
+                [&Statement](const FBPSemanticVariable& Variable)
+                {
+                    return Variable.Name == Statement.LoopIndexVariable ||
+                        Variable.Name == Statement.LoopElementVariable;
+                }) ||
             Statement.LoopBodyStatements.IsEmpty())
         {
             OutDiagnostics.Add(TEXT("ForEachLoop requires a verified int32 array member and distinct element/index identifiers"));
@@ -1084,7 +1091,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
                 EmitPrintStringStatement(Body.Expression, IR.ParentClassPath,
                     TEXT("        "), Part, OutDiagnostics) == false)
             {
-                OutDiagnostics.Add(TEXT("ForEachLoop body requires a literal PrintString without element references"));
+                OutDiagnostics.Add(TEXT("ForEachLoop body requires a literal or verified int32 Index/Element PrintString"));
                 return false;
             }
             if (Body.Expression.Arguments[1].Kind == EBPSemanticExpressionKind::FunctionCall &&
