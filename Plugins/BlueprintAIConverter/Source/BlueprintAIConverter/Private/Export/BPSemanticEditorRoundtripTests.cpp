@@ -157,7 +157,17 @@ bool FBPSemanticIntArrayEditorTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+    // 実BlueprintからGraph IRを構築し、変数数の整合性も確認する。
+    FBPGraphIR GraphIR;
+    if (TestTrue(TEXT("配列を持つBlueprintからGraph IRを構築"),
+        FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("Graph IRの変数数"), GraphIR.BlueprintVariableCount, 1);
     FBPSemanticIR IR;
+    IR.AssetPath = GraphIR.AssetPath;
+    IR.ParentClassPath = GraphIR.ParentClassPath;
     FBPSemanticVariableExtractor::Append(Blueprint, IR);
     const FBPSemanticVariable* Variable = FindVariable(IR, TEXT("Numbers"));
     if (TestNotNull(TEXT("配列変数を抽出"), Variable) == false)
