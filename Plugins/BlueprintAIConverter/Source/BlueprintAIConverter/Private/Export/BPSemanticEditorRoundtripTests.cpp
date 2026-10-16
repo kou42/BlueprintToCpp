@@ -152,6 +152,15 @@ bool FBPSemanticIntArrayEditorTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+    // 比較対象としてint64配列も追加し、int32配列への誤分類を防ぐ。
+    FEdGraphPinType Int64ArrayType;
+    Int64ArrayType.PinCategory = UEdGraphSchema_K2::PC_Int64;
+    Int64ArrayType.ContainerType = EPinContainerType::Array;
+    if (TestTrue(TEXT("int64配列メンバーを追加"),
+        FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("LargeNumbers"), Int64ArrayType)) == false)
+    {
+        return false;
+    }
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
     if (TestNotNull(TEXT("コンパイル済みGeneratedClass"), Blueprint->GeneratedClass.Get()) == false)
     {
@@ -164,7 +173,7 @@ bool FBPSemanticIntArrayEditorTest::RunTest(const FString& Parameters)
     {
         return false;
     }
-    TestEqual(TEXT("Graph IRの変数数"), GraphIR.BlueprintVariableCount, 1);
+    TestEqual(TEXT("Graph IRの変数数"), GraphIR.BlueprintVariableCount, 2);
     FBPSemanticIR IR;
     IR.AssetPath = GraphIR.AssetPath;
     IR.ParentClassPath = GraphIR.ParentClassPath;
@@ -180,6 +189,16 @@ bool FBPSemanticIntArrayEditorTest::RunTest(const FString& Parameters)
         Variable->Type.ElementType.IsValid() &&
         Variable->Type.ElementType->Kind == EBPSemanticTypeKind::Int32);
     TestEqual(TEXT("反射C++型"), Variable->ReflectedCppType, FString(TEXT("TArray<int32>")));
+    const FBPSemanticVariable* LargeNumbers = FindVariable(IR, TEXT("LargeNumbers"));
+    if (TestNotNull(TEXT("int64配列を抽出"), LargeNumbers) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("int64配列のコンテナ"), LargeNumbers->Type.ContainerKind, FString(TEXT("array")));
+    TestTrue(TEXT("int64配列をint32と誤解決しない"),
+        LargeNumbers->Type.Kind != EBPSemanticTypeKind::Int32);
+    TestTrue(TEXT("int64配列の反射型を保持"),
+        LargeNumbers->ReflectedCppType.Contains(TEXT("int64")));
 
     // 実Blueprint由来の反射型を使って、DeclarationOnly経由で
     // C++の配列メンバー宣言まで到達することを検証する。
