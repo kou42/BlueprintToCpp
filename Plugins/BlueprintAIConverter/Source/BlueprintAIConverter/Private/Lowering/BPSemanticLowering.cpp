@@ -1368,6 +1368,15 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             Edge.TargetNode == Loop->Id && Edge.TargetPin == Execute->Id;
         if (Edge.SourceNode == Loop->Id && Edge.SourcePin == LoopBody->Id)
         {
+            // ネスト時は最後に列挙されたBranchではなく、LoopBody直結を根にする。
+            for (const FBPIRNode* Candidate : BranchNodes)
+            {
+                if (Candidate->Id == Edge.TargetNode)
+                {
+                    BodyBranch = Candidate;
+                    break;
+                }
+            }
             BodyPrint = FindPrintById(Edge.TargetNode);
             if (BodyPrint == nullptr && BodyBranch != nullptr && Edge.TargetNode != BodyBranch->Id)
             {
