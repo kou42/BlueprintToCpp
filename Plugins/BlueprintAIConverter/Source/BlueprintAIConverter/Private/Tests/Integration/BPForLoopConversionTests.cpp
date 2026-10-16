@@ -282,6 +282,48 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedLoopCodegenTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedLoopCodegen",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedLoopCodegenTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("外側ForLoopのLowering"),
+        FBPSemanticLowering::LowerForLoop(MakeForLoopGraph(), SemanticIR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Outer =
+        SemanticIR.Functions[0].Blocks[0].Statements[0];
+    FBPSemanticStatement Inner;
+    Inner.Kind = EBPSemanticStatementKind::ForLoop;
+    Inner.LoopIndexVariable = TEXT("InnerIndex");
+    Inner.LoopFirstIndex = Outer.LoopFirstIndex;
+    Inner.LoopLastIndex = Outer.LoopLastIndex;
+    Inner.LoopBodyStatements.Add(Outer.LoopBodyStatements[0]);
+    Inner.CompletedStatements.Add(Outer.LoopBodyStatements[0]);
+    Outer.LoopBodyStatements.Reset();
+    Outer.LoopBodyStatements.Add(MoveTemp(Inner));
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("二重ForLoopのC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopNestedActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("外側ループ"), Files.SourceContent.Contains(
+        TEXT("for (int32 LoopIndex = 1; LoopIndex <= 3; ++LoopIndex)")));
+    TestTrue(TEXT("内側ループ"), Files.SourceContent.Contains(
+        TEXT("for (int32 InnerIndex = 1; InnerIndex <= 3; ++InnerIndex)")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopMultipleNestedComparisonsTest,
     "BlueprintAIConverter.Conversion.ForLoop.MultipleNestedComparisons",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
