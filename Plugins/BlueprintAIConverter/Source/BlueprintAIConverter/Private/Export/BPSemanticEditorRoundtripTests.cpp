@@ -11,6 +11,9 @@
 #include "BPSemanticVariableExtractor.h"
 #include "Dom/JsonObject.h"
 #include "EdGraphSchema_K2.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphPin.h"
+#include "K2Node_MacroInstance.h"
 #include "Engine/Blueprint.h"
 #include "GameFramework/Actor.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -126,6 +129,74 @@ bool FBPSemanticEditorRoundtripTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("保存JSONの変数数"), Root->GetArrayField(TEXT("variables")).Num(), 3);
     AddInfo(FString::Printf(TEXT("SEMANTIC_ROUNDTRIP_ARTIFACT=%s"), *ExportPath));
     return true;
+}
+
+// 実エンジンのStandardMacrosを参照し、ForEachLoopのピン構造と
+// GraphパスがLoweringの受理条件と一致するかを検証する。
+// 手作りGraph IRでは検出できないUEバージョン差分の早期検知が目的。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachStandardMacroEditorTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.StandardMacroEditor",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachStandardMacroEditorTest::RunTest(const FString& Parameters)
+{
+    const TCHAR* MacroPath =
+        TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoop");
+    UEdGraph* MacroGraph = LoadObject<UEdGraph>(nullptr, MacroPath);
+    if (TestNotNull(TEXT("標準ForEachLoopマクログラフを取得"), MacroGraph) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("標準ForEachLoopの実Graphパス"),
+        MacroGraph->GetPathName(), FString(MacroPath));
+
+    const FName BlueprintName = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_StandardForEachMacro"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        AActor::StaticClass(), GetTransientPackage(), BlueprintName, BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("一時Blueprintを生成"), Blueprint) == false)
+    {
+        return false;
+    }
+    if (TestTrue(TEXT("イベントグラフを取得"),
+        Blueprint->UbergraphPages.IsEmpty() == false) == false)
+    {
+        return false;
+    }
+    UEdGraph* EventGraph = Blueprint->UbergraphPages[0];
+    UK2Node_MacroInstance* Macro = NewObject<UK2Node_MacroInstance>(EventGraph);
+    Macro->SetMacroGraph(MacroGraph);
+    Macro->AllocateDefaultPins();
+    if (TestTrue(TEXT("実マクロのピンを生成"), Macro->Pins.IsEmpty() == false) == false)
+    {
+        return false;
+    }
+
+    auto CheckPin = [&](const FName Name, const EEdGraphPinDirection Direction,
+        const FName Category) -> bool
+    {
+        for (const UEdGraphPin* Pin : Macro->Pins)
+        {
+            if (Pin != nullptr && Pin->PinName == Name && Pin->Direction == Direction)
+            {
+                return TestEqual(FString::Printf(TEXT("%s の型"), *Name.ToString()),
+                    Pin->PinType.PinCategory, Category);
+            }
+        }
+        AddError(FString::Printf(TEXT("実マクロに必要なピンがありません: %s"),
+            *Name.ToString()));
+        return false;
+    };
+    bool bValid = true;
+    bValid &= CheckPin(TEXT("execute"), EGPD_Input, UEdGraphSchema_K2::PC_Exec);
+    bValid &= CheckPin(TEXT("Array"), EGPD_Input, UEdGraphSchema_K2::PC_Wildcard);
+    bValid &= CheckPin(TEXT("LoopBody"), EGPD_Output, UEdGraphSchema_K2::PC_Exec);
+    bValid &= CheckPin(TEXT("Array Element"), EGPD_Output, UEdGraphSchema_K2::PC_Wildcard);
+    bValid &= CheckPin(TEXT("Array Index"), EGPD_Output, UEdGraphSchema_K2::PC_Int);
+    bValid &= CheckPin(TEXT("Completed"), EGPD_Output, UEdGraphSchema_K2::PC_Exec);
+    // 配列の型確定前はWildcardが正常。int32型に確定した後の
+    // Graph IRの受理テストは別途実施する。
+    return bValid;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticIntArrayEditorTest,
