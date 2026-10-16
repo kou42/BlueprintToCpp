@@ -1260,6 +1260,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     const FBPIRNode* Loop = nullptr;
     const FBPIRNode* IndexToString = nullptr;
     const FBPIRNode* BodyBranch = nullptr;
+    const FBPIRNode* BodyComparison = nullptr;
     TArray<const FBPIRNode*> Prints;
     for (const FBPIRNode& Node : EventGraph->Nodes)
     {
@@ -1288,6 +1289,11 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         {
             BodyBranch = &Node;
         }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+            Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetMathLibrary"))
+        {
+            BodyComparison = &Node;
+        }
         else
         {
             AddDiagnostic(OutIR, EventGraph->Name, Node.Id,
@@ -1297,10 +1303,12 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     }
     if (BeginPlay == nullptr || Loop == nullptr || Prints.IsEmpty() ||
         EventGraph->Nodes.Num() != 2 + Prints.Num() + (IndexToString != nullptr ? 1 : 0) +
-            (BodyBranch != nullptr ? 1 : 0) ||
+            (BodyBranch != nullptr ? 1 : 0) + (BodyComparison != nullptr ? 1 : 0) ||
         EventGraph->ExecEdges.Num() != 1 + Prints.Num() + (BodyBranch != nullptr ? 1 : 0) ||
         (BodyBranch != nullptr && IndexToString != nullptr) ||
-        (IndexToString == nullptr ? EventGraph->DataEdges.IsEmpty() == false : EventGraph->DataEdges.Num() != 2))
+        (BodyComparison == nullptr
+            ? (IndexToString == nullptr ? EventGraph->DataEdges.IsEmpty() == false : EventGraph->DataEdges.Num() != 2)
+            : EventGraph->DataEdges.Num() != 1))
     {
         AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
             TEXT("ForLoop conversion requires BeginPlay, ForLoop, one body PrintString, and optional Completed PrintString"));
@@ -1528,7 +1536,8 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             ThenPrint == ElsePrint || ThenPrint == CompletedPrint || ElsePrint == CompletedPrint ||
             HasBranchEdge(Then, ThenPrint, ThenExecute) == false ||
             HasBranchEdge(Else, ElsePrint, ElseExecute) == false ||
-            (Condition->DefaultValue != TEXT("true") && Condition->DefaultValue != TEXT("false")) ||
+            (BodyComparison == nullptr &&
+                Condition->DefaultValue != TEXT("true") && Condition->DefaultValue != TEXT("false")) ||
             Prints.Num() != 2 + OrderedCompletedPrints.Num())
         {
             AddDiagnostic(OutIR, EventGraph->Name, BodyBranch->Id,
@@ -1545,8 +1554,62 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         FBPSemanticStatement BranchStatement;
         BranchStatement.Kind = EBPSemanticStatementKind::Branch;
         BranchStatement.SourceNodeId = BodyBranch->Id;
-        BranchStatement.Expression = Literal(
-            EBPSemanticTypeKind::Bool, Condition->DefaultValue, *BodyBranch, TEXT("Condition"));
+        if (BodyComparison == nullptr)
+        {
+            BranchStatement.Expression = Literal(
+                EBPSemanticTypeKind::Bool, Condition->DefaultValue, *BodyBranch, TEXT("Condition"));
+        }
+        else
+        {
+            // 比較関数の型・所有クラスを既存Resolverで検証し、未知の式は変換しない。
+            FBPNumericComparison Comparison;
+            TArray<FString> Diagnostics;
+            if (FBPNumericComparisonResolver::Resolve(BodyComparison->FunctionOwnerPath,
+                    BodyComparison->FunctionName, Comparison, Diagnostics) == false)
+            {
+                for (const FString& Message : Diagnostics)
+                {
+                    AddDiagnostic(OutIR, EventGraph->Name, BodyComparison->Id, Message);
+                }
+                return false;
+            }
+            const FBPIRPin* ReturnPin = FindPin(*BodyComparison, TEXT("ReturnValue"), EGPD_Output);
+            const FBPIRLink* ConditionEdge = EventGraph->DataEdges.FindByPredicate(
+                [BodyComparison, ReturnPin, BodyBranch, Condition](const FBPIRLink& Edge)
+                {
+                    return ReturnPin != nullptr && Edge.SourceNode == BodyComparison->Id &&
+                        Edge.SourcePin == ReturnPin->Id && Edge.TargetNode == BodyBranch->Id &&
+                        Edge.TargetPin == Condition->Id;
+                });
+            const FBPIRPin* A = FindPin(*BodyComparison, TEXT("A"), EGPD_Input);
+            const FBPIRPin* B = FindPin(*BodyComparison, TEXT("B"), EGPD_Input);
+            FString AValue;
+            FString BValue;
+            if (ConditionEdge == nullptr || A == nullptr || B == nullptr ||
+                FBPNumericComparisonResolver::MatchesPinType(A->Category, A->SubCategory,
+                    Comparison.OperandType) == false ||
+                FBPNumericComparisonResolver::MatchesPinType(B->Category, B->SubCategory,
+                    Comparison.OperandType) == false ||
+                FBPNumericComparisonResolver::CanonicalizeLiteral(
+                    Comparison.OperandType, A->DefaultValue, AValue) == false ||
+                FBPNumericComparisonResolver::CanonicalizeLiteral(
+                    Comparison.OperandType, B->DefaultValue, BValue) == false)
+            {
+                AddDiagnostic(OutIR, EventGraph->Name, BodyComparison->Id,
+                    TEXT("ForLoop comparison requires two unconnected numeric literals"));
+                return false;
+            }
+            BranchStatement.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
+            BranchStatement.Expression.Type.Kind = EBPSemanticTypeKind::Bool;
+            BranchStatement.Expression.FunctionName = BodyComparison->FunctionName;
+            BranchStatement.Expression.FunctionOwnerPath = BodyComparison->FunctionOwnerPath;
+            BranchStatement.Expression.SourceNodeId = BodyComparison->Id;
+            BranchStatement.Expression.SourcePinId = ReturnPin->Id;
+            BranchStatement.Expression.Arguments.Add(
+                Literal(Comparison.OperandType, AValue, *BodyComparison, TEXT("A")));
+            BranchStatement.Expression.Arguments.Add(
+                Literal(Comparison.OperandType, BValue, *BodyComparison, TEXT("B")));
+        }
         FBPSemanticStatement ThenStatement;
         ThenStatement.Kind = EBPSemanticStatementKind::Expression;
         ThenStatement.SourceNodeId = ThenPrint->Id;
