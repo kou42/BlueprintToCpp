@@ -2064,6 +2064,24 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("接続先GUID不一致の診断を保持"),
         WrongPinIR.HasErrors());
 
+    // 接続GUIDが正しくても、Conv_IntToStringのピン型が不正なら拒否する。
+    // 型の違うノードを関数名だけで誤変換しないための回帰検証。
+    FBPGraphIR WrongConverterInput = GraphIR;
+    WrongConverterInput.Graphs[0].Nodes[4].Pins[0].Category = TEXT("float");
+    FBPSemanticIR WrongConverterInputIR;
+    TestFalse(TEXT("変換ノードの非int32入力を拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongConverterInput, WrongConverterInputIR));
+    TestTrue(TEXT("変換入力型不一致の診断を保持"),
+        WrongConverterInputIR.HasErrors());
+
+    FBPGraphIR WrongConverterOutput = GraphIR;
+    WrongConverterOutput.Graphs[0].Nodes[4].Pins[1].Category = TEXT("text");
+    FBPSemanticIR WrongConverterOutputIR;
+    TestFalse(TEXT("変換ノードの非string出力を拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongConverterOutput, WrongConverterOutputIR));
+    TestTrue(TEXT("変換出力型不一致の診断を保持"),
+        WrongConverterOutputIR.HasErrors());
+
     // 変換ノードへのIndexリンクをElementリンクに変更した場合は
     // 誤ってIndex式として出力せず、実際の接続元に従って型付けする。
     FBPGraphIR ElementGraph = GraphIR;
