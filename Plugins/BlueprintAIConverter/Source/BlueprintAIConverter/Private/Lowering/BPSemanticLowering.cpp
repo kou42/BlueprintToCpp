@@ -1260,6 +1260,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     const FBPIRNode* Loop = nullptr;
     const FBPIRNode* IndexToString = nullptr;
     const FBPIRNode* BodyBranch = nullptr;
+    TArray<const FBPIRNode*> BranchNodes;
     const FBPIRNode* BodyComparison = nullptr;
     TArray<const FBPIRNode*> BodyArithmeticNodes;
     TArray<const FBPIRNode*> Prints;
@@ -1289,6 +1290,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse"))
         {
             BodyBranch = &Node;
+            BranchNodes.Add(&Node);
         }
         else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
             Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetMathLibrary"))
@@ -1314,9 +1316,9 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     }
     if (BeginPlay == nullptr || Loop == nullptr || Prints.IsEmpty() ||
         EventGraph->Nodes.Num() != 2 + Prints.Num() + (IndexToString != nullptr ? 1 : 0) +
-            (BodyBranch != nullptr ? 1 : 0) + (BodyComparison != nullptr ? 1 : 0) +
+            BranchNodes.Num() + (BodyComparison != nullptr ? 1 : 0) +
             BodyArithmeticNodes.Num() ||
-        EventGraph->ExecEdges.Num() != 1 + Prints.Num() + (BodyBranch != nullptr ? 1 : 0) ||
+        EventGraph->ExecEdges.Num() != 1 + Prints.Num() + BranchNodes.Num() ||
         (BodyBranch != nullptr && IndexToString != nullptr) ||
         (BodyComparison == nullptr
             ? (IndexToString == nullptr ? EventGraph->DataEdges.IsEmpty() == false : EventGraph->DataEdges.Num() != 2)
@@ -1514,7 +1516,140 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         EBPSemanticTypeKind::Int32, LexToString(FirstValue), *Loop, TEXT("FirstIndex"));
     LoopStatement.LoopLastIndex = Literal(
         EBPSemanticTypeKind::Int32, LexToString(LastValue), *Loop, TEXT("LastIndex"));
-    if (BodyBranch != nullptr)
+    // 複数Branchの場合は、Execの木構造を先に検証してからSemantic IRへ変換する。
+    // 比較式・データ接続を含む複雑な経路は既存の単一Branch経路と分離する。
+    if (BranchNodes.Num() > 1)
+    {
+        if (BodyComparison != nullptr || BodyArithmeticNodes.IsEmpty() == false ||
+            EventGraph->DataEdges.IsEmpty() == false || IndexToString != nullptr ||
+            BodyPrint != nullptr || BranchNodes.Num() > 16)
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
+                TEXT("Nested ForLoop Branch supports only literal bool conditions"));
+            return false;
+        }
+        const FBPIRNode* RootBranch = nullptr;
+        const FBPIRLink* RootEdge = EventGraph->ExecEdges.FindByPredicate(
+            [Loop, LoopBody](const FBPIRLink& Edge)
+            {
+                return Edge.SourceNode == Loop->Id && Edge.SourcePin == LoopBody->Id;
+            });
+        for (const FBPIRNode* Candidate : BranchNodes)
+        {
+            if (RootEdge != nullptr && Candidate->Id == RootEdge->TargetNode)
+            {
+                RootBranch = Candidate;
+            }
+        }
+        TSet<FGuid> VisitedBranches;
+        TSet<FGuid> VisitedPrints;
+        TFunction<bool(const FBPIRNode&, int32, FBPSemanticStatement&)> BuildBranch;
+        BuildBranch = [&](const FBPIRNode& Current, int32 Depth,
+            FBPSemanticStatement& OutStatement) -> bool
+        {
+            if (Depth > 16 || VisitedBranches.Contains(Current.Id))
+            {
+                return false;
+            }
+            const FBPIRPin* Condition = FindPin(Current, TEXT("Condition"), EGPD_Input);
+            if (Condition == nullptr ||
+                (Condition->DefaultValue != TEXT("true") &&
+                    Condition->DefaultValue != TEXT("false")))
+            {
+                return false;
+            }
+            VisitedBranches.Add(Current.Id);
+            OutStatement.Kind = EBPSemanticStatementKind::Branch;
+            OutStatement.SourceNodeId = Current.Id;
+            OutStatement.Expression = Literal(
+                EBPSemanticTypeKind::Bool, Condition->DefaultValue, Current, TEXT("Condition"));
+            const FName Outputs[] = { UEdGraphSchema_K2::PN_Then, TEXT("else") };
+            for (int32 OutputIndex = 0; OutputIndex < 2; ++OutputIndex)
+            {
+                const FBPIRPin* Output = FindPin(Current, Outputs[OutputIndex], EGPD_Output);
+                const FBPIRLink* Connection = nullptr;
+                for (const FBPIRLink& Edge : EventGraph->ExecEdges)
+                {
+                    if (Output != nullptr && Edge.SourceNode == Current.Id &&
+                        Edge.SourcePin == Output->Id)
+                    {
+                        if (Connection != nullptr)
+                        {
+                            return false;
+                        }
+                        Connection = &Edge;
+                    }
+                }
+                if (Connection == nullptr)
+                {
+                    return false;
+                }
+                FBPSemanticStatement Child;
+                const FBPIRNode* ChildBranch = nullptr;
+                for (const FBPIRNode* Candidate : BranchNodes)
+                {
+                    if (Candidate->Id == Connection->TargetNode)
+                    {
+                        ChildBranch = Candidate;
+                    }
+                }
+                if (ChildBranch != nullptr)
+                {
+                    const FBPIRPin* Execute = FindPin(
+                        *ChildBranch, UEdGraphSchema_K2::PN_Execute, EGPD_Input);
+                    if (Execute == nullptr || Execute->Id != Connection->TargetPin ||
+                        BuildBranch(*ChildBranch, Depth + 1, Child) == false)
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    const FBPIRNode* Print = FindPrintById(Connection->TargetNode);
+                    const FBPIRPin* Execute = Print != nullptr
+                        ? FindPin(*Print, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr;
+                    if (Print == nullptr || Execute == nullptr ||
+                        Execute->Id != Connection->TargetPin ||
+                        VisitedPrints.Contains(Print->Id))
+                    {
+                        return false;
+                    }
+                    FBPPrintStringCall Values;
+                    if (AnalyzeBranchPrint(
+                            GraphIR, *EventGraph, *BeginPlay, *Print, Values, OutIR) == false)
+                    {
+                        return false;
+                    }
+                    VisitedPrints.Add(Print->Id);
+                    Child.Kind = EBPSemanticStatementKind::Expression;
+                    Child.SourceNodeId = Print->Id;
+                    Child.Expression = MakePrintStringExpression(
+                        Values, *Print, GraphIR.ParentClassPath);
+                }
+                if (OutputIndex == 0)
+                {
+                    OutStatement.ThenStatements.Add(MoveTemp(Child));
+                }
+                else
+                {
+                    OutStatement.ElseStatements.Add(MoveTemp(Child));
+                }
+            }
+            return true;
+        };
+        FBPSemanticStatement RootStatement;
+        if (RootBranch == nullptr ||
+            BuildBranch(*RootBranch, 0, RootStatement) == false ||
+            VisitedBranches.Num() != BranchNodes.Num() ||
+            VisitedPrints.Num() + OrderedCompletedPrints.Num() != Prints.Num())
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
+                TEXT("Nested ForLoop Branch has a cycle, shared target or unsupported Exec flow"));
+            return false;
+        }
+        LoopStatement.LoopBodyStatements.Add(MoveTemp(RootStatement));
+    }
+    else if (BodyBranch != nullptr)
     {
         const FBPIRPin* Condition = FindPin(*BodyBranch, TEXT("Condition"), EGPD_Input);
         const FBPIRPin* Then = FindPin(*BodyBranch, UEdGraphSchema_K2::PN_Then, EGPD_Output);
