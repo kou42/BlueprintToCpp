@@ -1286,24 +1286,22 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
             Node.FunctionName == TEXT("Conv_IntToString") &&
             Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary"))
         {
-            if (IndexConverter != nullptr)
+            // 変換ノードの種類はリンクの接続元で後から判定する。
+            // 先に見つけたノードをIndexと断定しない。
+            if (IndexConverter == nullptr)
             {
-                AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Multiple index converters"));
+                IndexConverter = &Node;
+            }
+            else if (ElementConverter == nullptr)
+            {
+                ElementConverter = &Node;
+            }
+            else
+            {
+                AddDiagnostic(OutIR, Event->Name, Node.Id,
+                    TEXT("ForEachLoop supports at most two int32 converters"));
                 return false;
             }
-            IndexConverter = &Node;
-        }
-        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
-            Node.FunctionName == TEXT("Conv_IntToString") &&
-            Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
-            IndexConverter != nullptr)
-        {
-            if (ElementConverter != nullptr)
-            {
-                AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Too many int32 converters"));
-                return false;
-            }
-            ElementConverter = &Node;
         }
         else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
             Node.FunctionName == TEXT("PrintString") &&
