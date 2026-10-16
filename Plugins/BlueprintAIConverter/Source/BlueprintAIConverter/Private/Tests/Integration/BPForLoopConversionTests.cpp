@@ -282,6 +282,74 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedBranchLoweringTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedBranchLowering",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedBranchLoweringTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR GraphIR = MakeForLoopBranchGraph();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    FBPIRNode Inner;
+    Inner.Id = FGuid::NewGuid();
+    Inner.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
+    Inner.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("Condition"), EGPD_Input, TEXT("bool"), TEXT("false")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("else"), EGPD_Output, TEXT("exec")));
+    FBPIRNode InnerFalse;
+    InnerFalse.Id = FGuid::NewGuid();
+    InnerFalse.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    InnerFalse.FunctionName = TEXT("PrintString");
+    InnerFalse.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+    InnerFalse.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"),
+        TEXT("Inner false")));
+    // 既存の外側True経路に内側Branchを挿入し、True/Falseの葉を分離する。
+    for (FBPIRLink& Edge : Graph.ExecEdges)
+    {
+        if (Edge.SourceNode == Graph.Nodes[2].Id &&
+            Edge.TargetNode == Graph.Nodes[3].Id)
+        {
+            Edge.TargetNode = Inner.Id;
+            Edge.TargetPin = Inner.Pins[0].Id;
+        }
+    }
+    FBPIRLink InnerTrue;
+    InnerTrue.SourceNode = Inner.Id;
+    InnerTrue.SourcePin = Inner.Pins[2].Id;
+    InnerTrue.TargetNode = Graph.Nodes[3].Id;
+    InnerTrue.TargetPin = Graph.Nodes[3].Pins[0].Id;
+    Graph.ExecEdges.Add(InnerTrue);
+    FBPIRLink InnerElse;
+    InnerElse.SourceNode = Inner.Id;
+    InnerElse.SourcePin = Inner.Pins[3].Id;
+    InnerElse.TargetNode = InnerFalse.Id;
+    InnerElse.TargetPin = InnerFalse.Pins[0].Id;
+    Graph.ExecEdges.Add(InnerElse);
+    Graph.Nodes.Add(MoveTemp(Inner));
+    Graph.Nodes.Add(MoveTemp(InnerFalse));
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("ネストBranchのLowering"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Outer =
+        SemanticIR.Functions[0].Blocks[0].Statements[0].LoopBodyStatements[0];
+    TestEqual(TEXT("外側TrueにBranchを保持"), Outer.ThenStatements[0].Kind,
+        EBPSemanticStatementKind::Branch);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ネストBranchのC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopNestedGraphActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("内側Falseの出力"), Files.SourceContent.Contains(TEXT("Inner false")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedBranchCodegenTest,
     "BlueprintAIConverter.Conversion.ForLoop.NestedBranchCodegen",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
