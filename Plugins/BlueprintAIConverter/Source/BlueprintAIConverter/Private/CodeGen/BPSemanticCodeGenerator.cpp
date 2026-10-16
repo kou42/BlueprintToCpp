@@ -528,9 +528,9 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         FString A;
         FString B;
         if (EmitNumericExpression(Expression.Arguments[0], OperandType,
-                Variables, A, Diagnostics) == false ||
+                Variables, A, Diagnostics, LocalIndex) == false ||
             EmitNumericExpression(Expression.Arguments[1], OperandType,
-                Variables, B, Diagnostics) == false)
+                Variables, B, Diagnostics, LocalIndex) == false)
         {
             return false;
         }
