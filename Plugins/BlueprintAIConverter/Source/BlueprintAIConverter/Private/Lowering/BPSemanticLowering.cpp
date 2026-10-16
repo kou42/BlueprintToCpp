@@ -1205,8 +1205,8 @@ bool LowerActorLocationImpl(const UBlueprint* Blueprint, const FBPGraphIR& Graph
     return OutIR.HasErrors() == false;
 }
 
-// CJ2: 最初のForEach縦断経路。接続の一意性を厳密に検証し、
-// 配列要素やIndexを使用する形状は誤変換防止のため未対応とする。
+// CJ2: int32配列のForEach縦断経路。接続の一意性を厳密に検証する。
+// Index/Elementの文字列化だけを許可し、未知の式や制御フローは拒否する。
 bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     FBPSemanticIR& OutIR)
 {
