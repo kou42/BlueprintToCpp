@@ -1102,23 +1102,23 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         const FString ApiPrefix = ModuleApiMacro.IsEmpty()
             ? FString() : ModuleApiMacro + TEXT(" ");
         const FString ConstructorDeclaration = ConstructorBody.IsEmpty()
-            ? FString() : FString::Printf(TEXT("public:\\n    %s();\\n\\n"), *ClassName);
+            ? FString() : FString::Printf(TEXT("public:\n    %s();\n\n"), *ClassName);
         const FString UnrealTypeInclude = ConstructorBody.IsEmpty()
-            ? FString() : TEXT("#include \\"UObject/UnrealType.h\\"\\n");
+            ? FString() : TEXT("#include \"UObject/UnrealType.h\"\n");
         const FString ConstructorDefinition = ConstructorBody.IsEmpty()
-            ? FString() : FString::Printf(TEXT("\\n%s::%s()\\n{\\n%s}\\n"),
+            ? FString() : FString::Printf(TEXT("\n%s::%s()\n{\n%s}\n"),
                 *ClassName, *ClassName, *ConstructorBody);
         FBPGeneratedActorFiles Files;
         Files.HeaderFileName = BaseName + TEXT(".h");
         Files.SourceFileName = BaseName + TEXT(".cpp");
         Files.HeaderContent = FString::Printf(
-            TEXT("#pragma once\\n\\n#include \\"CoreMinimal.h\\"\\n#include \\"%s\\"\\n#include \\"%s.generated.h\\"\\n\\nUCLASS()\\nclass %s%s : public %s\\n{\\n    GENERATED_BODY()\\n\\n%s%sprotected:\\n    virtual void BeginPlay() override;\\n};\\n"),
+            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%sprotected:\n    virtual void BeginPlay() override;\n};\n"),
             *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration);
         // インデックス付き反復でBlueprintのArray Indexを保持する。
         // 要素変数はこの限定形状では未使用なので、値のコピーを作らない。
         Files.SourceContent = FString::Printf(
-            TEXT("#include \\"%s.h\\"\\n#include \\"Kismet/KismetSystemLibrary.h\\"\\n%s%s\\nvoid %s::BeginPlay()\\n{\\n    Super::BeginPlay();\\n    for (int32 %s = 0; %s < %s.Num(); ++%s)\\n    {\\n%s    }\\n%s}\\n"),
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    for (int32 %s = 0; %s < %s.Num(); ++%s)\n    {\n%s    }\n%s}\n"),
             *BaseName, *UnrealTypeInclude, *ConstructorDefinition, *ClassName,
             *Statement.LoopIndexVariable.ToString(), *Array.VariableName.ToString(),
             *Statement.LoopIndexVariable.ToString(), *BodyCode, *CompletedCode);
