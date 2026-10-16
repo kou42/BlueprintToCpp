@@ -796,7 +796,7 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
         return false;
     }
     OutCode = FString::Printf(
-        TEXT("%sif (%s)\n%s{\n%s%s}\n%selse\n%s{\n%s%s}\n"),
+        TEXT("%sif (%s)\\n%s{\\n%s%s}\\n%selse\\n%s{\\n%s%s}\\n"),
         *Indent, *Condition, *Indent, *ThenCode, *Indent,
         *Indent, *Indent, *Indent, *ElseCode, *Indent);
     return true;
