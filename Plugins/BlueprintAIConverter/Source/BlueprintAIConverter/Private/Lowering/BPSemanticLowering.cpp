@@ -2604,6 +2604,25 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
             bHasForLoop |= Node.MacroGraphName == TEXT("ForLoop");
         }
     }
+    // ForEachLoopは配列要素型・配列の供給元・Exec経路の検証が必要。
+    // 未対応の段階で通常のPrintString経路へ誤振り分けしない。
+    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    {
+        for (const FBPIRNode& Node : Graph.Nodes)
+        {
+            if (Node.MacroGraphName == TEXT("ForEachLoop") ||
+                Node.MacroGraphName == TEXT("ForEachLoopWithBreak"))
+            {
+                OutIR = FBPSemanticIR();
+                OutIR.AssetPath = GraphIR.AssetPath;
+                OutIR.ParentClassPath = GraphIR.ParentClassPath;
+                AddDiagnostic(OutIR, Graph.Name, Node.Id,
+                    FString::Printf(TEXT("%s requires verified array source, element type, and Exec flow; semantic conversion is not yet supported"),
+                        *Node.MacroGraphName));
+                return false;
+            }
+        }
+    }
     if (bHasForLoop && bHasPrintString && bHasBranch == false &&
         bHasGetActorLocation == false && bHasSetActorLocation == false)
     {
