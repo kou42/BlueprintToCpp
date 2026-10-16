@@ -282,6 +282,87 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedIndexComparisonTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedIndexComparison",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedIndexComparisonTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR GraphIR = MakeForLoopBranchGraph();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    FBPIRNode Inner;
+    Inner.Id = FGuid::NewGuid();
+    Inner.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
+    Inner.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("Condition"), EGPD_Input, TEXT("bool")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("else"), EGPD_Output, TEXT("exec")));
+    FBPIRNode InnerFalse;
+    InnerFalse.Id = FGuid::NewGuid();
+    InnerFalse.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    InnerFalse.FunctionName = TEXT("PrintString");
+    InnerFalse.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+    InnerFalse.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"),
+        TEXT("Inner comparison false")));
+    FBPIRNode Comparison;
+    Comparison.Id = FGuid::NewGuid();
+    Comparison.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Comparison.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Comparison.FunctionName = TEXT("Less_IntInt");
+    Comparison.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+    Comparison.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), TEXT("2")));
+    Comparison.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("bool")));
+    for (FBPIRLink& Edge : Graph.ExecEdges)
+    {
+        if (Edge.SourceNode == Graph.Nodes[2].Id && Edge.TargetNode == Graph.Nodes[3].Id)
+        {
+            Edge.TargetNode = Inner.Id;
+            Edge.TargetPin = Inner.Pins[0].Id;
+        }
+    }
+    const auto AddEdge = [&Graph](const FBPIRNode& Source, int32 Output,
+        const FBPIRNode& Target, int32 Input, bool bData)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Source.Id;
+        Edge.SourcePin = Source.Pins[Output].Id;
+        Edge.TargetNode = Target.Id;
+        Edge.TargetPin = Target.Pins[Input].Id;
+        if (bData)
+        {
+            Graph.DataEdges.Add(Edge);
+        }
+        else
+        {
+            Graph.ExecEdges.Add(Edge);
+        }
+    };
+    AddEdge(Inner, 2, Graph.Nodes[3], 0, false);
+    AddEdge(Inner, 3, InnerFalse, 0, false);
+    AddEdge(Comparison, 2, Inner, 1, true);
+    AddEdge(Graph.Nodes[1], 4, Comparison, 0, true);
+    Graph.Nodes.Add(MoveTemp(Inner));
+    Graph.Nodes.Add(MoveTemp(InnerFalse));
+    Graph.Nodes.Add(MoveTemp(Comparison));
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("ネスト内Index比較のLowering"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ネスト内Index比較のC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopNestedCompareActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("ネストしたIndex比較を生成"),
+        Files.SourceContent.Contains(TEXT("if (LoopIndex < 2)")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedBranchLoweringTest,
     "BlueprintAIConverter.Conversion.ForLoop.NestedBranchLowering",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
