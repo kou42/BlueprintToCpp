@@ -2841,6 +2841,12 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
                 OutIR.ParentClassPath = GraphIR.ParentClassPath;
                 if (Node.MacroGraphName == TEXT("ForEachLoop"))
                 {
+                    if (Blueprint == nullptr)
+                    {
+                        AddDiagnostic(OutIR, Graph.Name, Node.Id,
+                            TEXT("ForEachLoop requires a compiled Blueprint for array type resolution"));
+                        return false;
+                    }
                     return LowerForEachLoopImpl(Blueprint, GraphIR, OutIR);
                 }
                 AddDiagnostic(OutIR, Graph.Name, Node.Id,
