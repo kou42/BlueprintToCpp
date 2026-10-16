@@ -282,4 +282,46 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopMultipleCompletedCodegenTest,
+    "BlueprintAIConverter.Conversion.ForLoop.MultipleCompletedStatements",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopMultipleCompletedCodegenTest::RunTest(const FString& Parameters)
+{
+    const FBPGraphIR GraphIR = MakeForLoopGraph();
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("ForLoop Loweringに成功"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticStatement& Loop = SemanticIR.Functions[0].Blocks[0].Statements[0];
+    // 既存のCompleted文を複製して、Semantic IRの複数文生成を検証する。
+    // Graph IRの複数Completed接続のLoweringは別途対応が必要。
+    FBPSemanticStatement SecondCompleted = Loop.CompletedStatements[0];
+    SecondCompleted.Expression.Arguments[1].LiteralValue = TEXT("Second completed");
+    Loop.CompletedStatements.Add(MoveTemp(SecondCompleted));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("複数Completed文のC++生成に成功"),
+        FBPSemanticCodeGenerator::Generate(
+            SemanticIR, TEXT("AForLoopCompletedActor"), TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    const int32 FirstPosition = Files.SourceContent.Find(TEXT("Loop completed"));
+    const int32 SecondPosition = Files.SourceContent.Find(TEXT("Second completed"));
+    TestTrue(TEXT("Completed文が順番に生成される"),
+        FirstPosition != INDEX_NONE && SecondPosition > FirstPosition);
+    TestTrue(TEXT("Completed文はfor文の後に生成される"),
+        FirstPosition > Files.SourceContent.Find(TEXT("++LoopIndex")));
+    return true;
+}
+
 #endif
