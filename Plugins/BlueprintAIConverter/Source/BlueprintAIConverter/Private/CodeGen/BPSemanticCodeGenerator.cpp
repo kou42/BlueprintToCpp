@@ -1046,6 +1046,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             SourceVariable == nullptr ||
             SourceVariable->Type.ContainerKind != TEXT("array") ||
             SourceVariable->Type.Kind != EBPSemanticTypeKind::Int32 ||
+            Array.Type.Kind != EBPSemanticTypeKind::Int32 ||
+            Array.Type.Kind != SourceVariable->Type.Kind ||
+            Array.Type.ContainerKind != SourceVariable->Type.ContainerKind ||
             SourceVariable->ReflectedCppType != TEXT("TArray<int32>") ||
             Statement.LoopElementType.Kind != EBPSemanticTypeKind::Int32 ||
             Statement.LoopElementVariable.IsNone() ||
@@ -1075,6 +1078,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
                         Body.Expression.Arguments[1].FunctionOwnerPath != TEXT("/Script/Engine.KismetStringLibrary") ||
                         Body.Expression.Arguments[1].Arguments.Num() != 1 ||
                         Body.Expression.Arguments[1].Arguments[0].Kind != EBPSemanticExpressionKind::VariableReference ||
+                        Body.Expression.Arguments[1].Arguments[0].Type.Kind != EBPSemanticTypeKind::Int32 ||
                         (Body.Expression.Arguments[1].Arguments[0].VariableName != Statement.LoopIndexVariable &&
                             Body.Expression.Arguments[1].Arguments[0].VariableName != Statement.LoopElementVariable))) ||
                 EmitPrintStringStatement(Body.Expression, IR.ParentClassPath,
