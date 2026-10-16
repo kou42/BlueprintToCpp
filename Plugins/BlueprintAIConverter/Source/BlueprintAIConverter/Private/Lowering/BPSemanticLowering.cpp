@@ -1365,6 +1365,48 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
         }
     }
     bArrayConnected = ArrayLinks == 1;
+    // すべてのデータエッジが許可済み3種類の接続に属することを確認する。
+    // リンク数だけの検証では、別の接続を同数だけ混入させた場合に見逃す。
+    for (const FBPIRLink& Edge : Event->DataEdges)
+    {
+        bool bRecognized = Edge.SourceNode == Getter->Id &&
+            Edge.SourcePin == GetterValue->Id && Edge.TargetNode == Loop->Id &&
+            Edge.TargetPin == ArrayPin->Id;
+        for (const FBPIRNode* Converter : Converters)
+        {
+            if (Converter == nullptr)
+            {
+                continue;
+            }
+            const FBPIRPin* Input = FindPin(*Converter, TEXT("InInt"), EGPD_Input);
+            const FBPIRPin* Output = FindPin(*Converter, TEXT("ReturnValue"), EGPD_Output);
+            if (Input == nullptr || Output == nullptr)
+            {
+                continue;
+            }
+            bRecognized |= Edge.SourceNode == Loop->Id &&
+                (Edge.SourcePin == IndexPin->Id || Edge.SourcePin == ElementPin->Id) &&
+                Edge.TargetNode == Converter->Id && Edge.TargetPin == Input->Id;
+            if (Edge.SourceNode == Converter->Id && Edge.SourcePin == Output->Id)
+            {
+                for (const FBPIRNode* Print : Prints)
+                {
+                    const FBPIRPin* TextPin = FindPin(*Print, TEXT("InString"), EGPD_Input);
+                    if (TextPin != nullptr && Edge.TargetNode == Print->Id &&
+                        Edge.TargetPin == TextPin->Id)
+                    {
+                        bRecognized = true;
+                    }
+                }
+            }
+        }
+        if (bRecognized == false)
+        {
+            AddDiagnostic(OutIR, Event->Name, Loop->Id,
+                TEXT("ForEachLoop has an unexpected data connection"));
+            return false;
+        }
+    }
     for (const FBPIRNode* Converter : Converters)
     {
         if (Converter == nullptr)
