@@ -2065,6 +2065,26 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("接続先GUID不一致の診断を保持"),
         WrongPinIR.HasErrors());
 
+    // 同名のユーザー定義マクロや、別の標準マクロのGraphを
+    // ForEachLoopと誤認してC++化しないことを検証する。
+    FBPGraphIR WrongMacroPath = GraphIR;
+    WrongMacroPath.Graphs[0].Nodes[1].MacroGraphPath =
+        TEXT("/Game/Macros.CustomMacros:ForEachLoop");
+    FBPSemanticIR WrongMacroPathIR;
+    TestFalse(TEXT("同名のユーザーマクロを拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongMacroPath, WrongMacroPathIR));
+    TestTrue(TEXT("ユーザーマクロの拒否理由を保持"),
+        WrongMacroPathIR.HasErrors());
+
+    FBPGraphIR WrongStandardMacro = GraphIR;
+    WrongStandardMacro.Graphs[0].Nodes[1].MacroGraphPath =
+        TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForLoop");
+    FBPSemanticIR WrongStandardMacroIR;
+    TestFalse(TEXT("異なる標準マクロのGraphを拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongStandardMacro, WrongStandardMacroIR));
+    TestTrue(TEXT("標準マクロGraph不一致の診断を保持"),
+        WrongStandardMacroIR.HasErrors());
+
     // ForEach本体のElement/Index型も反射済みint32配列と整合する必要がある。
     // 変換ノード側がint32でも、Macroの出力型が異なれば拒否する。
     FBPGraphIR WrongElementType = GraphIR;
