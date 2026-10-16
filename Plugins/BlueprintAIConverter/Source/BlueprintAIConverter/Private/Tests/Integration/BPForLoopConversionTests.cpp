@@ -282,6 +282,64 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedLoopLoweringTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedLoopLowering",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedLoopLoweringTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR GraphIR = MakeForLoopBranchGraph();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    // 既存のBranch例を二重ループの最小Exec構造に組み替える。
+    FBPIRNode& Inner = Graph.Nodes[2];
+    Inner.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+    Inner.MacroGraphName = TEXT("ForLoop");
+    Inner.Pins.Reset();
+    Inner.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("4")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+    Graph.Nodes.RemoveAt(5);
+    Graph.Nodes.RemoveAt(4);
+    Graph.ExecEdges.Reset();
+    const auto Connect = [&Graph](const FBPIRNode& Source, int32 Output,
+        const FBPIRNode& Target, int32 Input)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Source.Id;
+        Edge.SourcePin = Source.Pins[Output].Id;
+        Edge.TargetNode = Target.Id;
+        Edge.TargetPin = Target.Pins[Input].Id;
+        Graph.ExecEdges.Add(Edge);
+    };
+    Connect(Graph.Nodes[0], 0, Graph.Nodes[1], 0);
+    Connect(Graph.Nodes[1], 3, Graph.Nodes[2], 0);
+    Connect(Graph.Nodes[2], 3, Graph.Nodes[3], 0);
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("二重ForLoopのLowering"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Outer =
+        SemanticIR.Functions[0].Blocks[0].Statements[0];
+    TestEqual(TEXT("内側のForLoop"), Outer.LoopBodyStatements[0].Kind,
+        EBPSemanticStatementKind::ForLoop);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("二重ForLoopのC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopNestedGraphActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("内側のIndex変数"), Files.SourceContent.Contains(
+        TEXT("for (int32 InnerIndex = 2; InnerIndex <= 4; ++InnerIndex)")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedLoopCodegenTest,
     "BlueprintAIConverter.Conversion.ForLoop.NestedLoopCodegen",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
