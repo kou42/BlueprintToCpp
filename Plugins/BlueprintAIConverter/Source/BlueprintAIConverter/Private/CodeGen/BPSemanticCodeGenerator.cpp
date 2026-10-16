@@ -854,8 +854,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             Statement.LoopLastIndex.Type.Kind != EBPSemanticTypeKind::Int32 ||
             LexTryParseString(FirstIndex, *Statement.LoopFirstIndex.LiteralValue) == false ||
             LexTryParseString(LastIndex, *Statement.LoopLastIndex.LiteralValue) == false ||
-            Statement.LoopBodyStatements.IsEmpty() ||
-            Statement.CompletedStatements.Num() > 1)
+            Statement.LoopBodyStatements.IsEmpty())
         {
             OutDiagnostics.Add(TEXT("ForLoop requires literal int32 bounds and one supported body statement"));
             return false;
@@ -899,16 +898,19 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             BodyCode += StatementCode;
         }
         FString CompletedCode;
-        if (Statement.CompletedStatements.Num() == 1)
+        // Completed はループ終了後の直列実行列として保持する。
+        // 各文を接続順に生成し、未対応の文種別は推測せずエラーにする。
+        for (const FBPSemanticStatement& CompletedStatement : Statement.CompletedStatements)
         {
-            const FBPSemanticStatement& CompletedStatement = Statement.CompletedStatements[0];
+            FString StatementCode;
             if (CompletedStatement.Kind != EBPSemanticStatementKind::Expression ||
                 EmitPrintStringStatement(CompletedStatement.Expression, IR.ParentClassPath,
-                    TEXT("    "), CompletedCode, OutDiagnostics) == false)
+                    TEXT("    "), StatementCode, OutDiagnostics) == false)
             {
                 OutDiagnostics.Add(TEXT("ForLoop Completed contains an unsupported semantic statement"));
                 return false;
             }
+            CompletedCode += StatementCode;
         }
 
         FString VariableDeclarations;
