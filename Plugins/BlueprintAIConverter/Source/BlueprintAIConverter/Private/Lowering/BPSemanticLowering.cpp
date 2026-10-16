@@ -1519,72 +1519,98 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 }
                 else
                 {
-                    // 整数二項演算の両オペランドを接続元のIndexで解決する。
-                    // 別ノードや未接続ピンはこの限定対応では許可しない。
-                    if (IndexAdditions.Num() != 1 ||
-                        Node.Id != BodyPrint->Id)
+                    // Index参照と二項演算を再帰的に解析する。
+                    // 共有ノード・循環・未接続入力は推測せずに失敗させる。
+                    if (Node.Id != BodyPrint->Id)
                     {
                         return false;
                     }
-                    const FBPIRNode* Addition = IndexAdditions[0];
-                    const FBPIRPin* AddOutput = FindPin(
-                        *Addition, TEXT("ReturnValue"), EGPD_Output);
-                    if (AddOutput == nullptr ||
-                        EventGraph->DataEdges.ContainsByPredicate(
-                            [Addition, AddOutput, Converter, Input](const FBPIRLink& Edge)
+                    TSet<FGuid> Visiting;
+                    TFunction<bool(const FBPIRNode&, const FBPIRPin&, int32,
+                        FBPSemanticExpression&)> LowerInteger;
+                    LowerInteger = [&](const FBPIRNode& Target, const FBPIRPin& TargetPin,
+                        int32 Depth, FBPSemanticExpression& Expression) -> bool
+                    {
+                        if (Depth > 16)
+                        {
+                            return false;
+                        }
+                        const FBPIRLink* Link = EventGraph->DataEdges.FindByPredicate(
+                            [&Target, &TargetPin](const FBPIRLink& Edge)
                             {
-                                return Edge.SourceNode == Addition->Id &&
-                                    Edge.SourcePin == AddOutput->Id &&
-                                    Edge.TargetNode == Converter->Id &&
-                                    Edge.TargetPin == Input->Id;
-                            }) == false)
-                    {
-                        return false;
-                    }
-                    FBPSemanticExpression AdditionCall;
-                    AdditionCall.Kind = EBPSemanticExpressionKind::FunctionCall;
-                    AdditionCall.Type.Kind = EBPSemanticTypeKind::Int32;
-                    AdditionCall.FunctionName = Addition->FunctionName;
-                    AdditionCall.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
-                    AdditionCall.SourceNodeId = Addition->Id;
-                    const FName Inputs[] = { TEXT("A"), TEXT("B") };
-                    const FBPIRNode* Candidates[] = { Outer, Inner };
-                    const FName Names[] = { TEXT("LoopIndex"), TEXT("InnerIndex") };
-                    for (const FName& InputName : Inputs)
-                    {
-                        const FBPIRPin* Operand = FindPin(*Addition, InputName, EGPD_Input);
-                        const FBPIRNode* Owner = nullptr;
-                        FName VariableName;
+                                return Edge.TargetNode == Target.Id &&
+                                    Edge.TargetPin == TargetPin.Id;
+                            });
+                        if (Link == nullptr)
+                        {
+                            return false;
+                        }
+                        const FBPIRNode* Candidates[] = { Outer, Inner };
+                        const FName Names[] = { TEXT("LoopIndex"), TEXT("InnerIndex") };
                         for (int32 I = 0; I < 2; ++I)
                         {
                             const FBPIRPin* IndexPin = FindPin(
                                 *Candidates[I], TEXT("Index"), EGPD_Output);
-                            if (Operand != nullptr && IndexPin != nullptr &&
-                                EventGraph->DataEdges.ContainsByPredicate(
-                                    [Candidates, I, IndexPin, Addition, Operand](const FBPIRLink& Edge)
-                                    {
-                                        return Edge.SourceNode == Candidates[I]->Id &&
-                                            Edge.SourcePin == IndexPin->Id &&
-                                            Edge.TargetNode == Addition->Id &&
-                                            Edge.TargetPin == Operand->Id;
-                                    }))
+                            if (IndexPin != nullptr &&
+                                Link->SourceNode == Candidates[I]->Id &&
+                                Link->SourcePin == IndexPin->Id)
                             {
-                                Owner = Candidates[I];
-                                VariableName = Names[I];
+                                Expression.Kind = EBPSemanticExpressionKind::VariableReference;
+                                Expression.Type.Kind = EBPSemanticTypeKind::Int32;
+                                Expression.VariableName = Names[I];
+                                Expression.SourceNodeId = Candidates[I]->Id;
+                                Expression.SourcePinId = IndexPin->Id;
+                                return true;
                             }
                         }
-                        if (Owner == nullptr)
+                        for (const FBPIRNode* Arithmetic : IndexAdditions)
                         {
-                            return false;
+                            const FBPIRPin* Output = FindPin(
+                                *Arithmetic, TEXT("ReturnValue"), EGPD_Output);
+                            if (Output == nullptr ||
+                                Link->SourceNode != Arithmetic->Id ||
+                                Link->SourcePin != Output->Id)
+                            {
+                                continue;
+                            }
+                            if (Visiting.Contains(Arithmetic->Id))
+                            {
+                                return false;
+                            }
+                            Visiting.Add(Arithmetic->Id);
+                            Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
+                            Expression.Type.Kind = EBPSemanticTypeKind::Int32;
+                            Expression.FunctionName = Arithmetic->FunctionName;
+                            Expression.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+                            Expression.SourceNodeId = Arithmetic->Id;
+                            const FName Inputs[] = { TEXT("A"), TEXT("B") };
+                            bool bValid = true;
+                            for (const FName& Name : Inputs)
+                            {
+                                const FBPIRPin* Operand = FindPin(
+                                    *Arithmetic, Name, EGPD_Input);
+                                FBPSemanticExpression Argument;
+                                if (Operand == nullptr ||
+                                    LowerInteger(*Arithmetic, *Operand, Depth + 1,
+                                        Argument) == false)
+                                {
+                                    bValid = false;
+                                    break;
+                                }
+                                Expression.Arguments.Add(MoveTemp(Argument));
+                            }
+                            Visiting.Remove(Arithmetic->Id);
+                            return bValid;
                         }
-                        FBPSemanticExpression OperandExpression;
-                        OperandExpression.Kind = EBPSemanticExpressionKind::VariableReference;
-                        OperandExpression.Type.Kind = EBPSemanticTypeKind::Int32;
-                        OperandExpression.VariableName = VariableName;
-                        OperandExpression.SourceNodeId = Owner->Id;
-                        AdditionCall.Arguments.Add(MoveTemp(OperandExpression));
+                        return false;
+                    };
+                    FBPSemanticExpression ArithmeticExpression;
+                    if (LowerInteger(*Converter, *Input, 0, ArithmeticExpression) == false ||
+                        ArithmeticExpression.Kind != EBPSemanticExpressionKind::FunctionCall)
+                    {
+                        return false;
                     }
-                    Conversion.Arguments.Add(MoveTemp(AdditionCall));
+                    Conversion.Arguments.Add(MoveTemp(ArithmeticExpression));
                 }
                 Result.Expression.Arguments[1] = MoveTemp(Conversion);
             }
