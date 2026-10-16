@@ -5,6 +5,11 @@
 #include "BPSemanticCodeGenerator.h"
 #include "BPSemanticJsonSerializer.h"
 #include "BPSemanticLowering.h"
+#include "EdGraphSchema_K2.h"
+#include "Engine/Blueprint.h"
+#include "GameFramework/Actor.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
 
 namespace
 {
@@ -1922,6 +1927,108 @@ bool FBPForEachLocalNameCollisionTest::RunTest(const FString& Parameters)
             EBPVariableFallbackMode::DeclarationOnly));
     TestTrue(TEXT("拒否理由がある"), Diagnostics.IsEmpty() == false);
     return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachCompiledBlueprintLoweringTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.CompiledBlueprintLowering",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
+{
+    // Graphのノード・リンクは既存のForLoop fixtureをForEach形状へ組み替える。
+    // 配列変数だけは実際にコンパイルしたBlueprintから反射情報を取得する。
+    // このテストはGraph IR以降の縦断検証であり、実ノードの配置テストとは区別する。
+    const FName Name = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_ForEachLowering"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        AActor::StaticClass(), GetTransientPackage(), Name, BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("一時Blueprint"), Blueprint) == false)
+    {
+        return false;
+    }
+    FEdGraphPinType Type;
+    Type.PinCategory = UEdGraphSchema_K2::PC_Int;
+    Type.ContainerType = EPinContainerType::Array;
+    if (TestTrue(TEXT("配列変数を追加"),
+        FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("Numbers"), Type)) == false)
+    {
+        return false;
+    }
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (TestNotNull(TEXT("GeneratedClass"), Blueprint->GeneratedClass.Get()) == false)
+    {
+        return false;
+    }
+    FBPGraphIR GraphIR = MakeForLoopGraph();
+    GraphIR.AssetPath = Blueprint->GetPathName();
+    GraphIR.BlueprintVariableCount = Blueprint->NewVariables.Num();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    FBPIRNode& Loop = Graph.Nodes[1];
+    Loop.MacroGraphName = TEXT("ForEachLoop");
+    Loop.MacroGraphPath = TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoop");
+    // 既存fixtureのExecピンGUIDとリンクを維持し、入力と出力を
+    // 実際のForEachピン名へ置き換える。
+    Loop.Pins[1] = MakeLoopPin(TEXT("Array"), EGPD_Input, TEXT("int"));
+    Loop.Pins[2] = MakeLoopPin(TEXT("Array Element"), EGPD_Output, TEXT("int"));
+    Loop.Pins[4].Name = TEXT("Array Index");
+    FBPIRNode Getter;
+    Getter.Id = FGuid::NewGuid();
+    Getter.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_VariableGet");
+    Getter.VariableName = TEXT("Numbers");
+    Getter.bVariableSelfContext = true;
+    Getter.Pins.Add(MakeLoopPin(TEXT("Numbers"), EGPD_Output, TEXT("int")));
+    FBPIRLink ArrayEdge;
+    ArrayEdge.SourceNode = Getter.Id;
+    ArrayEdge.SourcePin = Getter.Pins[0].Id;
+    ArrayEdge.TargetNode = Loop.Id;
+    ArrayEdge.TargetPin = Loop.Pins[1].Id;
+    Graph.DataEdges.Add(ArrayEdge);
+    Graph.Nodes.Add(MoveTemp(Getter));
+    for (FBPIRNode& Node : Graph.Nodes)
+    {
+        if (Node.FunctionName == TEXT("PrintString"))
+        {
+            Node.FunctionOwnerPath = TEXT("/Script/Engine.KismetSystemLibrary");
+        }
+    }
+
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("コンパイル済みBlueprintからForEachをLowering"),
+        FBPSemanticLowering::Lower(Blueprint, GraphIR, SemanticIR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : SemanticIR.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("ForEach文へ構造化"),
+        SemanticIR.Functions.Num() == 1 &&
+        SemanticIR.Functions[0].Blocks.Num() == 1 &&
+        SemanticIR.Functions[0].Blocks[0].Statements.Num() == 1 &&
+        SemanticIR.Functions[0].Blocks[0].Statements[0].Kind ==
+            EBPSemanticStatementKind::ForEachLoop);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    const bool bGenerated = FBPSemanticCodeGenerator::Generate(
+        SemanticIR, TEXT("AForEachCompiledActor"), TEXT("TEST_API"),
+        Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly);
+    TestTrue(TEXT("Lowering結果からC++を生成"), bGenerated);
+    if (bGenerated)
+    {
+        TestTrue(TEXT("配列長による反復"),
+            Files.SourceContent.Contains(TEXT("Numbers.Num()")));
+        TestTrue(TEXT("Indexの文字列変換"),
+            Files.SourceContent.Contains(TEXT("Conv_IntToString(ForEachArrayIndex)")));
+    }
+    else
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+    }
+    return bGenerated;
 }
 
 #endif
