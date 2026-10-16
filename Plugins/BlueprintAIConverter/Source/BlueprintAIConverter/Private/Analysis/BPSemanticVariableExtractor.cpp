@@ -259,10 +259,16 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         Variable.TypePath = GetPathNameSafe(Description.VarType.PinSubCategoryObject.Get());
         Variable.PropertyFlags = FString::Printf(TEXT("%llu"), static_cast<uint64>(Description.PropertyFlags));
         Variable.Type.Kind = ResolveType(Description.VarType);
-        // コンテナをスカラーとして誤表現しない。IRの型体系にコンテナを追加するまで未解決扱い。
+        // コンテナ型は要素型と区別して保持する。int32配列だけは
+        // Blueprintのピン型とFArrayPropertyの双方で一致を確認して解決する。
+        // その他のコンテナは従来どおり未解決とし、推測による誤変換を防ぐ。
         if (Description.VarType.ContainerType != EPinContainerType::None)
         {
             Variable.Type.Kind = EBPSemanticTypeKind::Unresolved;
+            if (Description.VarType.ContainerType == EPinContainerType::Array)
+            {
+                Variable.Type.ContainerKind = TEXT("array");
+            }
         }
         Variable.Type.TypePath = Variable.TypePath;
         Variable.Type.bIsReference = Description.VarType.bIsReference;
@@ -272,6 +278,19 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         const FProperty* Property = GeneratedClass != nullptr
             ? FindFProperty<FProperty>(GeneratedClass, Description.VarName)
             : nullptr;
+        if (Description.VarType.ContainerType == EPinContainerType::Array &&
+            Description.VarType.PinCategory == TEXT("int"))
+        {
+            const FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property);
+            if (ArrayProperty != nullptr &&
+                CastField<FIntProperty>(ArrayProperty->Inner) != nullptr)
+            {
+                Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+                Variable.Type.InnerType = TEXT("int32");
+                Variable.Type.ElementType = MakeShared<FBPSemanticType>();
+                Variable.Type.ElementType->Kind = EBPSemanticTypeKind::Int32;
+            }
+        }
         if (Property != nullptr)
         {
             FString ExtendedType;
