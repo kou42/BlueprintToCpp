@@ -725,7 +725,9 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         if (Addition.Kind != EBPSemanticExpressionKind::FunctionCall ||
             Addition.Type.Kind != EBPSemanticTypeKind::Int32 ||
             Addition.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
-            Addition.FunctionName != TEXT("Add_IntInt") ||
+            (Addition.FunctionName != TEXT("Add_IntInt") &&
+                Addition.FunctionName != TEXT("Subtract_IntInt") &&
+                Addition.FunctionName != TEXT("Multiply_IntInt")) ||
             Addition.Arguments.Num() != 2 ||
             Addition.Arguments[0].Kind != EBPSemanticExpressionKind::VariableReference ||
             Addition.Arguments[1].Kind != EBPSemanticExpressionKind::VariableReference ||
@@ -739,7 +741,8 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         }
         // BlueprintのAdd_IntIntをそのままKismetMathLibrary呼び出しとして保持する。
         TextExpression = FString::Printf(
-            TEXT("UKismetStringLibrary::Conv_IntToString(UKismetMathLibrary::Add_IntInt(%s, %s))"),
+            TEXT("UKismetStringLibrary::Conv_IntToString(UKismetMathLibrary::%s(%s, %s))"),
+            *Addition.FunctionName.ToString(),
             *Addition.Arguments[0].VariableName.ToString(),
             *Addition.Arguments[1].VariableName.ToString());
     }
