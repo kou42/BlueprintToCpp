@@ -1256,6 +1256,139 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         return false;
     }
 
+    // 二重ForLoopの最小構造を先に解析する。既存の単一ForLoop経路には影響させない。
+    // 対応形状: BeginPlay -> 外側LoopBody -> 内側LoopBody -> PrintString。
+    // 未知のExec/Data接続は推測せずに拒否する。
+    TArray<const FBPIRNode*> NestedLoops;
+    for (const FBPIRNode& Node : EventGraph->Nodes)
+    {
+        if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
+            Node.MacroGraphName == TEXT("ForLoop"))
+        {
+            NestedLoops.Add(&Node);
+        }
+    }
+    if (NestedLoops.Num() == 2)
+    {
+        const FBPIRNode* Entry = nullptr;
+        const FBPIRNode* Print = nullptr;
+        for (const FBPIRNode& Node : EventGraph->Nodes)
+        {
+            if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
+                Node.FunctionName == TEXT("ReceiveBeginPlay"))
+            {
+                Entry = &Node;
+            }
+            else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+                Node.FunctionName == TEXT("PrintString"))
+            {
+                Print = &Node;
+            }
+        }
+        if (Entry == nullptr || Print == nullptr || EventGraph->Nodes.Num() != 4 ||
+            EventGraph->ExecEdges.Num() != 3 || EventGraph->DataEdges.IsEmpty() == false)
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
+                TEXT("Nested ForLoop requires BeginPlay, two loops and one PrintString"));
+            return false;
+        }
+        const FBPIRNode* Outer = nullptr;
+        const FBPIRNode* Inner = nullptr;
+        const FBPIRPin* EntryThen = FindPin(*Entry, UEdGraphSchema_K2::PN_Then, EGPD_Output);
+        for (const FBPIRNode* Candidate : NestedLoops)
+        {
+            const FBPIRPin* Execute = FindPin(*Candidate, UEdGraphSchema_K2::PN_Execute, EGPD_Input);
+            if (EntryThen != nullptr && Execute != nullptr &&
+                EventGraph->ExecEdges.ContainsByPredicate(
+                    [Entry, EntryThen, Candidate, Execute](const FBPIRLink& Edge)
+                    {
+                        return Edge.SourceNode == Entry->Id && Edge.SourcePin == EntryThen->Id &&
+                            Edge.TargetNode == Candidate->Id && Edge.TargetPin == Execute->Id;
+                    }))
+            {
+                Outer = Candidate;
+            }
+        }
+        if (Outer != nullptr)
+        {
+            Inner = NestedLoops[0] == Outer ? NestedLoops[1] : NestedLoops[0];
+        }
+        const auto HasExec = [EventGraph](const FBPIRNode& Source, const FName OutputName,
+            const FBPIRNode& Target) -> bool
+        {
+            const FBPIRPin* Output = FindPin(Source, OutputName, EGPD_Output);
+            const FBPIRPin* Execute = FindPin(Target, UEdGraphSchema_K2::PN_Execute, EGPD_Input);
+            return Output != nullptr && Execute != nullptr &&
+                EventGraph->ExecEdges.ContainsByPredicate(
+                    [&Source, Output, &Target, Execute](const FBPIRLink& Edge)
+                    {
+                        return Edge.SourceNode == Source.Id && Edge.SourcePin == Output->Id &&
+                            Edge.TargetNode == Target.Id && Edge.TargetPin == Execute->Id;
+                    });
+        };
+        if (Outer == nullptr || Inner == nullptr ||
+            HasExec(*Outer, TEXT("LoopBody"), *Inner) == false ||
+            HasExec(*Inner, TEXT("LoopBody"), *Print) == false)
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
+                TEXT("Nested ForLoop Exec flow is unsupported"));
+            return false;
+        }
+        const auto MakeLoop = [&](const FBPIRNode& Node, const FName IndexName,
+            FBPSemanticStatement& Result) -> bool
+        {
+            const FBPIRPin* First = FindPin(Node, TEXT("FirstIndex"), EGPD_Input);
+            const FBPIRPin* Last = FindPin(Node, TEXT("LastIndex"), EGPD_Input);
+            const FBPIRPin* Index = FindPin(Node, TEXT("Index"), EGPD_Output);
+            const FBPIRPin* Completed = FindPin(Node, TEXT("Completed"), EGPD_Output);
+            int32 FirstValue = 0;
+            int32 LastValue = 0;
+            if (First == nullptr || Last == nullptr || Index == nullptr || Completed == nullptr ||
+                LexTryParseString(FirstValue, *First->DefaultValue) == false ||
+                LexTryParseString(LastValue, *Last->DefaultValue) == false)
+            {
+                return false;
+            }
+            Result.Kind = EBPSemanticStatementKind::ForLoop;
+            Result.SourceNodeId = Node.Id;
+            Result.LoopIndexVariable = IndexName;
+            Result.LoopFirstIndex = Literal(
+                EBPSemanticTypeKind::Int32, LexToString(FirstValue), Node, TEXT("FirstIndex"));
+            Result.LoopLastIndex = Literal(
+                EBPSemanticTypeKind::Int32, LexToString(LastValue), Node, TEXT("LastIndex"));
+            return true;
+        };
+        FBPSemanticStatement OuterStatement;
+        FBPSemanticStatement InnerStatement;
+        if (MakeLoop(*Outer, TEXT("LoopIndex"), OuterStatement) == false ||
+            MakeLoop(*Inner, TEXT("InnerIndex"), InnerStatement) == false)
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
+                TEXT("Nested ForLoop bounds must be int32 literals"));
+            return false;
+        }
+        FBPPrintStringCall Values;
+        if (AnalyzeBranchPrint(GraphIR, *EventGraph, *Entry, *Print, Values, OutIR) == false)
+        {
+            return false;
+        }
+        FBPSemanticStatement PrintStatement;
+        PrintStatement.Kind = EBPSemanticStatementKind::Expression;
+        PrintStatement.SourceNodeId = Print->Id;
+        PrintStatement.Expression = MakePrintStringExpression(
+            Values, *Print, GraphIR.ParentClassPath);
+        InnerStatement.LoopBodyStatements.Add(MoveTemp(PrintStatement));
+        OuterStatement.LoopBodyStatements.Add(MoveTemp(InnerStatement));
+        FBPSemanticFunction Function;
+        Function.Name = TEXT("BeginPlay");
+        Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+        FBPSemanticBasicBlock Block;
+        Block.SourceEntryNodeId = Entry->Id;
+        Block.Statements.Add(MoveTemp(OuterStatement));
+        Function.Blocks.Add(MoveTemp(Block));
+        OutIR.Functions.Add(MoveTemp(Function));
+        return true;
+    }
     const FBPIRNode* BeginPlay = nullptr;
     const FBPIRNode* Loop = nullptr;
     const FBPIRNode* IndexToString = nullptr;
