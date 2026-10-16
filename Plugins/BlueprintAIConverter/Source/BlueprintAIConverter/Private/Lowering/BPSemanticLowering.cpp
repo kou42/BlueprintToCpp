@@ -1262,6 +1262,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     const FBPIRNode* BodyBranch = nullptr;
     TArray<const FBPIRNode*> BranchNodes;
     const FBPIRNode* BodyComparison = nullptr;
+    TArray<const FBPIRNode*> ComparisonNodes;
     TArray<const FBPIRNode*> BodyArithmeticNodes;
     TArray<const FBPIRNode*> Prints;
     for (const FBPIRNode& Node : EventGraph->Nodes)
@@ -1301,6 +1302,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 Node.FunctionOwnerPath, Node.FunctionName, Comparison, Diagnostics))
             {
                 BodyComparison = &Node;
+                ComparisonNodes.Add(&Node);
             }
             else
             {
@@ -1316,7 +1318,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     }
     if (BeginPlay == nullptr || Loop == nullptr || Prints.IsEmpty() ||
         EventGraph->Nodes.Num() != 2 + Prints.Num() + (IndexToString != nullptr ? 1 : 0) +
-            BranchNodes.Num() + (BodyComparison != nullptr ? 1 : 0) +
+            BranchNodes.Num() + ComparisonNodes.Num() +
             BodyArithmeticNodes.Num() ||
         EventGraph->ExecEdges.Num() != 1 + Prints.Num() + BranchNodes.Num() ||
         (BodyBranch != nullptr && IndexToString != nullptr) ||
@@ -1531,10 +1533,10 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     {
         if (BodyArithmeticNodes.IsEmpty() == false ||
             IndexToString != nullptr || BodyPrint != nullptr || BranchNodes.Num() > 16 ||
-            (BodyComparison == nullptr && EventGraph->DataEdges.IsEmpty() == false))
+            (ComparisonNodes.IsEmpty() && EventGraph->DataEdges.IsEmpty() == false))
         {
             AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
-                TEXT("Nested ForLoop Branch supports bool literals and one int32 comparison"));
+                TEXT("Nested ForLoop Branch supports bool literals and int32 comparisons"));
             return false;
         }
         const FBPIRNode* RootBranch = nullptr;
@@ -1552,7 +1554,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         }
         TSet<FGuid> VisitedBranches;
         TSet<FGuid> VisitedPrints;
-        bool bComparisonUsed = false;
+        TSet<FGuid> UsedComparisons;
         int32 ConsumedConditionEdges = 0;
         TFunction<bool(const FBPIRNode&, int32, FBPSemanticStatement&)> BuildBranch;
         BuildBranch = [&](const FBPIRNode& Current, int32 Depth,
@@ -1595,32 +1597,42 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             else
             {
                 // 比較結果は1つのBranchだけに接続できる。Index参照とint32定数を検証する。
-                if (BodyComparison == nullptr || bComparisonUsed)
+                const FBPIRNode* CurrentComparison = nullptr;
+                for (const FBPIRNode* Candidate : ComparisonNodes)
+                {
+                    if (Candidate->Id == ConditionEdge->SourceNode)
+                    {
+                        CurrentComparison = Candidate;
+                        break;
+                    }
+                }
+                if (CurrentComparison == nullptr ||
+                    UsedComparisons.Contains(CurrentComparison->Id))
                 {
                     return false;
                 }
                 FBPNumericComparison Comparison;
                 TArray<FString> Diagnostics;
-                if (FBPNumericComparisonResolver::Resolve(BodyComparison->FunctionOwnerPath,
-                        BodyComparison->FunctionName, Comparison, Diagnostics) == false ||
+                if (FBPNumericComparisonResolver::Resolve(CurrentComparison->FunctionOwnerPath,
+                        CurrentComparison->FunctionName, Comparison, Diagnostics) == false ||
                     Comparison.OperandType != EBPSemanticTypeKind::Int32)
                 {
                     return false;
                 }
-                const FBPIRPin* ReturnPin = FindPin(*BodyComparison, TEXT("ReturnValue"), EGPD_Output);
-                const FBPIRPin* A = FindPin(*BodyComparison, TEXT("A"), EGPD_Input);
-                const FBPIRPin* B = FindPin(*BodyComparison, TEXT("B"), EGPD_Input);
+                const FBPIRPin* ReturnPin = FindPin(*CurrentComparison, TEXT("ReturnValue"), EGPD_Output);
+                const FBPIRPin* A = FindPin(*CurrentComparison, TEXT("A"), EGPD_Input);
+                const FBPIRPin* B = FindPin(*CurrentComparison, TEXT("B"), EGPD_Input);
                 if (ReturnPin == nullptr || A == nullptr || B == nullptr ||
-                    ConditionEdge->SourceNode != BodyComparison->Id ||
+                    ConditionEdge->SourceNode != CurrentComparison->Id ||
                     ConditionEdge->SourcePin != ReturnPin->Id)
                 {
                     return false;
                 }
                 OutStatement.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
                 OutStatement.Expression.Type.Kind = EBPSemanticTypeKind::Bool;
-                OutStatement.Expression.FunctionName = BodyComparison->FunctionName;
-                OutStatement.Expression.FunctionOwnerPath = BodyComparison->FunctionOwnerPath;
-                OutStatement.Expression.SourceNodeId = BodyComparison->Id;
+                OutStatement.Expression.FunctionName = CurrentComparison->FunctionName;
+                OutStatement.Expression.FunctionOwnerPath = CurrentComparison->FunctionOwnerPath;
+                OutStatement.Expression.SourceNodeId = CurrentComparison->Id;
                 OutStatement.Expression.SourcePinId = ReturnPin->Id;
                 const FBPIRPin* Inputs[] = { A, B };
                 ++ConsumedConditionEdges;
@@ -1634,7 +1646,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                     const FBPIRLink* Source = nullptr;
                     for (const FBPIRLink& Edge : EventGraph->DataEdges)
                     {
-                        if (Edge.TargetNode == BodyComparison->Id && Edge.TargetPin == Input->Id)
+                        if (Edge.TargetNode == CurrentComparison->Id && Edge.TargetPin == Input->Id)
                         {
                             if (Source != nullptr)
                             {
@@ -1668,10 +1680,10 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                             return false;
                         }
                         OutStatement.Expression.Arguments.Add(
-                            Literal(EBPSemanticTypeKind::Int32, Value, *BodyComparison, Input->Name));
+                            Literal(EBPSemanticTypeKind::Int32, Value, *CurrentComparison, Input->Name));
                     }
                 }
-                bComparisonUsed = true;
+                UsedComparisons.Add(CurrentComparison->Id);
             }
             const FName Outputs[] = { UEdGraphSchema_K2::PN_Then, TEXT("else") };
             for (int32 OutputIndex = 0; OutputIndex < 2; ++OutputIndex)
@@ -1752,7 +1764,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             BuildBranch(*RootBranch, 0, RootStatement) == false ||
             VisitedBranches.Num() != BranchNodes.Num() ||
             VisitedPrints.Num() + OrderedCompletedPrints.Num() != Prints.Num() ||
-            (BodyComparison != nullptr && bComparisonUsed == false) ||
+            UsedComparisons.Num() != ComparisonNodes.Num() ||
             ConsumedConditionEdges != EventGraph->DataEdges.Num())
         {
             AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
