@@ -2065,6 +2065,24 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("接続先GUID不一致の診断を保持"),
         WrongPinIR.HasErrors());
 
+    // ForEach本体のElement/Index型も反射済みint32配列と整合する必要がある。
+    // 変換ノード側がint32でも、Macroの出力型が異なれば拒否する。
+    FBPGraphIR WrongElementType = GraphIR;
+    WrongElementType.Graphs[0].Nodes[1].Pins[2].Category = TEXT("float");
+    FBPSemanticIR WrongElementTypeIR;
+    TestFalse(TEXT("ForEach Element出力の型不一致を拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongElementType, WrongElementTypeIR));
+    TestTrue(TEXT("Element型不一致の診断を保持"),
+        WrongElementTypeIR.HasErrors());
+
+    FBPGraphIR WrongIndexType = GraphIR;
+    WrongIndexType.Graphs[0].Nodes[1].Pins[4].Category = TEXT("float");
+    FBPSemanticIR WrongIndexTypeIR;
+    TestFalse(TEXT("ForEach Index出力の型不一致を拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongIndexType, WrongIndexTypeIR));
+    TestTrue(TEXT("Index型不一致の診断を保持"),
+        WrongIndexTypeIR.HasErrors());
+
     // 接続GUIDが正しくても、Conv_IntToStringのピン型が不正なら拒否する。
     // 型の違うノードを関数名だけで誤変換しないための回帰検証。
     FBPGraphIR WrongConverterInput = GraphIR;
