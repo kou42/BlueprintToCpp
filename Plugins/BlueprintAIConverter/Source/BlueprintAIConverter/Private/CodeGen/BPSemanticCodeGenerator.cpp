@@ -721,30 +721,53 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         TextArgument.FunctionName == TEXT("Conv_IntToString") &&
         TextArgument.Arguments.Num() == 1)
     {
-        const FBPSemanticExpression& Addition = TextArgument.Arguments[0];
-        if (Addition.Kind != EBPSemanticExpressionKind::FunctionCall ||
-            Addition.Type.Kind != EBPSemanticTypeKind::Int32 ||
-            Addition.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
-            (Addition.FunctionName != TEXT("Add_IntInt") &&
-                Addition.FunctionName != TEXT("Subtract_IntInt") &&
-                Addition.FunctionName != TEXT("Multiply_IntInt")) ||
-            Addition.Arguments.Num() != 2 ||
-            Addition.Arguments[0].Kind != EBPSemanticExpressionKind::VariableReference ||
-            Addition.Arguments[1].Kind != EBPSemanticExpressionKind::VariableReference ||
-            Addition.Arguments[0].Type.Kind != EBPSemanticTypeKind::Int32 ||
-            Addition.Arguments[1].Type.Kind != EBPSemanticTypeKind::Int32 ||
-            IsIdentifier(Addition.Arguments[0].VariableName.ToString()) == false ||
-            IsIdentifier(Addition.Arguments[1].VariableName.ToString()) == false)
+        // 二項演算を再帰的に展開する。深さ制限で循環的・異常なIRを拒否する。
+        // 変数参照は識別子検証し、関数名は許可リストで固定する。
+        TFunction<bool(const FBPSemanticExpression&, int32, FString&)> EmitInteger;
+        EmitInteger = [&](const FBPSemanticExpression& Expression,
+            int32 Depth, FString& Result) -> bool
+        {
+            if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::Int32)
+            {
+                return false;
+            }
+            if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
+            {
+                if (IsIdentifier(Expression.VariableName.ToString()) == false)
+                {
+                    return false;
+                }
+                Result = Expression.VariableName.ToString();
+                return true;
+            }
+            if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
+                Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
+                (Expression.FunctionName != TEXT("Add_IntInt") &&
+                    Expression.FunctionName != TEXT("Subtract_IntInt") &&
+                    Expression.FunctionName != TEXT("Multiply_IntInt")) ||
+                Expression.Arguments.Num() != 2)
+            {
+                return false;
+            }
+            FString Left;
+            FString Right;
+            if (EmitInteger(Expression.Arguments[0], Depth + 1, Left) == false ||
+                EmitInteger(Expression.Arguments[1], Depth + 1, Right) == false)
+            {
+                return false;
+            }
+            Result = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
+                *Expression.FunctionName.ToString(), *Left, *Right);
+            return true;
+        };
+        FString IntegerExpression;
+        if (EmitInteger(TextArgument.Arguments[0], 0, IntegerExpression) == false)
         {
             Diagnostics.Add(TEXT("Unsupported nested Index arithmetic expression"));
             return false;
         }
-        // BlueprintのAdd_IntIntをそのままKismetMathLibrary呼び出しとして保持する。
         TextExpression = FString::Printf(
-            TEXT("UKismetStringLibrary::Conv_IntToString(UKismetMathLibrary::%s(%s, %s))"),
-            *Addition.FunctionName.ToString(),
-            *Addition.Arguments[0].VariableName.ToString(),
-            *Addition.Arguments[1].VariableName.ToString());
+            TEXT("UKismetStringLibrary::Conv_IntToString(%s)"), *IntegerExpression);
     }
     else
     {
