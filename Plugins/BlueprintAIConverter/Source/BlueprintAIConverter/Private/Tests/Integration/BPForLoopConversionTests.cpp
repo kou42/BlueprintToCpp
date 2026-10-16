@@ -282,6 +282,53 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopCompletedChainLoweringTest,
+    "BlueprintAIConverter.Conversion.ForLoop.CompletedChainLowering",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopCompletedChainLoweringTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR GraphIR = MakeForLoopGraph();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    FBPIRNode& FirstCompleted = Graph.Nodes.Last();
+    FirstCompleted.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    FBPIRNode SecondCompleted;
+    SecondCompleted.Id = FGuid::NewGuid();
+    SecondCompleted.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    SecondCompleted.FunctionName = TEXT("PrintString");
+    SecondCompleted.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+    SecondCompleted.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"),
+        TEXT("Second completed")));
+    FBPIRLink Next;
+    Next.SourceNode = FirstCompleted.Id;
+    Next.SourcePin = FirstCompleted.Pins.Last().Id;
+    Next.TargetNode = SecondCompleted.Id;
+    Next.TargetPin = SecondCompleted.Pins[0].Id;
+    Graph.ExecEdges.Add(Next);
+    Graph.Nodes.Add(MoveTemp(SecondCompleted));
+
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("Completed直列チェーンのLowering"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Loop = SemanticIR.Functions[0].Blocks[0].Statements[0];
+    TestEqual(TEXT("Completedは2文"), Loop.CompletedStatements.Num(), 2);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("Completed直列チェーンのC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopChainActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("Completedの順序を維持"),
+        Files.SourceContent.Find(TEXT("Second completed")) >
+        Files.SourceContent.Find(TEXT("Loop completed")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopMultipleCompletedCodegenTest,
     "BlueprintAIConverter.Conversion.ForLoop.MultipleCompletedStatements",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
