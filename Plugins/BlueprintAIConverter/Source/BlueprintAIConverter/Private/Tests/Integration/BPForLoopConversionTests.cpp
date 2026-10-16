@@ -282,6 +282,64 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopArithmeticComparisonBranchTest,
+    "BlueprintAIConverter.Conversion.ForLoop.ArithmeticComparisonBranch",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopArithmeticComparisonBranchTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR GraphIR = MakeForLoopBranchGraph();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    FBPIRNode Comparison;
+    Comparison.Id = FGuid::NewGuid();
+    Comparison.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Comparison.FunctionName = TEXT("Less_IntInt");
+    Comparison.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Comparison.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+    Comparison.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), TEXT("5")));
+    Comparison.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("bool")));
+    FBPIRNode Addition;
+    Addition.Id = FGuid::NewGuid();
+    Addition.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Addition.FunctionName = TEXT("Add_IntInt");
+    Addition.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Addition.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), TEXT("1")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("int")));
+    const auto AddDataEdge = [&Graph](const FBPIRNode& Source, int32 SourcePin,
+        const FBPIRNode& Target, int32 TargetPin)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Source.Id;
+        Edge.SourcePin = Source.Pins[SourcePin].Id;
+        Edge.TargetNode = Target.Id;
+        Edge.TargetPin = Target.Pins[TargetPin].Id;
+        Graph.DataEdges.Add(Edge);
+    };
+    AddDataEdge(Comparison, 2, Graph.Nodes[2], 1);
+    AddDataEdge(Addition, 2, Comparison, 0);
+    AddDataEdge(Graph.Nodes[1], 4, Addition, 0);
+    Graph.Nodes.Add(MoveTemp(Comparison));
+    Graph.Nodes.Add(MoveTemp(Addition));
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("Index加算比較のLowering"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("Index加算比較のC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopArithmeticActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("Indexの加算を比較条件へ生成"),
+        Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Add_IntInt(LoopIndex, 1) < 5")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopIndexComparisonBranchTest,
     "BlueprintAIConverter.Conversion.ForLoop.IndexComparisonBranch",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
