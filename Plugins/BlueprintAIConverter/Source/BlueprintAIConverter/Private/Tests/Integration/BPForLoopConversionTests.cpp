@@ -282,6 +282,53 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopComparisonBranchTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NumericComparisonBranch",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopComparisonBranchTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR GraphIR = MakeForLoopBranchGraph();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    FBPIRNode& Branch = Graph.Nodes[2];
+    FBPIRNode Comparison;
+    Comparison.Id = FGuid::NewGuid();
+    Comparison.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Comparison.FunctionName = TEXT("Less_IntInt");
+    Comparison.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Comparison.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int"), TEXT("1")));
+    Comparison.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), TEXT("3")));
+    Comparison.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("bool")));
+    FBPIRLink ConditionEdge;
+    ConditionEdge.SourceNode = Comparison.Id;
+    ConditionEdge.SourcePin = Comparison.Pins[2].Id;
+    ConditionEdge.TargetNode = Branch.Id;
+    ConditionEdge.TargetPin = Branch.Pins[1].Id;
+    Graph.DataEdges.Add(ConditionEdge);
+    Graph.Nodes.Add(MoveTemp(Comparison));
+
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("比較条件BranchのLowering"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Loop = SemanticIR.Functions[0].Blocks[0].Statements[0];
+    TestEqual(TEXT("比較条件の関数名"),
+        Loop.LoopBodyStatements[0].Expression.FunctionName, FName(TEXT("Less_IntInt")));
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("比較条件BranchのC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopCompareActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("比較式をif文として生成"),
+        Files.SourceContent.Contains(TEXT("if (1 < 3)")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopCompletedChainLoweringTest,
     "BlueprintAIConverter.Conversion.ForLoop.CompletedChainLowering",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
