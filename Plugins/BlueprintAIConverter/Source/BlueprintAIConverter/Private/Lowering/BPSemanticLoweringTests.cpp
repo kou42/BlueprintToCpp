@@ -1,8 +1,19 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "BPGraphIR.h"
 #include "BPSemanticLowering.h"
 #include "BPPrintStringAnalyzer.h"
+#include "BPSemanticCodeGenerator.h"
+#include "EdGraphSchema_K2.h"
+#include "Engine/Blueprint.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_CustomEvent.h"
+#include "K2Node_FunctionEntry.h"
+#include "K2Node_FunctionResult.h"
+#include "Kismet/KismetSystemLibrary.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
 
 namespace
 {
@@ -200,6 +211,208 @@ bool FBPSemanticLoweringGraphDiagnosticsTest::RunTest(const FString& Parameters)
         FBPSemanticLowering::LowerPrintString(IR, Semantic));
     TestTrue(TEXT("診断をSemantic IRへ引き継ぐ"), Semantic.HasErrors());
     TestTrue(TEXT("不完全な関数を残さない"), Semantic.Functions.IsEmpty());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticFunctionGraphRoundtripTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.FunctionGraphPrintString",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticFunctionGraphRoundtripTest::RunTest(const FString& Parameters)
+{
+    const FName BlueprintName = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_FunctionGraphLowering"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        UObject::StaticClass(), GetTransientPackage(), BlueprintName,
+        BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("UObject Blueprintを生成"), Blueprint) == false)
+    {
+        return false;
+    }
+
+    UEdGraph* FunctionGraph = FBlueprintEditorUtils::CreateNewGraph(
+        Blueprint, TEXT("RunConversion"), UEdGraph::StaticClass(),
+        UEdGraphSchema_K2::StaticClass());
+    if (TestNotNull(TEXT("Function Graphを生成"), FunctionGraph) == false)
+    {
+        return false;
+    }
+    FBlueprintEditorUtils::AddFunctionGraph<UFunction>(
+        Blueprint, FunctionGraph, true, nullptr);
+
+    UK2Node_FunctionEntry* Entry = nullptr;
+    UK2Node_FunctionResult* Result = nullptr;
+    for (UEdGraphNode* Node : FunctionGraph->Nodes)
+    {
+        Entry = Entry != nullptr ? Entry : Cast<UK2Node_FunctionEntry>(Node);
+        Result = Result != nullptr ? Result : Cast<UK2Node_FunctionResult>(Node);
+    }
+    if (TestNotNull(TEXT("Function Entryを取得"), Entry) == false)
+    {
+        return false;
+    }
+
+    UK2Node_CallFunction* Print = NewObject<UK2Node_CallFunction>(FunctionGraph);
+    Print->SetFromFunction(UKismetSystemLibrary::StaticClass()->FindFunctionByName(TEXT("PrintString")));
+    Print->AllocateDefaultPins();
+    FunctionGraph->AddNode(Print, false, false);
+    UEdGraphPin* TextPin = Print->FindPin(TEXT("InString"));
+    if (TestNotNull(TEXT("PrintString text pin"), TextPin) == false)
+    {
+        return false;
+    }
+    TextPin->DefaultValue = TEXT("Function graph");
+    const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+    if (TestTrue(TEXT("EntryからPrintStringを接続"), Schema->TryCreateConnection(
+            Entry->FindPinChecked(UEdGraphSchema_K2::PN_Then),
+            Print->FindPinChecked(UEdGraphSchema_K2::PN_Execute))) == false)
+    {
+        return false;
+    }
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    FBPGraphIR GraphIR;
+    if (TestTrue(TEXT("Function Graph IRを構築"), FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("Function GraphをSemantic Lowering"),
+        FBPSemanticLowering::Lower(Blueprint, GraphIR, Semantic)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : Semantic.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    if (TestEqual(TEXT("通常関数を1つ生成"), Semantic.Functions.Num(), 1) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("関数名を保持"), Semantic.Functions[0].Name, FName(TEXT("RunConversion")));
+    TestEqual(TEXT("Reflection署名を保持"), Semantic.Functions[0].SignatureSource,
+        FString(TEXT("generated_class_reflection")));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("通常関数をC++生成"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("UFunctionGraphGenerated"), FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("通常関数定義を生成"), Files.SourceContent.Contains(
+        TEXT("void UFunctionGraphGenerated::RunConversion()")));
+    TestFalse(TEXT("BeginPlay定義を生成しない"), Files.SourceContent.Contains(TEXT("BeginPlay")));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticCustomEventRoundtripTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.CustomEventPrintString",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticCustomEventRoundtripTest::RunTest(const FString& Parameters)
+{
+    const FName BlueprintName = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_CustomEventLowering"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        UObject::StaticClass(), GetTransientPackage(), BlueprintName,
+        BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("Custom Event用Blueprintを生成"), Blueprint) == false)
+    {
+        return false;
+    }
+    UEdGraph* EventGraph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+    if (TestNotNull(TEXT("Event Graphを取得"), EventGraph) == false)
+    {
+        return false;
+    }
+    EventGraph->Nodes.Reset();
+
+    UK2Node_CustomEvent* Event = NewObject<UK2Node_CustomEvent>(EventGraph);
+    EventGraph->AddNode(Event, false, false);
+    Event->CreateNewGuid();
+    Event->PostPlacedNewNode();
+    Event->CustomFunctionName = TEXT("OnConverted");
+    Event->AllocateDefaultPins();
+
+    UK2Node_CallFunction* Print = NewObject<UK2Node_CallFunction>(EventGraph);
+    EventGraph->AddNode(Print, false, false);
+    Print->CreateNewGuid();
+    Print->PostPlacedNewNode();
+    Print->SetFromFunction(UKismetSystemLibrary::StaticClass()->FindFunctionByName(TEXT("PrintString")));
+    Print->AllocateDefaultPins();
+    Print->FindPinChecked(TEXT("InString"))->DefaultValue = TEXT("Custom event");
+    const UEdGraphSchema_K2* Schema = Cast<UEdGraphSchema_K2>(EventGraph->GetSchema());
+    if (TestNotNull(TEXT("K2 schemaを取得"), Schema) == false ||
+        TestTrue(TEXT("Custom EventからPrintStringを接続"), Schema->TryCreateConnection(
+            Event->FindPinChecked(UEdGraphSchema_K2::PN_Then),
+            Print->FindPinChecked(UEdGraphSchema_K2::PN_Execute))) == false)
+    {
+        return false;
+    }
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    FBPGraphIR GraphIR;
+    if (TestTrue(TEXT("Custom Event Graph IRを構築"),
+        FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false)
+    {
+        return false;
+    }
+    const FBPIRNode* EventIR = nullptr;
+    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    {
+        EventIR = Graph.Nodes.FindByPredicate([](const FBPIRNode& Node)
+        {
+            return Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent");
+        });
+        if (EventIR != nullptr)
+        {
+            break;
+        }
+    }
+    if (TestNotNull(TEXT("Custom Event IRを取得"), EventIR) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("Custom Event名をGraph IRへ保持"),
+        EventIR->FunctionName, FName(TEXT("OnConverted")));
+
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("Custom EventをSemantic Lowering"),
+        FBPSemanticLowering::Lower(Blueprint, GraphIR, Semantic)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : Semantic.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    if (TestEqual(TEXT("Custom Eventを1つ生成"), Semantic.Functions.Num(), 1) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("Event Graph由来を保持"), Semantic.Functions[0].bIsEventGraph);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("Custom EventをC++生成"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("UCustomEventGenerated"), FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("BlueprintNativeEventとして宣言"), Files.HeaderContent.Contains(
+        TEXT("UFUNCTION(BlueprintNativeEvent, BlueprintCallable)")));
+    TestTrue(TEXT("Custom Event本体をImplementationへ生成"), Files.SourceContent.Contains(
+        TEXT("void UCustomEventGenerated::OnConverted_Implementation()")));
     return true;
 }
 

@@ -72,7 +72,9 @@ enum class EBPSemanticStatementKind : uint8
     Branch,
     ForLoop,
     // CJ2: 配列反復を数値範囲ループと区別する。未解決の配列は生成しない。
-    ForEachLoop
+    ForEachLoop,
+    // Break付きループ内でのみ有効な明示的な制御フロー終端。
+    Break
 };
 
 struct FBPSemanticStatement
@@ -134,6 +136,8 @@ struct FBPSemanticFunction
     bool bIsStatic = false;
     bool bIsConst = false;
     bool bIsBlueprintEvent = false;
+    // Reflection上のBlueprintEvent属性とは別に、実行本体がEvent Graph由来かを保持する。
+    bool bIsEventGraph = false;
     bool bIsOverride = false;
     FString OverriddenFunctionPath;
     bool bIsInterfaceImplementation = false;

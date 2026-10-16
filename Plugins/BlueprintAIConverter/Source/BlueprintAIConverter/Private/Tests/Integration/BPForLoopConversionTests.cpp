@@ -1604,6 +1604,9 @@ bool FBPForEachJsonContractTest::RunTest(const FString& Parameters)
     Statement.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
     Statement.LoopArray.VariableName = TEXT("Numbers");
     Statement.LoopArray.Type.ContainerKind = TEXT("array");
+    FBPSemanticStatement BreakStatement;
+    BreakStatement.Kind = EBPSemanticStatementKind::Break;
+    Statement.LoopBodyStatements.Add(BreakStatement);
     Block.Statements.Add(Statement);
     Function.Blocks.Add(Block);
     IR.Functions.Add(Function);
@@ -1614,6 +1617,7 @@ bool FBPForEachJsonContractTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("配列入力"), Json.Contains(TEXT("loop_array")));
     TestTrue(TEXT("要素変数"), Json.Contains(TEXT("loop_element_variable")) && Json.Contains(TEXT("Element")));
     TestTrue(TEXT("要素型"), Json.Contains(TEXT("loop_element_type")));
+    TestTrue(TEXT("Break文種別"), Json.Contains(TEXT("\"kind\": \"break\"")));
     return true;
 }
 
@@ -1706,6 +1710,150 @@ bool FBPForEachIndexCodeGenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("配列長で反復"), Files.SourceContent.Contains(TEXT("Numbers.Num()")));
     TestTrue(TEXT("Indexを文字列化"),
         Files.SourceContent.Contains(TEXT("Conv_IntToString(ForEachArrayIndex)")));
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachBreakCodeGenTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.BreakCodeGen",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachBreakCodeGenTest::RunTest(const FString& Parameters)
+{
+    // ForEachLoopWithBreakのLoweringに先立ち、Semantic IRの明示的なBreakを
+    // ループ本体の順序どおりにC++へ生成できることを固定する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintString式を含むIRの生成"),
+        FBPSemanticLowering::LowerForLoop(MakeForLoopGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Loop = IR.Functions[0].Blocks[0].Statements[0];
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Loop.LoopElementVariable = TEXT("ForEachArrayElement");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("Numbers");
+    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+    Variable.Type.ContainerKind = TEXT("array");
+    Variable.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Variable);
+    FBPSemanticExpression& IndexText = Loop.LoopBodyStatements[0].Expression.Arguments[1];
+    if (TestTrue(TEXT("BreakテストのIndex文字列変換式が存在"),
+        IndexText.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        IndexText.Arguments.Num() == 1) == false)
+    {
+        return false;
+    }
+    IndexText.Arguments[0].VariableName = Loop.LoopIndexVariable;
+    FBPSemanticStatement BreakStatement;
+    BreakStatement.Kind = EBPSemanticStatementKind::Break;
+    Loop.LoopBodyStatements.Add(MoveTemp(BreakStatement));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ForEach Breakのコード生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachBreakActor"),
+            TEXT("TEST_API"), Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    const int32 PrintPosition = Files.SourceContent.Find(TEXT("PrintString"));
+    const int32 BreakPosition = Files.SourceContent.Find(TEXT("break;"));
+    TestTrue(TEXT("Breakを本体のPrintString後へ生成"),
+        PrintPosition != INDEX_NONE && BreakPosition > PrintPosition);
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopGenericExpressionCodeGenTest,
+    "BlueprintAIConverter.Conversion.ForLoop.GenericExpressionCodeGen",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopGenericExpressionCodeGenTest::RunTest(const FString& Parameters)
+{
+    // ループ本体がPrintStringという関数名に依存せず、共通の検証済み式文Emitterを
+    // 利用することをSetActorLocation経路で確認する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("ForLoop IRを生成"),
+        FBPSemanticLowering::LowerForLoop(MakeForLoopGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Loop = IR.Functions[0].Blocks[0].Statements[0];
+    Loop.LoopBodyStatements.Reset();
+    Loop.CompletedStatements.Reset();
+
+    FBPSemanticStatement MoveStatement;
+    MoveStatement.Kind = EBPSemanticStatementKind::Expression;
+    FBPSemanticExpression& MoveCall = MoveStatement.Expression;
+    MoveCall.Kind = EBPSemanticExpressionKind::FunctionCall;
+    MoveCall.Type.Kind = EBPSemanticTypeKind::Bool;
+    MoveCall.FunctionName = TEXT("K2_SetActorLocation");
+    MoveCall.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = IR.ParentClassPath;
+    Target.VariableName = TEXT("this");
+    FBPSemanticExpression Location;
+    Location.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Location.Type.Kind = EBPSemanticTypeKind::Struct;
+    Location.Type.TypePath = TEXT("/Script/CoreUObject.Vector");
+    Location.FunctionName = TEXT("K2_GetActorLocation");
+    Location.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Location.Arguments.Add(Target);
+    FBPSemanticExpression Sweep;
+    Sweep.Kind = EBPSemanticExpressionKind::Literal;
+    Sweep.Type.Kind = EBPSemanticTypeKind::Bool;
+    Sweep.LiteralValue = TEXT("false");
+    FBPSemanticExpression HitResult;
+    HitResult.Kind = EBPSemanticExpressionKind::VariableReference;
+    HitResult.Type.Kind = EBPSemanticTypeKind::Struct;
+    HitResult.Type.TypePath = TEXT("/Script/Engine.HitResult");
+    HitResult.VariableName = TEXT("LoopHitResult");
+    FBPSemanticExpression Teleport;
+    Teleport.Kind = EBPSemanticExpressionKind::Literal;
+    Teleport.Type.Kind = EBPSemanticTypeKind::Bool;
+    Teleport.LiteralValue = TEXT("false");
+    MoveCall.Arguments.Add(MoveTemp(Target));
+    MoveCall.Arguments.Add(MoveTemp(Location));
+    MoveCall.Arguments.Add(MoveTemp(Sweep));
+    MoveCall.Arguments.Add(MoveTemp(HitResult));
+    MoveCall.Arguments.Add(MoveTemp(Teleport));
+    Loop.LoopBodyStatements.Add(MoveTemp(MoveStatement));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ForLoop本体の汎用式文を生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForLoopGenericActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    const int32 LoopPosition = Files.SourceContent.Find(TEXT("for (int32 LoopIndex"));
+    const int32 HitPosition = Files.SourceContent.Find(TEXT("FHitResult LoopHitResult{};"));
+    const int32 MovePosition = Files.SourceContent.Find(
+        TEXT("K2_SetActorLocation(GetActorLocation(), false, LoopHitResult, false);"));
+    TestTrue(TEXT("SetActorLocationをループ本体へ順序どおり生成"),
+        LoopPosition != INDEX_NONE && HitPosition > LoopPosition && MovePosition > HitPosition);
+    TestFalse(TEXT("PrintString専用経路を通さない"),
+        Files.SourceContent.Contains(TEXT("UKismetSystemLibrary::PrintString")));
     return true;
 }
 
@@ -1969,6 +2117,7 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     // 既存fixtureのExec/Dataリンクが参照するPinIdは変更しない。
     // ForLoop由来のピンをForEachの名前・方向に置き換える。
     // 実ノードのピン配置と一致するかは別途Editor Golden Testで確認する。
+    Loop.Pins[0].Name = TEXT("Exec");
     Loop.Pins[1].Name = TEXT("Array");
     Loop.Pins[1].DefaultValue.Reset();
     Loop.Pins[2].Name = TEXT("Array Element");
@@ -2044,6 +2193,57 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+
+    // Break入力を持つ標準マクロの限定形状を同じ実Blueprint型情報で縦断する。
+    // 本体末尾からBreakへ戻るExecエッジを、暗黙に捨てずSemantic Breakへ変換する。
+    FBPGraphIR BreakGraph = GraphIR;
+    FBPIRGraph& BreakEvent = BreakGraph.Graphs[0];
+    FBPIRNode& BreakLoop = BreakEvent.Nodes[1];
+    BreakLoop.MacroGraphName = TEXT("ForEachLoopWithBreak");
+    BreakLoop.MacroGraphPath =
+        TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoopWithBreak");
+    BreakLoop.Pins.Add(MakeLoopPin(TEXT("Break"), EGPD_Input, TEXT("exec")));
+    FBPIRNode& LastBodyPrint = BreakEvent.Nodes[3];
+    LastBodyPrint.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    FBPIRLink BreakEdge;
+    BreakEdge.SourceNode = LastBodyPrint.Id;
+    BreakEdge.SourcePin = LastBodyPrint.Pins.Last().Id;
+    BreakEdge.TargetNode = BreakLoop.Id;
+    BreakEdge.TargetPin = BreakLoop.Pins.Last().Id;
+    BreakEvent.ExecEdges.Add(BreakEdge);
+
+    FBPSemanticIR BreakIR;
+    if (TestTrue(TEXT("Break付きForEachをLowering"),
+        FBPSemanticLowering::Lower(Blueprint, BreakGraph, BreakIR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : BreakIR.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    const TArray<FBPSemanticStatement>& BreakBody =
+        BreakIR.Functions[0].Blocks[0].Statements[0].LoopBodyStatements;
+    TestTrue(TEXT("本体末尾にBreak文を保持"),
+        BreakBody.IsEmpty() == false &&
+        BreakBody.Last().Kind == EBPSemanticStatementKind::Break);
+    FBPGeneratedActorFiles BreakFiles;
+    TArray<FString> BreakDiagnostics;
+    if (TestTrue(TEXT("Break付きForEachのC++生成"),
+        FBPSemanticCodeGenerator::Generate(
+            BreakIR, TEXT("AForEachBreakCompiledActor"), TEXT("TEST_API"),
+            BreakFiles, BreakDiagnostics, EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Diagnostic : BreakDiagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    const int32 BreakPosition = BreakFiles.SourceContent.Find(TEXT("break;"));
+    const int32 CompletedPosition = BreakFiles.SourceContent.Find(TEXT("Loop completed"));
+    TestTrue(TEXT("Breakをループ内かつCompletedより前へ生成"),
+        BreakPosition != INDEX_NONE && CompletedPosition > BreakPosition);
 
     // 配列Getterから同じ入力への二重リンクは、リンク数が増えた時点で拒否する。
     // 正常なIRをコピーして破壊するため、以降のケース間で状態を共有しない。

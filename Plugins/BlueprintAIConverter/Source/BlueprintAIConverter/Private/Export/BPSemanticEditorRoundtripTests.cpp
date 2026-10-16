@@ -183,13 +183,49 @@ bool FBPForEachStandardMacroEditorTest::RunTest(const FString& Parameters)
                     Pin->PinType.PinCategory, Category);
             }
         }
+        FString PinSummary;
+        for (const UEdGraphPin* Pin : Macro->Pins)
+        {
+            if (Pin != nullptr)
+            {
+                PinSummary += FString::Printf(TEXT("%s[%s,%s] "),
+                    *Pin->PinName.ToString(),
+                    Pin->Direction == EGPD_Input ? TEXT("in") : TEXT("out"),
+                    *Pin->PinType.PinCategory.ToString());
+            }
+        }
+        AddInfo(FString::Printf(TEXT("実マクロのピン一覧: %s"), *PinSummary));
         AddError(FString::Printf(TEXT("実マクロに必要なピンがありません: %s"),
             *Name.ToString()));
         return false;
     };
     bool bValid = true;
-    bValid &= CheckPin(TEXT("execute"), EGPD_Input, UEdGraphSchema_K2::PC_Exec);
+    bValid &= CheckPin(TEXT("Exec"), EGPD_Input, UEdGraphSchema_K2::PC_Exec);
     bValid &= CheckPin(TEXT("Array"), EGPD_Input, UEdGraphSchema_K2::PC_Wildcard);
+    bValid &= CheckPin(TEXT("LoopBody"), EGPD_Output, UEdGraphSchema_K2::PC_Exec);
+    bValid &= CheckPin(TEXT("Array Element"), EGPD_Output, UEdGraphSchema_K2::PC_Wildcard);
+    bValid &= CheckPin(TEXT("Array Index"), EGPD_Output, UEdGraphSchema_K2::PC_Int);
+    bValid &= CheckPin(TEXT("Completed"), EGPD_Output, UEdGraphSchema_K2::PC_Exec);
+    const TCHAR* BreakMacroPath =
+        TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoopWithBreak");
+    MacroGraph = LoadObject<UEdGraph>(nullptr, BreakMacroPath);
+    if (TestNotNull(TEXT("標準ForEachLoopWithBreakマクログラフを取得"), MacroGraph) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("標準ForEachLoopWithBreakの実Graphパス"),
+        MacroGraph->GetPathName(), FString(BreakMacroPath));
+    Macro = NewObject<UK2Node_MacroInstance>(EventGraph);
+    Macro->SetMacroGraph(MacroGraph);
+    Macro->AllocateDefaultPins();
+    if (TestTrue(TEXT("Break付き実マクロのピンを生成"),
+        Macro->Pins.IsEmpty() == false) == false)
+    {
+        return false;
+    }
+    bValid &= CheckPin(TEXT("Exec"), EGPD_Input, UEdGraphSchema_K2::PC_Exec);
+    bValid &= CheckPin(TEXT("Array"), EGPD_Input, UEdGraphSchema_K2::PC_Wildcard);
+    bValid &= CheckPin(TEXT("Break"), EGPD_Input, UEdGraphSchema_K2::PC_Exec);
     bValid &= CheckPin(TEXT("LoopBody"), EGPD_Output, UEdGraphSchema_K2::PC_Exec);
     bValid &= CheckPin(TEXT("Array Element"), EGPD_Output, UEdGraphSchema_K2::PC_Wildcard);
     bValid &= CheckPin(TEXT("Array Index"), EGPD_Output, UEdGraphSchema_K2::PC_Int);

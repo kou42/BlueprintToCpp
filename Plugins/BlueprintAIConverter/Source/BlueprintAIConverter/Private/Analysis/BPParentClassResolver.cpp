@@ -1,6 +1,8 @@
 #include "BPParentClassResolver.h"
 
+#include "Components/ActorComponent.h"
 #include "GameFramework/Actor.h"
+#include "UObject/Object.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace
@@ -45,7 +47,7 @@ FString NormalizePublicHeaderPath(const UClass* ParentClass)
 }
 }
 
-bool FBPParentClassResolver::ResolveActorParent(const FString& ParentClassPath,
+bool FBPParentClassResolver::ResolveParent(const FString& ParentClassPath,
     FBPResolvedParentClass& OutParent, TArray<FString>& OutDiagnostics)
 {
     OutParent = FBPResolvedParentClass();
@@ -65,9 +67,9 @@ bool FBPParentClassResolver::ResolveActorParent(const FString& ParentClassPath,
         OutDiagnostics.Add(FString::Printf(TEXT("Parent class could not be resolved: %s"), *ParentClassPath));
         return false;
     }
-    if (ParentClass->IsChildOf(AActor::StaticClass()) == false)
+    if (ParentClass->IsChildOf(UObject::StaticClass()) == false)
     {
-        OutDiagnostics.Add(FString::Printf(TEXT("Parent class is not derived from AActor: %s"), *ParentClassPath));
+        OutDiagnostics.Add(FString::Printf(TEXT("Parent class is not derived from UObject: %s"), *ParentClassPath));
         return false;
     }
     if (ParentClass->HasAnyClassFlags(CLASS_Native) == false)
@@ -78,7 +80,14 @@ bool FBPParentClassResolver::ResolveActorParent(const FString& ParentClassPath,
         return false;
     }
 
-    const FString CppClassName = ParentClass->GetPrefixCPP() + ParentClass->GetName();
+    const FString GeneratedClassPrefix = ParentClass->GetPrefixCPP();
+    const FString CppClassName = GeneratedClassPrefix + ParentClass->GetName();
+    if (GeneratedClassPrefix.IsEmpty() || IsCppIdentifier(GeneratedClassPrefix) == false)
+    {
+        OutDiagnostics.Add(FString::Printf(
+            TEXT("Parent class does not expose a usable generated-class prefix: %s"), *ParentClassPath));
+        return false;
+    }
     if (IsCppIdentifier(CppClassName) == false)
     {
         OutDiagnostics.Add(FString::Printf(TEXT("Parent class has an unsafe C++ name: %s"), *CppClassName));
@@ -96,5 +105,26 @@ bool FBPParentClassResolver::ResolveActorParent(const FString& ParentClassPath,
     OutParent.ClassPath = ParentClass->GetPathName();
     OutParent.CppClassName = CppClassName;
     OutParent.HeaderPath = MoveTemp(HeaderPath);
+    OutParent.GeneratedClassPrefix = GeneratedClassPrefix;
+    OutParent.bIsActor = ParentClass->IsChildOf(AActor::StaticClass());
+    OutParent.bSupportsBeginPlay = OutParent.bIsActor ||
+        ParentClass->IsChildOf(UActorComponent::StaticClass());
+    return true;
+}
+
+bool FBPParentClassResolver::ResolveActorParent(const FString& ParentClassPath,
+    FBPResolvedParentClass& OutParent, TArray<FString>& OutDiagnostics)
+{
+    if (ResolveParent(ParentClassPath, OutParent, OutDiagnostics) == false)
+    {
+        return false;
+    }
+    if (OutParent.bIsActor == false)
+    {
+        OutDiagnostics.Add(FString::Printf(
+            TEXT("Parent class is not derived from AActor: %s"), *ParentClassPath));
+        OutParent = FBPResolvedParentClass();
+        return false;
+    }
     return true;
 }

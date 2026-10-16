@@ -203,7 +203,9 @@ private:
                             return;
                         }
 
-                        const FString ClassName = TEXT("A") + Blueprint->GetName() + TEXT("Generated");
+                        const FString ClassPrefix = Blueprint->ParentClass != nullptr
+                            ? Blueprint->ParentClass->GetPrefixCPP() : FString();
+                        const FString ClassName = ClassPrefix + Blueprint->GetName() + TEXT("Generated");
                         const FString ModuleName = FApp::GetProjectName();
                         const FString BuildRules = FPaths::Combine(
                             FPaths::ProjectDir(), TEXT("Source"), ModuleName, ModuleName + TEXT(".Build.cs"));

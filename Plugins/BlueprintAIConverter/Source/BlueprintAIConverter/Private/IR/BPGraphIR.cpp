@@ -6,6 +6,7 @@
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_CustomEvent.h"
 #include "K2Node_Event.h"
 #include "K2Node_MacroInstance.h"
 #include "K2Node_Variable.h"
@@ -51,7 +52,11 @@ void AppendGraph(const UEdGraph* Graph, const FString& Kind, FBPGraphIR& IR)
         IRNode.ClassPath = Node->GetClass()->GetPathName();
         IRNode.Title = Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
 
-        if (const UK2Node_Event* Event = Cast<UK2Node_Event>(Node))
+        if (const UK2Node_CustomEvent* CustomEvent = Cast<UK2Node_CustomEvent>(Node))
+        {
+            IRNode.FunctionName = CustomEvent->CustomFunctionName;
+        }
+        else if (const UK2Node_Event* Event = Cast<UK2Node_Event>(Node))
         {
             IRNode.FunctionName = Event->EventReference.GetMemberName();
         }

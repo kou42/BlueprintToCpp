@@ -4,6 +4,7 @@
 #include "BPActorCodeGenerator.h"
 #include "BPSemanticCodeGenerator.h"
 #include "BPSemanticLowering.h"
+#include "Components/ActorComponent.h"
 #include "GameFramework/Pawn.h"
 
 namespace
@@ -221,6 +222,116 @@ bool FBPSemanticGeneratorParentClassTest::RunTest(const FString& Parameters)
         Files.HeaderContent.Contains(TEXT("#include \"GameFramework/Pawn.h\"")));
     TestTrue(TEXT("Pawn継承を生成"),
         Files.HeaderContent.Contains(TEXT("class AGeneratedPawn : public APawn")));
+
+    Graph = MakeGeneratorTestGraph();
+    Graph.ParentClassPath = UActorComponent::StaticClass()->GetPathName();
+    if (TestTrue(TEXT("ActorComponent派生をLowering"),
+        FBPSemanticLowering::LowerPrintString(Graph, Semantic)) == false)
+    {
+        return false;
+    }
+    Diagnostics.Reset();
+    TestTrue(TEXT("ActorComponent派生C++を生成"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("UGeneratedComponent"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("ActorComponentヘッダーを生成"),
+        Files.HeaderContent.Contains(TEXT("#include \"Components/ActorComponent.h\"")));
+    TestTrue(TEXT("ActorComponent継承を生成"),
+        Files.HeaderContent.Contains(TEXT("class UGeneratedComponent : public UActorComponent")));
+    TestEqual(TEXT("U prefixを除いたファイル名"), Files.HeaderFileName,
+        FString(TEXT("GeneratedComponent.h")));
+
+    Diagnostics.Reset();
+    TestFalse(TEXT("親と異なるprefixを拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AGeneratedComponent"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("prefix拒否理由を返す"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("U-prefixed"));
+        }));
+
+    Semantic.ParentClassPath = UObject::StaticClass()->GetPathName();
+    Diagnostics.Reset();
+    TestFalse(TEXT("BeginPlayを持たない親を安全に拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("UGeneratedObject"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("lifecycle拒否理由を返す"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("BeginPlay lifecycle"));
+        }));
+
+    FBPSemanticFunction& ObjectFunction = Semantic.Functions[0];
+    ObjectFunction.Name = TEXT("RunConversion");
+    ObjectFunction.bIsOverride = false;
+    ObjectFunction.bIsBlueprintEvent = false;
+    ObjectFunction.SignatureSource = TEXT("generated_class_reflection");
+    ObjectFunction.OverriddenFunctionPath.Reset();
+    ObjectFunction.Parameters.Reset();
+    FBPSemanticParameter CountParameter;
+    CountParameter.Name = TEXT("Count");
+    CountParameter.Type.Kind = EBPSemanticTypeKind::Int32;
+    CountParameter.DeclarationIndex = 0;
+    ObjectFunction.Parameters.Add(CountParameter);
+    ObjectFunction.Blocks[0].Statements[0].Expression.Arguments[0].Type.TypePath =
+        UObject::StaticClass()->GetPathName();
+    Diagnostics.Reset();
+    if (TestTrue(TEXT("UObjectの通常関数を生成"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("UGeneratedObject"), FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("通常関数をUFUNCTIONとして宣言"), Files.HeaderContent.Contains(
+        TEXT("UFUNCTION(BlueprintCallable)\n    void RunConversion(int32 Count);")));
+    TestTrue(TEXT("通常関数定義を生成"), Files.SourceContent.Contains(
+        TEXT("void UGeneratedObject::RunConversion(int32 Count)")));
+    TestFalse(TEXT("通常関数ではSuperを呼ばない"), Files.SourceContent.Contains(
+        TEXT("Super::RunConversion")));
+
+    ObjectFunction.Name = TEXT("OnConverted");
+    ObjectFunction.bIsBlueprintEvent = true;
+    ObjectFunction.bIsEventGraph = true;
+    Diagnostics.Reset();
+    if (TestTrue(TEXT("UObjectのBlueprintイベントを生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("UGeneratedObject"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("BlueprintNativeEvent宣言"), Files.HeaderContent.Contains(
+        TEXT("UFUNCTION(BlueprintNativeEvent, BlueprintCallable)")));
+    TestTrue(TEXT("イベントImplementation宣言"), Files.HeaderContent.Contains(
+        TEXT("virtual void OnConverted_Implementation(int32 Count);")));
+    TestTrue(TEXT("イベントImplementation本体"), Files.SourceContent.Contains(
+        TEXT("void UGeneratedObject::OnConverted_Implementation(int32 Count)")));
+
+    ObjectFunction.Name = TEXT("BeginDestroy");
+    ObjectFunction.Parameters.Reset();
+    ObjectFunction.bIsOverride = true;
+    ObjectFunction.bIsBlueprintEvent = false;
+    ObjectFunction.bIsEventGraph = false;
+    ObjectFunction.OverriddenFunctionPath = TEXT("/Script/CoreUObject.Object.BeginDestroy");
+    Diagnostics.Reset();
+    if (TestTrue(TEXT("反射検証済みのクラス固有lifecycleを生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("UGeneratedObject"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("lifecycle override宣言"), Files.HeaderContent.Contains(
+        TEXT("virtual void BeginDestroy() override;")));
+    TestTrue(TEXT("lifecycleのSuper呼び出し"), Files.SourceContent.Contains(
+        TEXT("Super::BeginDestroy();")));
     return true;
 }
 

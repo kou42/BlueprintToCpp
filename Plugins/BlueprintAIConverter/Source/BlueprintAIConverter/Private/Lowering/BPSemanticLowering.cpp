@@ -8,6 +8,7 @@
 #include "BPNumericArithmeticResolver.h"
 #include "BPNumericComparisonResolver.h"
 #include "BPOutputParameterStorage.h"
+#include "BPSemanticFunctionExtractor.h"
 #include "BPSemanticVariableExtractor.h"
 
 #include "EdGraphSchema_K2.h"
@@ -52,13 +53,20 @@ bool LowerPrintStringImpl(const FBPGraphIR& GraphIR, const bool bAllowBlueprintV
 
     FBPResolvedParentClass ParentClass;
     TArray<FString> ParentDiagnostics;
-    if (FBPParentClassResolver::ResolveActorParent(
+    if (FBPParentClassResolver::ResolveParent(
         GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
     {
         for (const FString& Message : ParentDiagnostics)
         {
             AddDiagnostic(OutIR, FString(), FGuid(), Message);
         }
+        return false;
+    }
+    if (ParentClass.bSupportsBeginPlay == false)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(), FString::Printf(
+            TEXT("Parent class does not provide an overridable BeginPlay lifecycle: %s"),
+            *ParentClass.ClassPath));
         return false;
     }
     if (GraphIR.BlueprintVariableCount != 0 && bAllowBlueprintVariables == false)
@@ -242,6 +250,216 @@ bool AnalyzeBranchPrint(const FBPGraphIR& GraphIR, const FBPIRGraph& Graph,
         return false;
     }
     return true;
+}
+
+// BeginPlay専用Analyzerで検証済みのPrintString既定値規則を再利用しつつ、
+// Entryの実際の関数種別と名前は後段のSemantic Functionへ保持する。
+bool AnalyzeEntryPrint(const FBPGraphIR& GraphIR, const FBPIRGraph& Graph,
+    const FBPIRNode& Entry, const FBPIRNode& Print, FBPPrintStringCall& OutCall,
+    FBPSemanticIR& OutIR)
+{
+    FBPIRNode SyntheticBeginPlay = Entry;
+    SyntheticBeginPlay.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_Event");
+    SyntheticBeginPlay.FunctionName = TEXT("ReceiveBeginPlay");
+    FBPIRGraph SyntheticEventGraph = Graph;
+    SyntheticEventGraph.Kind = TEXT("event");
+    return AnalyzeBranchPrint(
+        GraphIR, SyntheticEventGraph, SyntheticBeginPlay, Print, OutCall, OutIR);
+}
+
+bool LowerSingleEntryPrintStringImpl(const UBlueprint* Blueprint,
+    const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+{
+    OutIR = FBPSemanticIR();
+    OutIR.AssetPath = GraphIR.AssetPath;
+    OutIR.ParentClassPath = GraphIR.ParentClassPath;
+    if (Blueprint == nullptr || Blueprint->GeneratedClass == nullptr)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(),
+            TEXT("Function and custom-event conversion requires a compiled source Blueprint"));
+        return false;
+    }
+    if (GraphIR.Diagnostics.IsEmpty() == false)
+    {
+        for (const FString& Message : GraphIR.Diagnostics)
+        {
+            AddDiagnostic(OutIR, FString(), FGuid(), Message);
+        }
+        return false;
+    }
+
+    FBPResolvedParentClass Parent;
+    TArray<FString> ParentDiagnostics;
+    if (FBPParentClassResolver::ResolveParent(
+        GraphIR.ParentClassPath, Parent, ParentDiagnostics) == false)
+    {
+        for (const FString& Message : ParentDiagnostics)
+        {
+            AddDiagnostic(OutIR, FString(), FGuid(), Message);
+        }
+        return false;
+    }
+
+    const FBPIRGraph* TargetGraph = nullptr;
+    const FBPIRNode* Entry = nullptr;
+    const FBPIRNode* Print = nullptr;
+    const FBPIRNode* Result = nullptr;
+    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    {
+        const FBPIRNode* CandidateEntry = nullptr;
+        const FBPIRNode* CandidatePrint = nullptr;
+        const FBPIRNode* CandidateResult = nullptr;
+        bool bUnsupportedNode = false;
+        for (const FBPIRNode& Node : Graph.Nodes)
+        {
+            if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") ||
+                Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent") ||
+                Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry"))
+            {
+                if (CandidateEntry != nullptr)
+                {
+                    bUnsupportedNode = true;
+                    break;
+                }
+                CandidateEntry = &Node;
+            }
+            else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+                Node.FunctionName == TEXT("PrintString") &&
+                Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetSystemLibrary"))
+            {
+                if (CandidatePrint != nullptr)
+                {
+                    bUnsupportedNode = true;
+                    break;
+                }
+                CandidatePrint = &Node;
+            }
+            else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionResult"))
+            {
+                if (CandidateResult != nullptr)
+                {
+                    bUnsupportedNode = true;
+                    break;
+                }
+                CandidateResult = &Node;
+            }
+            else
+            {
+                bUnsupportedNode = true;
+                break;
+            }
+        }
+        if (bUnsupportedNode || CandidateEntry == nullptr || CandidatePrint == nullptr)
+        {
+            continue;
+        }
+        const bool bFunctionGraph = Graph.Kind == TEXT("function") &&
+            CandidateEntry->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry");
+        const bool bEventGraph = Graph.Kind == TEXT("event") &&
+            (CandidateEntry->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") ||
+                CandidateEntry->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent")) &&
+            CandidateEntry->FunctionName != TEXT("ReceiveBeginPlay");
+        if ((bFunctionGraph == false && bEventGraph == false) ||
+            (bEventGraph && CandidateResult != nullptr))
+        {
+            continue;
+        }
+        if (TargetGraph != nullptr)
+        {
+            AddDiagnostic(OutIR, Graph.Name, CandidateEntry->Id,
+                TEXT("Multiple function or custom-event PrintString entry graphs are ambiguous"));
+            return false;
+        }
+        TargetGraph = &Graph;
+        Entry = CandidateEntry;
+        Print = CandidatePrint;
+        Result = CandidateResult;
+    }
+    if (TargetGraph == nullptr || Entry == nullptr || Print == nullptr)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(),
+            TEXT("No supported Function Entry or Custom Event -> PrintString graph was found"));
+        return false;
+    }
+    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    {
+        if (&Graph != TargetGraph &&
+            (Graph.ExecEdges.IsEmpty() == false || Graph.DataEdges.IsEmpty() == false))
+        {
+            AddDiagnostic(OutIR, Graph.Name, FGuid(),
+                TEXT("Additional executable graphs must be converted together and cannot be omitted"));
+            return false;
+        }
+    }
+
+    const bool bEntryToPrint = TargetGraph->ExecEdges.ContainsByPredicate(
+        [Entry, Print](const FBPIRLink& Edge)
+        {
+            return Edge.SourceNode == Entry->Id && Edge.TargetNode == Print->Id;
+        });
+    const bool bPrintToResult = Result == nullptr || TargetGraph->ExecEdges.ContainsByPredicate(
+        [Print, Result](const FBPIRLink& Edge)
+        {
+            return Edge.SourceNode == Print->Id && Edge.TargetNode == Result->Id;
+        });
+    const int32 ExpectedExecEdges = Result != nullptr ? 2 : 1;
+    if (bEntryToPrint == false || bPrintToResult == false ||
+        TargetGraph->ExecEdges.Num() != ExpectedExecEdges ||
+        TargetGraph->DataEdges.IsEmpty() == false)
+    {
+        AddDiagnostic(OutIR, TargetGraph->Name, Entry->Id,
+            TEXT("Function or custom-event conversion requires an unambiguous Entry -> PrintString flow"));
+        return false;
+    }
+
+    FBPPrintStringCall Values;
+    if (AnalyzeEntryPrint(
+        GraphIR, *TargetGraph, *Entry, *Print, Values, OutIR) == false)
+    {
+        return false;
+    }
+
+    const FName FunctionName = TargetGraph->Kind == TEXT("function")
+        ? FName(*TargetGraph->Name) : Entry->FunctionName;
+    FBPSemanticIR Reflected;
+    FBPSemanticFunctionExtractor::Append(Blueprint, Reflected);
+    const FBPSemanticFunction* ReflectedFunction = Reflected.Functions.FindByPredicate(
+        [FunctionName](const FBPSemanticFunction& Function)
+        {
+            return Function.Name == FunctionName;
+        });
+    if (FunctionName.IsNone() || ReflectedFunction == nullptr)
+    {
+        AddDiagnostic(OutIR, TargetGraph->Name, Entry->Id,
+            TEXT("Function or custom-event signature could not be verified by generated-class reflection"));
+        return false;
+    }
+    for (const FBPSemanticDiagnostic& Diagnostic : Reflected.Diagnostics)
+    {
+        if (Diagnostic.GraphName == FunctionName.ToString())
+        {
+            OutIR.Diagnostics.Add(Diagnostic);
+        }
+    }
+    if (OutIR.HasErrors())
+    {
+        return false;
+    }
+
+    FBPSemanticFunction Function = *ReflectedFunction;
+    Function.bIsEventGraph = TargetGraph->Kind == TEXT("event");
+    FBPSemanticBasicBlock Block;
+    Block.SourceEntryNodeId = Entry->Id;
+    FBPSemanticStatement Statement;
+    Statement.Kind = EBPSemanticStatementKind::Expression;
+    Statement.SourceNodeId = Print->Id;
+    Statement.Expression = MakePrintStringExpression(
+        Values, *Print, GraphIR.ParentClassPath);
+    Block.Statements.Add(MoveTemp(Statement));
+    Function.Blocks.Add(MoveTemp(Block));
+    OutIR.Functions.Add(MoveTemp(Function));
+    FBPSemanticVariableExtractor::Append(Blueprint, OutIR);
+    return OutIR.HasErrors() == false;
 }
 
 const FBPSemanticVariable* FindSemanticVariable(
@@ -685,13 +903,20 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
 
     FBPResolvedParentClass ParentClass;
     TArray<FString> ParentDiagnostics;
-    if (FBPParentClassResolver::ResolveActorParent(
+    if (FBPParentClassResolver::ResolveParent(
         GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
     {
         for (const FString& Message : ParentDiagnostics)
         {
             AddDiagnostic(OutIR, FString(), FGuid(), Message);
         }
+        return false;
+    }
+    if (ParentClass.bSupportsBeginPlay == false)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(), FString::Printf(
+            TEXT("Parent class does not provide an overridable BeginPlay lifecycle: %s"),
+            *ParentClass.ClassPath));
         return false;
     }
 
@@ -1222,13 +1447,20 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     }
     FBPResolvedParentClass Parent;
     TArray<FString> ParentErrors;
-    if (FBPParentClassResolver::ResolveActorParent(
+    if (FBPParentClassResolver::ResolveParent(
         GraphIR.ParentClassPath, Parent, ParentErrors) == false)
     {
         for (const FString& Error : ParentErrors)
         {
             AddDiagnostic(OutIR, FString(), FGuid(), Error);
         }
+        return false;
+    }
+    if (Parent.bSupportsBeginPlay == false)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(), FString::Printf(
+            TEXT("Parent class does not provide an overridable BeginPlay lifecycle: %s"),
+            *Parent.ClassPath));
         return false;
     }
     const FBPIRGraph* Event = nullptr;
@@ -1270,11 +1502,13 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
             Begin = &Node;
         }
         else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
-            Node.MacroGraphName == TEXT("ForEachLoop") &&
+            (Node.MacroGraphName == TEXT("ForEachLoop") ||
+                Node.MacroGraphName == TEXT("ForEachLoopWithBreak")) &&
             // 名前だけでなく標準マクロの正規Graphパスを照合する。
             // 同名のユーザーマクロを標準ForEachとして誤変換しない。
-            Node.MacroGraphPath ==
-                TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoop"))
+            Node.MacroGraphPath == FString::Printf(
+                TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:%s"),
+                *Node.MacroGraphName))
         {
             if (Loop != nullptr) { AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Multiple ForEachLoop nodes")); return false; }
             Loop = &Node;
@@ -1325,16 +1559,20 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
         return false;
     }
     const FBPIRPin* BeginThen = FindPin(*Begin, TEXT("then"), EGPD_Output);
-    const FBPIRPin* Execute = FindPin(*Loop, TEXT("execute"), EGPD_Input);
+    const FBPIRPin* Execute = FindPin(*Loop, TEXT("Exec"), EGPD_Input);
     const FBPIRPin* ArrayPin = FindPin(*Loop, TEXT("Array"), EGPD_Input);
     const FBPIRPin* BodyPin = FindPin(*Loop, TEXT("LoopBody"), EGPD_Output);
     const FBPIRPin* CompletedPin = FindPin(*Loop, TEXT("Completed"), EGPD_Output);
     const FBPIRPin* ElementPin = FindPin(*Loop, TEXT("Array Element"), EGPD_Output);
     const FBPIRPin* IndexPin = FindPin(*Loop, TEXT("Array Index"), EGPD_Output);
+    const bool bWithBreak = Loop->MacroGraphName == TEXT("ForEachLoopWithBreak");
+    const FBPIRPin* BreakPin = bWithBreak
+        ? FindPin(*Loop, TEXT("Break"), EGPD_Input) : nullptr;
     const FBPIRPin* GetterValue = FindPin(*Getter, Getter->VariableName, EGPD_Output);
     if (BeginThen == nullptr || Execute == nullptr || ArrayPin == nullptr ||
         BodyPin == nullptr || CompletedPin == nullptr || ElementPin == nullptr ||
         IndexPin == nullptr || GetterValue == nullptr ||
+        (bWithBreak && (BreakPin == nullptr || BreakPin->Category != TEXT("exec"))) ||
         ArrayPin->Category != TEXT("int") || ElementPin->Category != TEXT("int") ||
         IndexPin->Category != TEXT("int") || GetterValue->Category != TEXT("int"))
     {
@@ -1513,8 +1751,10 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     TArray<const FBPIRNode*> BodyPrints;
     TArray<const FBPIRNode*> CompletedPrints;
     TSet<FGuid> Visited;
-    auto ReadChain = [&](const FBPIRPin* Start, TArray<const FBPIRNode*>& OutPrints) -> bool
+    auto ReadChain = [&](const FBPIRPin* Start, const bool bAllowBreak,
+        TArray<const FBPIRNode*>& OutPrints, bool& bOutEndsWithBreak) -> bool
     {
+        bOutEndsWithBreak = false;
         FGuid SourceNode = Loop->Id;
         FGuid SourcePin = Start->Id;
         while (true)
@@ -1529,6 +1769,12 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
                 }
             }
             if (Next == nullptr) { return true; }
+            if (bAllowBreak && BreakPin != nullptr &&
+                Next->TargetNode == Loop->Id && Next->TargetPin == BreakPin->Id)
+            {
+                bOutEndsWithBreak = true;
+                return true;
+            }
             const FBPIRNode* Target = Event->Nodes.FindByPredicate(
                 [Next](const FBPIRNode& Node) { return Node.Id == Next->TargetNode; });
             if (Target == nullptr || Target->FunctionName != TEXT("PrintString") ||
@@ -1546,10 +1792,13 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
             SourcePin = Then->Id;
         }
     };
-    if (ReadChain(BodyPin, BodyPrints) == false ||
-        ReadChain(CompletedPin, CompletedPrints) == false ||
+    bool bBodyEndsWithBreak = false;
+    bool bCompletedEndsWithBreak = false;
+    if (ReadChain(BodyPin, bWithBreak, BodyPrints, bBodyEndsWithBreak) == false ||
+        ReadChain(CompletedPin, false, CompletedPrints, bCompletedEndsWithBreak) == false ||
         BodyPrints.IsEmpty() || Visited.Num() != Prints.Num() ||
-        Event->ExecEdges.Num() != Visited.Num() + 1)
+        bCompletedEndsWithBreak || bBodyEndsWithBreak != bWithBreak ||
+        Event->ExecEdges.Num() != Visited.Num() + 1 + (bBodyEndsWithBreak ? 1 : 0))
     {
         AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop Exec chains are ambiguous or disconnected"));
         return false;
@@ -1643,6 +1892,13 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     {
         return false;
     }
+    if (bBodyEndsWithBreak)
+    {
+        FBPSemanticStatement BreakStatement;
+        BreakStatement.Kind = EBPSemanticStatementKind::Break;
+        BreakStatement.SourceNodeId = Loop->Id;
+        Statement.LoopBodyStatements.Add(MoveTemp(BreakStatement));
+    }
     Block.Statements.Add(MoveTemp(Statement));
     Function.Blocks.Add(MoveTemp(Block));
     OutIR.Functions.Add(MoveTemp(Function));
@@ -1657,13 +1913,20 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 
     FBPResolvedParentClass ParentClass;
     TArray<FString> ParentDiagnostics;
-    if (FBPParentClassResolver::ResolveActorParent(
+    if (FBPParentClassResolver::ResolveParent(
         GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
     {
         for (const FString& Message : ParentDiagnostics)
         {
             AddDiagnostic(OutIR, FString(), FGuid(), Message);
         }
+        return false;
+    }
+    if (ParentClass.bSupportsBeginPlay == false)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(), FString::Printf(
+            TEXT("Parent class does not provide an overridable BeginPlay lifecycle: %s"),
+            *ParentClass.ClassPath));
         return false;
     }
     if (GraphIR.BlueprintVariableCount != 0)
@@ -3070,9 +3333,13 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
                     }
                     return LowerForEachLoopImpl(Blueprint, GraphIR, OutIR);
                 }
-                AddDiagnostic(OutIR, Graph.Name, Node.Id,
-                    TEXT("ForEachLoopWithBreak requires verified Break control flow"));
-                return false;
+                if (Blueprint == nullptr)
+                {
+                    AddDiagnostic(OutIR, Graph.Name, Node.Id,
+                        TEXT("ForEachLoopWithBreak requires a compiled Blueprint for array type resolution"));
+                    return false;
+                }
+                return LowerForEachLoopImpl(Blueprint, GraphIR, OutIR);
             }
         }
     }
@@ -3089,7 +3356,15 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
     if (bHasBranch == false && bHasForLoop == false && bHasPrintString &&
         bHasGetActorLocation == false && bHasSetActorLocation == false)
     {
-        return LowerPrintString(Blueprint, GraphIR, OutIR);
+        FBPSemanticIR BeginPlayIR;
+        if (LowerPrintString(Blueprint, GraphIR, BeginPlayIR))
+        {
+            OutIR = MoveTemp(BeginPlayIR);
+            return true;
+        }
+        // BeginPlayの限定形状に一致しない場合だけ、Reflectionで署名を確定できる
+        // Function Entry / Custom Event経路を試す。
+        return LowerSingleEntryPrintStringImpl(Blueprint, GraphIR, OutIR);
     }
     if (bHasBranch == false && bHasPrintString == false &&
         bHasGetActorLocation && bHasSetActorLocation)

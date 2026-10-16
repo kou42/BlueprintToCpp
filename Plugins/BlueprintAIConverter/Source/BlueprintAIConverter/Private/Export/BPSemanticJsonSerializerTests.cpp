@@ -23,6 +23,7 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Function.SignatureSource = TEXT("generated_class_reflection");
     Function.bIsNative = true;
     Function.bIsStatic = true;
+    Function.bIsEventGraph = true;
     Function.bIsOverride = true;
     Function.OverriddenFunctionPath = TEXT("/Script/Engine.Actor.ReceiveBeginPlay");
     Function.bIsInterfaceImplementation = true;

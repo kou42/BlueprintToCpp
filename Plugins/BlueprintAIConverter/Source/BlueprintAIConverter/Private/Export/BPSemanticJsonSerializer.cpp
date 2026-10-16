@@ -52,6 +52,7 @@ FString StatementKindName(EBPSemanticStatementKind Kind)
     case EBPSemanticStatementKind::Branch: return TEXT("branch");
     case EBPSemanticStatementKind::ForLoop: return TEXT("for_loop");
     case EBPSemanticStatementKind::ForEachLoop: return TEXT("for_each_loop");
+    case EBPSemanticStatementKind::Break: return TEXT("break");
     }
     return TEXT("expression");
 }
@@ -221,6 +222,7 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
             FunctionJson->SetBoolField(TEXT("is_static"), Function.bIsStatic);
             FunctionJson->SetBoolField(TEXT("is_const"), Function.bIsConst);
             FunctionJson->SetBoolField(TEXT("is_blueprint_event"), Function.bIsBlueprintEvent);
+            FunctionJson->SetBoolField(TEXT("is_event_graph"), Function.bIsEventGraph);
             FunctionJson->SetBoolField(TEXT("is_override"), Function.bIsOverride);
             FunctionJson->SetBoolField(TEXT("is_interface_implementation"), Function.bIsInterfaceImplementation);
             FunctionJson->SetField(TEXT("interface_class_path"), OptionalString(Function.InterfaceClassPath));
