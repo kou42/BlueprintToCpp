@@ -197,6 +197,70 @@ bool FBPSemanticIntArrayEditorTest::RunTest(const FString& Parameters)
     Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
     Loop.LoopArray.VariableName = Variable->Name;
     Loop.LoopArray.Type = Variable->Type;
+    // 実Blueprintから取得した型情報で、正しいPrintStringを持つ
+    // ForEachのC++生成が成功することを確認する。ノード接続のLoweringは別途検証する。
+    FBPSemanticStatement Print;
+    Print.Kind = EBPSemanticStatementKind::Expression;
+    FBPSemanticExpression& Call = Print.Expression;
+    Call.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Call.Type.Kind = EBPSemanticTypeKind::Void;
+    Call.FunctionName = TEXT("PrintString");
+    Call.FunctionOwnerPath = TEXT("/Script/Engine.KismetSystemLibrary");
+    FBPSemanticExpression Context;
+    Context.Kind = EBPSemanticExpressionKind::VariableReference;
+    Context.VariableName = TEXT("this");
+    Context.Type.Kind = EBPSemanticTypeKind::Object;
+    Context.Type.TypePath = IR.ParentClassPath;
+    Call.Arguments.Add(MoveTemp(Context));
+    FBPSemanticExpression TextValue;
+    TextValue.Kind = EBPSemanticExpressionKind::Literal;
+    TextValue.Type.Kind = EBPSemanticTypeKind::String;
+    TextValue.LiteralValue = TEXT("array item");
+    Call.Arguments.Add(MoveTemp(TextValue));
+    auto AddLiteral = [&Call](EBPSemanticTypeKind Kind, const FString& Value)
+    {
+        FBPSemanticExpression ValueExpression;
+        ValueExpression.Kind = EBPSemanticExpressionKind::Literal;
+        ValueExpression.Type.Kind = Kind;
+        ValueExpression.LiteralValue = Value;
+        Call.Arguments.Add(MoveTemp(ValueExpression));
+    };
+    AddLiteral(EBPSemanticTypeKind::Bool, TEXT("true"));
+    AddLiteral(EBPSemanticTypeKind::Bool, TEXT("true"));
+    AddLiteral(EBPSemanticTypeKind::Struct,
+        TEXT("(R=0.000000,G=0.660000,B=1.000000,A=1.000000)"));
+    Call.Arguments[4].Type.TypePath = TEXT("/Script/CoreUObject.LinearColor");
+    AddLiteral(EBPSemanticTypeKind::Float, TEXT("2.0"));
+    AddLiteral(EBPSemanticTypeKind::String, TEXT(""));
+    Loop.LoopBodyStatements.Add(MoveTemp(Print));
+    Block.Statements.Add(Loop);
+    Function.Blocks.Add(Block);
+    IR.Functions.Add(Function);
+    FBPGeneratedActorFiles ValidFiles;
+    TArray<FString> ValidDiagnostics;
+    const bool bGenerated = FBPSemanticCodeGenerator::Generate(
+        IR, TEXT("AIntArrayActor"), TEXT("TEST_API"),
+        ValidFiles, ValidDiagnostics, EBPVariableFallbackMode::DeclarationOnly);
+    TestTrue(TEXT("実Blueprint反射型からForEach C++生成"), bGenerated);
+    if (bGenerated)
+    {
+        TestTrue(TEXT("配列メンバーを宣言"),
+            ValidFiles.HeaderContent.Contains(TEXT("TArray<int32> Numbers")));
+        TestTrue(TEXT("配列長を使ったループを生成"),
+            ValidFiles.SourceContent.Contains(TEXT("Numbers.Num()")));
+    }
+    else
+    {
+        for (const FString& Diagnostic : ValidDiagnostics)
+        {
+            AddError(Diagnostic);
+        }
+    }
+    // 不完全なIRを別インスタンスで検証し、成功ケースを汚染しない。
+    IR.Functions.Reset();
+    Function.Blocks.Reset();
+    Block.Statements.Reset();
+    Loop.LoopBodyStatements.Reset();
     // 空のBodyはCodeGenの安全検証で拒否されるため、ここでは
     // 配列変数の宣言経路だけを独立に確認する。
     Block.Statements.Add(MoveTemp(Loop));
