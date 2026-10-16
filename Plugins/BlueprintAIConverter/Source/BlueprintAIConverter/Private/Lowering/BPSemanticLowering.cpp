@@ -1273,6 +1273,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         const FBPIRNode* Entry = nullptr;
         TArray<const FBPIRNode*> PrintsInNestedGraph;
         TArray<const FBPIRNode*> IndexConverters;
+        TArray<const FBPIRNode*> IndexAdditions;
         for (const FBPIRNode& Node : EventGraph->Nodes)
         {
             if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
@@ -1291,12 +1292,19 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             {
                 IndexConverters.Add(&Node);
             }
+            else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+                Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetMathLibrary") &&
+                Node.FunctionName == TEXT("Add_IntInt"))
+            {
+                IndexAdditions.Add(&Node);
+            }
         }
         if (Entry == nullptr || PrintsInNestedGraph.IsEmpty() ||
             EventGraph->Nodes.Num() != 3 + PrintsInNestedGraph.Num() +
-                IndexConverters.Num() ||
+                IndexConverters.Num() + IndexAdditions.Num() ||
             EventGraph->ExecEdges.Num() != 2 + PrintsInNestedGraph.Num() ||
-            EventGraph->DataEdges.Num() != IndexConverters.Num() * 2)
+            EventGraph->DataEdges.Num() != IndexConverters.Num() * 2 +
+                IndexAdditions.Num() * 2)
         {
             AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
                 TEXT("Nested ForLoop requires BeginPlay, two loops and one PrintString"));
@@ -1480,8 +1488,12 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                         IndexName = Names[I];
                     }
                 }
-                if (IndexOwner == nullptr ||
-                    (InnerCompletedPrint != nullptr && Node.Id == InnerCompletedPrint->Id && IndexOwner == Inner))
+                if (IndexOwner == nullptr && IndexAdditions.IsEmpty())
+                {
+                    return false;
+                }
+                if (InnerCompletedPrint != nullptr &&
+                    Node.Id == InnerCompletedPrint->Id && IndexOwner == Inner)
                 {
                     return false;
                 }
@@ -1495,11 +1507,83 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 FBPSemanticExpression Reference;
                 Reference.Kind = EBPSemanticExpressionKind::VariableReference;
                 Reference.Type.Kind = EBPSemanticTypeKind::Int32;
-                Reference.VariableName = IndexName;
-                Reference.SourceNodeId = IndexOwner->Id;
-                const FBPIRPin* Index = FindPin(*IndexOwner, TEXT("Index"), EGPD_Output);
-                Reference.SourcePinId = Index->Id;
-                Conversion.Arguments.Add(MoveTemp(Reference));
+                if (IndexOwner != nullptr)
+                {
+                    Reference.VariableName = IndexName;
+                    Reference.SourceNodeId = IndexOwner->Id;
+                    const FBPIRPin* Index = FindPin(*IndexOwner, TEXT("Index"), EGPD_Output);
+                    Reference.SourcePinId = Index->Id;
+                    Conversion.Arguments.Add(MoveTemp(Reference));
+                }
+                else
+                {
+                    // Add_IntIntの両オペランドを接続元のIndexで解決する。
+                    // 別ノードや未接続ピンはこの限定対応では許可しない。
+                    if (IndexAdditions.Num() != 1 ||
+                        Node.Id != BodyPrint->Id)
+                    {
+                        return false;
+                    }
+                    const FBPIRNode* Addition = IndexAdditions[0];
+                    const FBPIRPin* AddOutput = FindPin(
+                        *Addition, TEXT("ReturnValue"), EGPD_Output);
+                    if (AddOutput == nullptr ||
+                        EventGraph->DataEdges.ContainsByPredicate(
+                            [Addition, AddOutput, Converter, Input](const FBPIRLink& Edge)
+                            {
+                                return Edge.SourceNode == Addition->Id &&
+                                    Edge.SourcePin == AddOutput->Id &&
+                                    Edge.TargetNode == Converter->Id &&
+                                    Edge.TargetPin == Input->Id;
+                            }) == false)
+                    {
+                        return false;
+                    }
+                    FBPSemanticExpression AdditionCall;
+                    AdditionCall.Kind = EBPSemanticExpressionKind::FunctionCall;
+                    AdditionCall.Type.Kind = EBPSemanticTypeKind::Int32;
+                    AdditionCall.FunctionName = TEXT("Add_IntInt");
+                    AdditionCall.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+                    AdditionCall.SourceNodeId = Addition->Id;
+                    const FName Inputs[] = { TEXT("A"), TEXT("B") };
+                    const FBPIRNode* Candidates[] = { Outer, Inner };
+                    const FName Names[] = { TEXT("LoopIndex"), TEXT("InnerIndex") };
+                    for (const FName& InputName : Inputs)
+                    {
+                        const FBPIRPin* Operand = FindPin(*Addition, InputName, EGPD_Input);
+                        const FBPIRNode* Owner = nullptr;
+                        FName VariableName;
+                        for (int32 I = 0; I < 2; ++I)
+                        {
+                            const FBPIRPin* IndexPin = FindPin(
+                                *Candidates[I], TEXT("Index"), EGPD_Output);
+                            if (Operand != nullptr && IndexPin != nullptr &&
+                                EventGraph->DataEdges.ContainsByPredicate(
+                                    [Candidates, I, IndexPin, Addition, Operand](const FBPIRLink& Edge)
+                                    {
+                                        return Edge.SourceNode == Candidates[I]->Id &&
+                                            Edge.SourcePin == IndexPin->Id &&
+                                            Edge.TargetNode == Addition->Id &&
+                                            Edge.TargetPin == Operand->Id;
+                                    }))
+                            {
+                                Owner = Candidates[I];
+                                VariableName = Names[I];
+                            }
+                        }
+                        if (Owner == nullptr)
+                        {
+                            return false;
+                        }
+                        FBPSemanticExpression OperandExpression;
+                        OperandExpression.Kind = EBPSemanticExpressionKind::VariableReference;
+                        OperandExpression.Type.Kind = EBPSemanticTypeKind::Int32;
+                        OperandExpression.VariableName = VariableName;
+                        OperandExpression.SourceNodeId = Owner->Id;
+                        AdditionCall.Arguments.Add(MoveTemp(OperandExpression));
+                    }
+                    Conversion.Arguments.Add(MoveTemp(AdditionCall));
+                }
                 Result.Expression.Arguments[1] = MoveTemp(Conversion);
             }
             return true;
