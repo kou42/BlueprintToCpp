@@ -279,16 +279,25 @@ void FBPSemanticVariableExtractor::Append(const UBlueprint* Blueprint, FBPSemant
             ? FindFProperty<FProperty>(GeneratedClass, Description.VarName)
             : nullptr;
         if (Description.VarType.ContainerType == EPinContainerType::Array &&
-            Description.VarType.PinCategory == TEXT("int"))
+            Description.VarType.PinCategory == TEXT("int") &&
+            Description.VarType.bIsReference == false &&
+            Description.VarType.bIsConst == false)
         {
             const FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property);
+            // BlueprintのPinCategoryのみを信用せず、反射された要素Propertyと
+            // 生成クラスのC++型を照合する。列挙型や別の数値型は対象外とする。
             if (ArrayProperty != nullptr &&
                 CastField<FIntProperty>(ArrayProperty->Inner) != nullptr)
             {
-                Variable.Type.Kind = EBPSemanticTypeKind::Int32;
-                Variable.Type.InnerType = TEXT("int32");
-                Variable.Type.ElementType = MakeShared<FBPSemanticType>();
-                Variable.Type.ElementType->Kind = EBPSemanticTypeKind::Int32;
+                FString ExtendedType;
+                const FString CppType = Property->GetCPPType(&ExtendedType) + ExtendedType;
+                if (CppType == TEXT("TArray<int32>"))
+                {
+                    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+                    Variable.Type.InnerType = TEXT("int32");
+                    Variable.Type.ElementType = MakeShared<FBPSemanticType>();
+                    Variable.Type.ElementType->Kind = EBPSemanticTypeKind::Int32;
+                }
             }
         }
         if (Property != nullptr)
