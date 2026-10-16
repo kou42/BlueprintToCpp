@@ -1973,6 +1973,7 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     Loop.Pins[1].DefaultValue.Reset();
     Loop.Pins[2].Name = TEXT("Array Element");
     Loop.Pins[2].Direction = EGPD_Output;
+    Loop.Pins[2].DefaultValue.Reset();
     Loop.Pins[4].Name = TEXT("Array Index");
     // Completedは元のPins[5]、LoopBodyはPins[3]に保持される。
     // 実ノードではピン配列順に意味がないため、名前とGUIDで検証する。
