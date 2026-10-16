@@ -51,6 +51,7 @@ FString StatementKindName(EBPSemanticStatementKind Kind)
     case EBPSemanticStatementKind::Return: return TEXT("return");
     case EBPSemanticStatementKind::Branch: return TEXT("branch");
     case EBPSemanticStatementKind::ForLoop: return TEXT("for_loop");
+    case EBPSemanticStatementKind::ForEachLoop: return TEXT("for_each_loop");
     }
     return TEXT("expression");
 }
@@ -177,6 +178,13 @@ TSharedRef<FJsonObject> StatementToJson(const FBPSemanticStatement& Statement)
         CompletedStatements.Add(MakeShared<FJsonValueObject>(StatementToJson(Child)));
     }
     Json->SetArrayField(TEXT("completed_statements"), CompletedStatements);
+    // 既存v2のForLoopフィールドは維持し、ForEach専用情報を追加する。
+    if (Statement.Kind == EBPSemanticStatementKind::ForEachLoop)
+    {
+        Json->SetObjectField(TEXT("loop_array"), ExpressionToJson(Statement.LoopArray));
+        Json->SetField(TEXT("loop_element_variable"), OptionalName(Statement.LoopElementVariable));
+        Json->SetObjectField(TEXT("loop_element_type"), TypeToJson(Statement.LoopElementType));
+    }
     return Json;
 }
 }
