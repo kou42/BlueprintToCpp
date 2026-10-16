@@ -1879,4 +1879,49 @@ bool FBPForEachTypeMismatchCodeGenTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachLocalNameCollisionTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.RejectsLocalNameCollision",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachLocalNameCollisionTest::RunTest(const FString& Parameters)
+{
+    // Blueprintメンバー名が生成予定のIndex/Elementと重なると、
+    // C++のローカル変数による名前隠蔽が起きるため生成を拒否する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("元のForLoopをLowering"),
+        FBPSemanticLowering::LowerForLoop(MakeForLoopGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Loop = IR.Functions[0].Blocks[0].Statements[0];
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Loop.LoopElementVariable = TEXT("ForEachArrayElement");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    FBPSemanticVariable Array;
+    Array.Name = TEXT("Numbers");
+    Array.Type.Kind = EBPSemanticTypeKind::Int32;
+    Array.Type.ContainerKind = TEXT("array");
+    Array.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Array);
+    FBPSemanticVariable Colliding;
+    Colliding.Name = Loop.LoopElementVariable;
+    Colliding.Type.Kind = EBPSemanticTypeKind::Int32;
+    Colliding.ReflectedCppType = TEXT("int32");
+    IR.Variables.Add(Colliding);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("要素ローカル変数との名前衝突を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachCollisionActor"),
+            TEXT("TEST_API"), Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("拒否理由がある"), Diagnostics.IsEmpty() == false);
+    return true;
+}
+
 #endif
