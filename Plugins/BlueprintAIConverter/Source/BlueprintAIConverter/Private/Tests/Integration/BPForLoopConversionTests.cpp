@@ -282,6 +282,49 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedBranchCodegenTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedBranchCodegen",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedBranchCodegenTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("基本BranchのLowering"),
+        FBPSemanticLowering::LowerForLoop(MakeForLoopBranchGraph(), SemanticIR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Outer =
+        SemanticIR.Functions[0].Blocks[0].Statements[0].LoopBodyStatements[0];
+    FBPSemanticStatement Inner;
+    Inner.Kind = EBPSemanticStatementKind::Branch;
+    Inner.Expression = Outer.Expression;
+    Inner.ThenStatements.Add(Outer.ThenStatements[0]);
+    Inner.ElseStatements.Add(Outer.ElseStatements[0]);
+    Outer.ThenStatements[0] = MoveTemp(Inner);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ネストBranchのC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopNestedBranchActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    const int32 OuterIf = Files.SourceContent.Find(TEXT("if (true)"));
+    const int32 InnerIf = Files.SourceContent.Find(TEXT("if (true)"), ESearchCase::CaseSensitive,
+        ESearchDir::FromStart, OuterIf + 1);
+    TestTrue(TEXT("二段のif文を生成"), OuterIf != INDEX_NONE && InnerIf > OuterIf);
+    TestTrue(TEXT("ネストのTrue/False文を生成"),
+        Files.SourceContent.Contains(TEXT("True body")) &&
+        Files.SourceContent.Contains(TEXT("False body")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedArithmeticComparisonTest,
     "BlueprintAIConverter.Conversion.ForLoop.NestedArithmeticComparison",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
