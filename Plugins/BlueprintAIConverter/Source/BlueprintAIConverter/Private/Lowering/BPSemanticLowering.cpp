@@ -1205,6 +1205,450 @@ bool LowerActorLocationImpl(const UBlueprint* Blueprint, const FBPGraphIR& Graph
     return OutIR.HasErrors() == false;
 }
 
+// CJ2: int32配列のForEach縦断経路。接続の一意性を厳密に検証する。
+// Index/Elementの文字列化だけを許可し、未知の式や制御フローは拒否する。
+bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
+    FBPSemanticIR& OutIR)
+{
+    OutIR = FBPSemanticIR();
+    OutIR.AssetPath = GraphIR.AssetPath;
+    OutIR.ParentClassPath = GraphIR.ParentClassPath;
+    if (Blueprint == nullptr || Blueprint->GeneratedClass == nullptr ||
+        Blueprint->NewVariables.Num() != GraphIR.BlueprintVariableCount)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(),
+            TEXT("ForEachLoop requires a compiled Blueprint with matching variables"));
+        return false;
+    }
+    FBPResolvedParentClass Parent;
+    TArray<FString> ParentErrors;
+    if (FBPParentClassResolver::ResolveActorParent(
+        GraphIR.ParentClassPath, Parent, ParentErrors) == false)
+    {
+        for (const FString& Error : ParentErrors)
+        {
+            AddDiagnostic(OutIR, FString(), FGuid(), Error);
+        }
+        return false;
+    }
+    const FBPIRGraph* Event = nullptr;
+    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    {
+        if (Graph.Kind == TEXT("event"))
+        {
+            if (Event != nullptr)
+            {
+                AddDiagnostic(OutIR, Graph.Name, FGuid(), TEXT("ForEachLoop requires one event graph"));
+                return false;
+            }
+            Event = &Graph;
+        }
+        else if (Graph.Name != TEXT("UserConstructionScript") ||
+            Graph.ExecEdges.IsEmpty() == false || Graph.DataEdges.IsEmpty() == false)
+        {
+            AddDiagnostic(OutIR, Graph.Name, FGuid(), TEXT("ForEachLoop has an unsupported graph"));
+            return false;
+        }
+    }
+    if (Event == nullptr)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("ForEachLoop event graph is missing"));
+        return false;
+    }
+    const FBPIRNode* Begin = nullptr;
+    const FBPIRNode* Loop = nullptr;
+    const FBPIRNode* Getter = nullptr;
+    TArray<const FBPIRNode*> Prints;
+    const FBPIRNode* IndexConverter = nullptr;
+    const FBPIRNode* ElementConverter = nullptr;
+    for (const FBPIRNode& Node : Event->Nodes)
+    {
+        if (Node.FunctionName == TEXT("ReceiveBeginPlay") &&
+            Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event"))
+        {
+            if (Begin != nullptr) { AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Multiple BeginPlay nodes")); return false; }
+            Begin = &Node;
+        }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
+            Node.MacroGraphName == TEXT("ForEachLoop") &&
+            // 名前だけでなく標準マクロの正規Graphパスを照合する。
+            // 同名のユーザーマクロを標準ForEachとして誤変換しない。
+            Node.MacroGraphPath ==
+                TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoop"))
+        {
+            if (Loop != nullptr) { AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Multiple ForEachLoop nodes")); return false; }
+            Loop = &Node;
+        }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_VariableGet") &&
+            Node.bVariableSelfContext)
+        {
+            if (Getter != nullptr) { AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Multiple array getters")); return false; }
+            Getter = &Node;
+        }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+            Node.FunctionName == TEXT("Conv_IntToString") &&
+            Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary"))
+        {
+            // 変換ノードの種類はリンクの接続元で後から判定する。
+            // 先に見つけたノードをIndexと断定しない。
+            if (IndexConverter == nullptr)
+            {
+                IndexConverter = &Node;
+            }
+            else if (ElementConverter == nullptr)
+            {
+                ElementConverter = &Node;
+            }
+            else
+            {
+                AddDiagnostic(OutIR, Event->Name, Node.Id,
+                    TEXT("ForEachLoop supports at most two int32 converters"));
+                return false;
+            }
+        }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+            Node.FunctionName == TEXT("PrintString") &&
+            Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetSystemLibrary"))
+        {
+            Prints.Add(&Node);
+        }
+        else
+        {
+            AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Unsupported node in ForEachLoop"));
+            return false;
+        }
+    }
+    if (Begin == nullptr || Loop == nullptr || Getter == nullptr || Prints.IsEmpty())
+    {
+        AddDiagnostic(OutIR, Event->Name, Loop != nullptr ? Loop->Id : FGuid(),
+            TEXT("ForEachLoop requires BeginPlay, array getter and PrintString"));
+        return false;
+    }
+    const FBPIRPin* BeginThen = FindPin(*Begin, TEXT("then"), EGPD_Output);
+    const FBPIRPin* Execute = FindPin(*Loop, TEXT("execute"), EGPD_Input);
+    const FBPIRPin* ArrayPin = FindPin(*Loop, TEXT("Array"), EGPD_Input);
+    const FBPIRPin* BodyPin = FindPin(*Loop, TEXT("LoopBody"), EGPD_Output);
+    const FBPIRPin* CompletedPin = FindPin(*Loop, TEXT("Completed"), EGPD_Output);
+    const FBPIRPin* ElementPin = FindPin(*Loop, TEXT("Array Element"), EGPD_Output);
+    const FBPIRPin* IndexPin = FindPin(*Loop, TEXT("Array Index"), EGPD_Output);
+    const FBPIRPin* GetterValue = FindPin(*Getter, Getter->VariableName, EGPD_Output);
+    if (BeginThen == nullptr || Execute == nullptr || ArrayPin == nullptr ||
+        BodyPin == nullptr || CompletedPin == nullptr || ElementPin == nullptr ||
+        IndexPin == nullptr || GetterValue == nullptr ||
+        ArrayPin->Category != TEXT("int") || ElementPin->Category != TEXT("int") ||
+        IndexPin->Category != TEXT("int") || GetterValue->Category != TEXT("int"))
+    {
+        AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop pins or int32 array type are unresolved"));
+        return false;
+    }
+    // 配列GetterとIndex→Conv_IntToString→PrintString以外のデータフローは拒否する。
+    // Array Elementの暗黙使用を見落とすと生成コードが元のBlueprintと異なる。
+    bool bArrayConnected = false;
+    const FBPIRNode* IndexConsumerPrint = nullptr;
+    const FBPIRNode* ElementConsumerPrint = nullptr;
+    // 最大2つの変換ノードを、実際の接続元（Array Index / Array Element）で識別する。
+    // ノード列挙順や関数名だけでは要素とIndexを区別できない。
+    const FBPIRNode* Converters[2] = { IndexConverter, ElementConverter };
+    int32 ExpectedDataEdges = 1;
+    for (const FBPIRNode* Converter : Converters)
+    {
+        if (Converter != nullptr)
+        {
+            ExpectedDataEdges += 2;
+        }
+    }
+    if (Event->DataEdges.Num() != ExpectedDataEdges)
+    {
+        AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop data link count is unsupported"));
+        return false;
+    }
+    int32 ArrayLinks = 0;
+    for (const FBPIRLink& Edge : Event->DataEdges)
+    {
+        if (Edge.SourceNode == Getter->Id && Edge.SourcePin == GetterValue->Id &&
+            Edge.TargetNode == Loop->Id && Edge.TargetPin == ArrayPin->Id)
+        {
+            ++ArrayLinks;
+        }
+    }
+    bArrayConnected = ArrayLinks == 1;
+    // すべてのデータエッジが許可済み3種類の接続に属することを確認する。
+    // リンク数だけの検証では、別の接続を同数だけ混入させた場合に見逃す。
+    for (const FBPIRLink& Edge : Event->DataEdges)
+    {
+        bool bRecognized = Edge.SourceNode == Getter->Id &&
+            Edge.SourcePin == GetterValue->Id && Edge.TargetNode == Loop->Id &&
+            Edge.TargetPin == ArrayPin->Id;
+        for (const FBPIRNode* Converter : Converters)
+        {
+            if (Converter == nullptr)
+            {
+                continue;
+            }
+            const FBPIRPin* Input = FindPin(*Converter, TEXT("InInt"), EGPD_Input);
+            const FBPIRPin* Output = FindPin(*Converter, TEXT("ReturnValue"), EGPD_Output);
+            if (Input == nullptr || Output == nullptr)
+            {
+                continue;
+            }
+            bRecognized |= Edge.SourceNode == Loop->Id &&
+                (Edge.SourcePin == IndexPin->Id || Edge.SourcePin == ElementPin->Id) &&
+                Edge.TargetNode == Converter->Id && Edge.TargetPin == Input->Id;
+            if (Edge.SourceNode == Converter->Id && Edge.SourcePin == Output->Id)
+            {
+                for (const FBPIRNode* Print : Prints)
+                {
+                    const FBPIRPin* TextPin = FindPin(*Print, TEXT("InString"), EGPD_Input);
+                    if (TextPin != nullptr && Edge.TargetNode == Print->Id &&
+                        Edge.TargetPin == TextPin->Id)
+                    {
+                        bRecognized = true;
+                    }
+                }
+            }
+        }
+        if (bRecognized == false)
+        {
+            AddDiagnostic(OutIR, Event->Name, Loop->Id,
+                TEXT("ForEachLoop has an unexpected data connection"));
+            return false;
+        }
+    }
+    for (const FBPIRNode* Converter : Converters)
+    {
+        if (Converter == nullptr)
+        {
+            continue;
+        }
+        const FBPIRPin* Input = FindPin(*Converter, TEXT("InInt"), EGPD_Input);
+        const FBPIRPin* Output = FindPin(*Converter, TEXT("ReturnValue"), EGPD_Output);
+        // 関数名と接続GUIDが正しくても、ピンの型が異なれば
+        // int32→FStringの変換として扱えない。破損IRや将来の型変更を拒否する。
+        if (Input == nullptr || Output == nullptr ||
+            Input->Category != TEXT("int") || Output->Category != TEXT("string"))
+        {
+            AddDiagnostic(OutIR, Event->Name, Converter->Id,
+                TEXT("ForEachLoop converter requires int32 input and string output"));
+            return false;
+        }
+        const FBPIRPin* OriginPin = nullptr;
+        const FBPIRNode* Consumer = nullptr;
+        int32 InputLinks = 0;
+        int32 OutputLinks = 0;
+        for (const FBPIRLink& Edge : Event->DataEdges)
+        {
+            if (Edge.TargetNode == Converter->Id && Edge.TargetPin == Input->Id &&
+                Edge.SourceNode == Loop->Id)
+            {
+                if (Edge.SourcePin == IndexPin->Id || Edge.SourcePin == ElementPin->Id)
+                {
+                    OriginPin = Edge.SourcePin == IndexPin->Id ? IndexPin : ElementPin;
+                    ++InputLinks;
+                }
+            }
+            if (Edge.SourceNode == Converter->Id && Edge.SourcePin == Output->Id)
+            {
+                for (const FBPIRNode* Print : Prints)
+                {
+                    const FBPIRPin* TextPin = FindPin(*Print, TEXT("InString"), EGPD_Input);
+                    if (TextPin != nullptr && Edge.TargetNode == Print->Id &&
+                        Edge.TargetPin == TextPin->Id)
+                    {
+                        Consumer = Print;
+                        ++OutputLinks;
+                    }
+                }
+            }
+        }
+        // 同じConverterの入力・出力だけでなく、他のConverterや配列Getterへ
+        // 同一ピンが二重接続されていないことをリンク数と併せて確認する。
+        // ForEachは純粋式の複製が起こり得るため、曖昧な共有接続を許容しない。
+        if (InputLinks != 1 || OutputLinks != 1 || Consumer == nullptr ||
+            (IndexConsumerPrint != nullptr && Consumer == IndexConsumerPrint) ||
+            (ElementConsumerPrint != nullptr && Consumer == ElementConsumerPrint))
+        {
+            AddDiagnostic(OutIR, Event->Name, Converter->Id, TEXT("ForEachLoop converter connections are ambiguous"));
+            return false;
+        }
+        if (OriginPin == IndexPin)
+        {
+            if (IndexConsumerPrint != nullptr)
+            {
+                AddDiagnostic(OutIR, Event->Name, Converter->Id, TEXT("Multiple Array Index consumers"));
+                return false;
+            }
+            IndexConsumerPrint = Consumer;
+        }
+        else
+        {
+            if (ElementConsumerPrint != nullptr)
+            {
+                AddDiagnostic(OutIR, Event->Name, Converter->Id, TEXT("Multiple Array Element consumers"));
+                return false;
+            }
+            ElementConsumerPrint = Consumer;
+        }
+    }
+    if (bArrayConnected == false)
+    {
+        AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop requires one direct array getter connection"));
+        return false;
+    }
+    // Edge配列の列挙順はBlueprintの実行順序ではない。
+    // GUIDによって入口を一意に検証し、LoopBody/Completedは後段で追跡する。
+    int32 EntryEdgeCount = 0;
+    for (const FBPIRLink& Edge : Event->ExecEdges)
+    {
+        if (Edge.SourceNode == Begin->Id && Edge.SourcePin == BeginThen->Id &&
+            Edge.TargetNode == Loop->Id && Edge.TargetPin == Execute->Id)
+        {
+            ++EntryEdgeCount;
+        }
+    }
+    if (Event->ExecEdges.Num() < 2 || EntryEdgeCount != 1)
+    {
+        AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop entry Exec is invalid"));
+        return false;
+    }
+    TArray<const FBPIRNode*> BodyPrints;
+    TArray<const FBPIRNode*> CompletedPrints;
+    TSet<FGuid> Visited;
+    auto ReadChain = [&](const FBPIRPin* Start, TArray<const FBPIRNode*>& OutPrints) -> bool
+    {
+        FGuid SourceNode = Loop->Id;
+        FGuid SourcePin = Start->Id;
+        while (true)
+        {
+            const FBPIRLink* Next = nullptr;
+            for (const FBPIRLink& Edge : Event->ExecEdges)
+            {
+                if (Edge.SourceNode == SourceNode && Edge.SourcePin == SourcePin)
+                {
+                    if (Next != nullptr) { return false; }
+                    Next = &Edge;
+                }
+            }
+            if (Next == nullptr) { return true; }
+            const FBPIRNode* Target = Event->Nodes.FindByPredicate(
+                [Next](const FBPIRNode& Node) { return Node.Id == Next->TargetNode; });
+            if (Target == nullptr || Target->FunctionName != TEXT("PrintString") ||
+                Visited.Contains(Target->Id))
+            {
+                return false;
+            }
+            const FBPIRPin* TargetExec = FindPin(*Target, TEXT("execute"), EGPD_Input);
+            if (TargetExec == nullptr || TargetExec->Id != Next->TargetPin) { return false; }
+            Visited.Add(Target->Id);
+            OutPrints.Add(Target);
+            const FBPIRPin* Then = FindPin(*Target, TEXT("then"), EGPD_Output);
+            if (Then == nullptr) { return true; }
+            SourceNode = Target->Id;
+            SourcePin = Then->Id;
+        }
+    };
+    if (ReadChain(BodyPin, BodyPrints) == false ||
+        ReadChain(CompletedPin, CompletedPrints) == false ||
+        BodyPrints.IsEmpty() || Visited.Num() != Prints.Num() ||
+        Event->ExecEdges.Num() != Visited.Num() + 1)
+    {
+        AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop Exec chains are ambiguous or disconnected"));
+        return false;
+    }
+    FBPSemanticVariableExtractor::Append(Blueprint, OutIR);
+    const FBPSemanticVariable* Variable = OutIR.Variables.FindByPredicate(
+        [Getter](const FBPSemanticVariable& Item) { return Item.Name == Getter->VariableName; });
+    if (Variable == nullptr || Variable->Type.Kind != EBPSemanticTypeKind::Int32 ||
+        Variable->Type.ContainerKind != TEXT("array") ||
+        Variable->ReflectedCppType != TEXT("TArray<int32>"))
+    {
+        AddDiagnostic(OutIR, Event->Name, Getter->Id, TEXT("ForEachLoop array member type is not verified int32[]"));
+        return false;
+    }
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    Block.SourceEntryNodeId = Begin->Id;
+    FBPSemanticStatement Statement;
+    Statement.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Statement.SourceNodeId = Loop->Id;
+    Statement.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Statement.LoopArray.VariableName = Getter->VariableName;
+    Statement.LoopArray.Type = Variable->Type;
+    Statement.LoopArray.SourceNodeId = Getter->Id;
+    Statement.LoopArray.SourcePinId = GetterValue->Id;
+    Statement.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Statement.LoopElementVariable = TEXT("ForEachArrayElement");
+    Statement.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    auto AppendPrints = [&](const TArray<const FBPIRNode*>& Nodes,
+        TArray<FBPSemanticStatement>& Destination) -> bool
+    {
+        for (const FBPIRNode* Print : Nodes)
+        {
+            FBPPrintStringCall Values;
+            if (AnalyzeBranchPrint(GraphIR, *Event, *Begin, *Print, Values, OutIR) == false)
+            {
+                return false;
+            }
+            FBPSemanticStatement Item;
+            Item.Kind = EBPSemanticStatementKind::Expression;
+            Item.SourceNodeId = Print->Id;
+            Item.Expression = MakePrintStringExpression(Values, *Print, GraphIR.ParentClassPath);
+            if (Print == IndexConsumerPrint || Print == ElementConsumerPrint)
+            {
+                // Completedからループ内のIndex/Elementを読む場合は値の寿命が異なるため拒否する。
+                if (&Destination == &Statement.CompletedStatements)
+                {
+                    AddDiagnostic(OutIR, Event->Name, Print->Id,
+                        TEXT("ForEachLoop Completed cannot reference Array Index"));
+                    return false;
+                }
+                FBPSemanticExpression Index;
+                Index.Kind = EBPSemanticExpressionKind::VariableReference;
+                Index.Type.Kind = EBPSemanticTypeKind::Int32;
+                Index.VariableName = Print == IndexConsumerPrint
+                    ? Statement.LoopIndexVariable : Statement.LoopElementVariable;
+                Index.SourceNodeId = Loop->Id;
+                Index.SourcePinId = Print == IndexConsumerPrint
+                    ? IndexPin->Id : ElementPin->Id;
+                FBPSemanticExpression Conversion;
+                Conversion.Kind = EBPSemanticExpressionKind::FunctionCall;
+                Conversion.Type.Kind = EBPSemanticTypeKind::String;
+                Conversion.FunctionName = TEXT("Conv_IntToString");
+                Conversion.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+                // 元の変換ノードGUIDは出典の追跡に必要。
+                for (const FBPIRNode* Converter : Converters)
+                {
+                    if (Converter != nullptr)
+                    {
+                        for (const FBPIRLink& Edge : Event->DataEdges)
+                        {
+                            if (Edge.SourceNode == Converter->Id &&
+                                Edge.TargetNode == Print->Id)
+                            {
+                                Conversion.SourceNodeId = Converter->Id;
+                            }
+                        }
+                    }
+                }
+                Conversion.Arguments.Add(MoveTemp(Index));
+                Item.Expression.Arguments[1] = MoveTemp(Conversion);
+            }
+            Destination.Add(MoveTemp(Item));
+        }
+        return true;
+    };
+    if (AppendPrints(BodyPrints, Statement.LoopBodyStatements) == false ||
+        AppendPrints(CompletedPrints, Statement.CompletedStatements) == false)
+    {
+        return false;
+    }
+    Block.Statements.Add(MoveTemp(Statement));
+    Function.Blocks.Add(MoveTemp(Block));
+    OutIR.Functions.Add(MoveTemp(Function));
+    return OutIR.HasErrors() == false;
+}
+
 bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
     OutIR = FBPSemanticIR();
@@ -2602,6 +3046,34 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
             bHasSetActorLocation |= Node.FunctionName == TEXT("K2_SetActorLocation");
             bHasBranch |= Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
             bHasForLoop |= Node.MacroGraphName == TEXT("ForLoop");
+        }
+    }
+    // ForEachLoopは配列要素型・配列の供給元・Exec経路の検証が必要。
+    // 未対応の段階で通常のPrintString経路へ誤振り分けしない。
+    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    {
+        for (const FBPIRNode& Node : Graph.Nodes)
+        {
+            if (Node.MacroGraphName == TEXT("ForEachLoop") ||
+                Node.MacroGraphName == TEXT("ForEachLoopWithBreak"))
+            {
+                OutIR = FBPSemanticIR();
+                OutIR.AssetPath = GraphIR.AssetPath;
+                OutIR.ParentClassPath = GraphIR.ParentClassPath;
+                if (Node.MacroGraphName == TEXT("ForEachLoop"))
+                {
+                    if (Blueprint == nullptr)
+                    {
+                        AddDiagnostic(OutIR, Graph.Name, Node.Id,
+                            TEXT("ForEachLoop requires a compiled Blueprint for array type resolution"));
+                        return false;
+                    }
+                    return LowerForEachLoopImpl(Blueprint, GraphIR, OutIR);
+                }
+                AddDiagnostic(OutIR, Graph.Name, Node.Id,
+                    TEXT("ForEachLoopWithBreak requires verified Break control flow"));
+                return false;
+            }
         }
     }
     if (bHasForLoop && bHasPrintString && bHasBranch == false &&

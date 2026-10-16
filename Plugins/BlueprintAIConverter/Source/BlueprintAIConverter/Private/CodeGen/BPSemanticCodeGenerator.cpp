@@ -1029,6 +1029,133 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     }
     const FBPSemanticStatement& Statement = Function.Blocks[0].Statements[0];
     const FBPSemanticExpression& Call = Statement.Expression;
+    if (Statement.Kind == EBPSemanticStatementKind::ForEachLoop)
+    {
+        // 配列の実体と要素型が確定したSemantic IRに限定する。
+        // ループローカル変数とBlueprintメンバーの衝突はC++の名前隠蔽を招くため拒否する。
+        // Breakと未知の式は未対応として成功扱いしない。
+        const FBPSemanticExpression& Array = Statement.LoopArray;
+        const FBPSemanticVariable* SourceVariable = IR.Variables.FindByPredicate(
+            [&Array](const FBPSemanticVariable& Variable)
+            {
+                return Variable.Name == Array.VariableName;
+            });
+        if (Array.Kind != EBPSemanticExpressionKind::VariableReference ||
+            Array.VariableName.IsNone() ||
+            IsIdentifier(Array.VariableName.ToString()) == false ||
+            Array.Type.ContainerKind != TEXT("array") ||
+            SourceVariable == nullptr ||
+            SourceVariable->Type.ContainerKind != TEXT("array") ||
+            SourceVariable->Type.Kind != EBPSemanticTypeKind::Int32 ||
+            Array.Type.Kind != EBPSemanticTypeKind::Int32 ||
+            Array.Type.Kind != SourceVariable->Type.Kind ||
+            Array.Type.ContainerKind != SourceVariable->Type.ContainerKind ||
+            SourceVariable->ReflectedCppType != TEXT("TArray<int32>") ||
+            Statement.LoopElementType.Kind != EBPSemanticTypeKind::Int32 ||
+            Statement.LoopElementVariable.IsNone() ||
+            IsIdentifier(Statement.LoopElementVariable.ToString()) == false ||
+            Statement.LoopIndexVariable.IsNone() ||
+            IsIdentifier(Statement.LoopIndexVariable.ToString()) == false ||
+            Statement.LoopIndexVariable == Statement.LoopElementVariable ||
+            Statement.LoopIndexVariable == Array.VariableName ||
+            Statement.LoopElementVariable == Array.VariableName ||
+            IR.Variables.ContainsByPredicate(
+                [&Statement](const FBPSemanticVariable& Variable)
+                {
+                    return Variable.Name == Statement.LoopIndexVariable ||
+                        Variable.Name == Statement.LoopElementVariable;
+                }) ||
+            Statement.LoopBodyStatements.IsEmpty())
+        {
+            OutDiagnostics.Add(TEXT("ForEachLoop requires a verified int32 array member and distinct element/index identifiers"));
+            return false;
+        }
+        FString BodyCode;
+        bool bUsesElement = false;
+        for (const FBPSemanticStatement& Body : Statement.LoopBodyStatements)
+        {
+            FString Part;
+            // 最初の対応形状は配列要素を参照しないPrintStringの直列実行のみ。
+            // 未解決の要素参照を暗黙に文字列へ変換しない。
+            if (Body.Kind != EBPSemanticStatementKind::Expression ||
+                Body.Expression.Arguments.Num() != 7 ||
+                (Body.Expression.Arguments[1].Kind != EBPSemanticExpressionKind::Literal &&
+                    (Body.Expression.Arguments[1].Kind != EBPSemanticExpressionKind::FunctionCall ||
+                        Body.Expression.Arguments[1].FunctionName != TEXT("Conv_IntToString") ||
+                        Body.Expression.Arguments[1].FunctionOwnerPath != TEXT("/Script/Engine.KismetStringLibrary") ||
+                        Body.Expression.Arguments[1].Arguments.Num() != 1 ||
+                        Body.Expression.Arguments[1].Arguments[0].Kind != EBPSemanticExpressionKind::VariableReference ||
+                        Body.Expression.Arguments[1].Arguments[0].Type.Kind != EBPSemanticTypeKind::Int32 ||
+                        (Body.Expression.Arguments[1].Arguments[0].VariableName != Statement.LoopIndexVariable &&
+                            Body.Expression.Arguments[1].Arguments[0].VariableName != Statement.LoopElementVariable))) ||
+                EmitPrintStringStatement(Body.Expression, IR.ParentClassPath,
+                    TEXT("        "), Part, OutDiagnostics) == false)
+            {
+                OutDiagnostics.Add(TEXT("ForEachLoop body requires a literal or verified int32 Index/Element PrintString"));
+                return false;
+            }
+            if (Body.Expression.Arguments[1].Kind == EBPSemanticExpressionKind::FunctionCall &&
+                Body.Expression.Arguments[1].Arguments[0].VariableName == Statement.LoopElementVariable)
+            {
+                bUsesElement = true;
+            }
+            BodyCode += Part;
+        }
+        FString CompletedCode;
+        for (const FBPSemanticStatement& Completed : Statement.CompletedStatements)
+        {
+            FString Part;
+            if (Completed.Kind != EBPSemanticStatementKind::Expression ||
+                Completed.Expression.Arguments.Num() != 7 ||
+                Completed.Expression.Arguments[1].Kind != EBPSemanticExpressionKind::Literal ||
+                EmitPrintStringStatement(Completed.Expression, IR.ParentClassPath,
+                    TEXT("    "), Part, OutDiagnostics) == false)
+            {
+                OutDiagnostics.Add(TEXT("ForEachLoop Completed requires a literal PrintString"));
+                return false;
+            }
+            CompletedCode += Part;
+        }
+        FString VariableDeclarations;
+        FString ConstructorBody;
+        if (EmitVariables(IR.Variables, ClassName, VariableDeclarations,
+            ConstructorBody, OutDiagnostics, VariableFallbackMode) == false)
+        {
+            return false;
+        }
+        const FString BaseName = ClassName.Mid(1);
+        const FString ApiPrefix = ModuleApiMacro.IsEmpty()
+            ? FString() : ModuleApiMacro + TEXT(" ");
+        const FString ConstructorDeclaration = ConstructorBody.IsEmpty()
+            ? FString() : FString::Printf(TEXT("public:\n    %s();\n\n"), *ClassName);
+        const FString UnrealTypeInclude = ConstructorBody.IsEmpty()
+            ? FString() : TEXT("#include \"UObject/UnrealType.h\"\n");
+        const FString ConstructorDefinition = ConstructorBody.IsEmpty()
+            ? FString() : FString::Printf(TEXT("\n%s::%s()\n{\n%s}\n"),
+                *ClassName, *ClassName, *ConstructorBody);
+        FBPGeneratedActorFiles Files;
+        Files.HeaderFileName = BaseName + TEXT(".h");
+        Files.SourceFileName = BaseName + TEXT(".cpp");
+        Files.HeaderContent = FString::Printf(
+            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%sprotected:\n    virtual void BeginPlay() override;\n};\n"),
+            *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
+            *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration);
+        // 配列要素の参照がある場合のみローカル変数を生成する。
+        // 未使用の要素コピーを避け、要素参照は現在の反復位置に限定する。
+        const FString ElementDeclaration = bUsesElement
+            ? FString::Printf(TEXT("        const int32 %s = %s[%s];\n"),
+                *Statement.LoopElementVariable.ToString(),
+                *Array.VariableName.ToString(), *Statement.LoopIndexVariable.ToString())
+            : FString();
+        Files.SourceContent = FString::Printf(
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    for (int32 %s = 0; %s < %s.Num(); ++%s)\n    {\n%s%s    }\n%s}\n"),
+            *BaseName, *UnrealTypeInclude, *ConstructorDefinition, *ClassName,
+            *Statement.LoopIndexVariable.ToString(), *Statement.LoopIndexVariable.ToString(),
+            *Array.VariableName.ToString(), *Statement.LoopIndexVariable.ToString(),
+            *ElementDeclaration, *BodyCode, *CompletedCode);
+        OutFiles = MoveTemp(Files);
+        return true;
+    }
     if (Statement.Kind == EBPSemanticStatementKind::ForLoop)
     {
         int32 FirstIndex = 0;

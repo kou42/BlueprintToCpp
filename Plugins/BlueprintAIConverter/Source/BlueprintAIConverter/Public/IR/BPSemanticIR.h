@@ -70,7 +70,9 @@ enum class EBPSemanticStatementKind : uint8
     Assignment,
     Return,
     Branch,
-    ForLoop
+    ForLoop,
+    // CJ2: 配列反復を数値範囲ループと区別する。未解決の配列は生成しない。
+    ForEachLoop
 };
 
 struct FBPSemanticStatement
@@ -88,6 +90,10 @@ struct FBPSemanticStatement
     FBPSemanticExpression LoopLastIndex;
     TArray<FBPSemanticStatement> LoopBodyStatements;
     TArray<FBPSemanticStatement> CompletedStatements;
+    // ForEachLoop: 配列入力と現在要素の型が確定した場合のみ使用する。
+    FBPSemanticExpression LoopArray;
+    FName LoopElementVariable;
+    FBPSemanticType LoopElementType;
 };
 
 struct FBPSemanticBasicBlock

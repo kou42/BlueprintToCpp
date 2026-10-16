@@ -5,6 +5,11 @@
 #include "BPSemanticCodeGenerator.h"
 #include "BPSemanticJsonSerializer.h"
 #include "BPSemanticLowering.h"
+#include "EdGraphSchema_K2.h"
+#include "Engine/Blueprint.h"
+#include "GameFramework/Actor.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
 
 namespace
 {
@@ -1542,6 +1547,623 @@ bool FBPForLoopMultipleCompletedCodegenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Completed文はfor文の後に生成される"),
         FirstPosition > Files.SourceContent.Find(TEXT("++LoopIndex")));
     return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachUnsupportedDiagnosticTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.UnresolvedArrayDiagnostic",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachUnsupportedDiagnosticTest::RunTest(const FString& Parameters)
+{
+    // 配列要素型が未解決のForEachを成功扱いせず、元ノードGUIDまで報告する。
+    for (const FString MacroName : { FString(TEXT("ForEachLoop")),
+                                     FString(TEXT("ForEachLoopWithBreak")) })
+    {
+        FBPGraphIR GraphIR;
+        GraphIR.AssetPath = TEXT("/Game/BP_ForEach");
+        GraphIR.ParentClassPath = TEXT("/Script/Engine.Actor");
+        FBPIRGraph Graph;
+        Graph.Name = TEXT("EventGraph");
+        Graph.Kind = TEXT("event");
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.MacroGraphName = MacroName;
+        Graph.Nodes.Add(Node);
+        GraphIR.Graphs.Add(Graph);
+
+        FBPSemanticIR SemanticIR;
+        TestFalse(TEXT("未解決ForEachを拒否"), FBPSemanticLowering::Lower(nullptr, GraphIR, SemanticIR));
+        TestTrue(TEXT("未解決ForEachに診断あり"), SemanticIR.HasErrors());
+        if (SemanticIR.Diagnostics.IsEmpty() == false)
+        {
+            TestEqual(TEXT("元ノードGUIDを保持"), SemanticIR.Diagnostics[0].NodeId, Node.Id);
+            TestTrue(TEXT("Macro名を診断に保持"),
+                SemanticIR.Diagnostics[0].Message.Contains(MacroName));
+        }
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachJsonContractTest,
+    "BlueprintAIConverter.Export.ForEachLoop.SemanticJsonContract",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachJsonContractTest::RunTest(const FString& Parameters)
+{
+    // 実際のLowering完了前でも、専用の配列・要素情報がJSON契約で失われないことを確認する。
+    FBPSemanticIR IR;
+    IR.AssetPath = TEXT("/Game/BP_ForEach");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Statement;
+    Statement.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Statement.LoopElementVariable = TEXT("Element");
+    Statement.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Statement.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Statement.LoopArray.VariableName = TEXT("Numbers");
+    Statement.LoopArray.Type.ContainerKind = TEXT("array");
+    Block.Statements.Add(Statement);
+    Function.Blocks.Add(Block);
+    IR.Functions.Add(Function);
+
+    FString Json;
+    TestTrue(TEXT("ForEach JSONをシリアライズ"), FBPSemanticJsonSerializer::Serialize(IR, TEXT("5.7.4"), Json));
+    TestTrue(TEXT("ForEach文種別"), Json.Contains(TEXT("for_each_loop")));
+    TestTrue(TEXT("配列入力"), Json.Contains(TEXT("loop_array")));
+    TestTrue(TEXT("要素変数"), Json.Contains(TEXT("loop_element_variable")) && Json.Contains(TEXT("Element")));
+    TestTrue(TEXT("要素型"), Json.Contains(TEXT("loop_element_type")));
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachCodeGenRejectsUnresolvedTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.RejectsUnresolvedArray",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachCodeGenRejectsUnresolvedTest::RunTest(const FString& Parameters)
+{
+    // 型が未確定の配列に対して、推測でC++を生成しないことを確認する。
+    FBPSemanticIR IR;
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ArrayIndex");
+    Loop.LoopElementVariable = TEXT("ArrayElement");
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("MissingArray");
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    Block.Statements.Add(Loop);
+    Function.Blocks.Add(Block);
+    IR.Functions.Add(Function);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("未解決配列を拒否"),
+        FBPSemanticCodeGenerator::Generate(
+            IR, TEXT("AForEachActor"), TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("拒否理由を診断"), Diagnostics.IsEmpty() == false);
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachIndexCodeGenTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.IndexToStringCodeGen",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachIndexCodeGenTest::RunTest(const FString& Parameters)
+{
+    // 既存のForLoopテストから検証済みPrintString式を再利用する。
+    // Index参照がForEachローカル変数として生成されることを確認する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintString式を含むIRの生成"),
+        FBPSemanticLowering::LowerForLoop(MakeForLoopGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Loop = IR.Functions[0].Blocks[0].Statements[0];
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Loop.LoopElementVariable = TEXT("ForEachArrayElement");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("Numbers");
+    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+    Variable.Type.ContainerKind = TEXT("array");
+    Variable.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Variable);
+    // 元のForLoopのIndex式をForEachローカルIndexへ置換する。
+    FBPSemanticExpression& IndexText = Loop.LoopBodyStatements[0].Expression.Arguments[1];
+    if (TestTrue(TEXT("Index文字列変換式が存在"),
+        IndexText.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        IndexText.Arguments.Num() == 1) == false)
+    {
+        return false;
+    }
+    IndexText.Arguments[0].VariableName = Loop.LoopIndexVariable;
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ForEach Indexのコード生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachIndexActor"),
+            TEXT("TEST_API"), Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("配列長で反復"), Files.SourceContent.Contains(TEXT("Numbers.Num()")));
+    TestTrue(TEXT("Indexを文字列化"),
+        Files.SourceContent.Contains(TEXT("Conv_IntToString(ForEachArrayIndex)")));
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachElementCodeGenTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.ElementToStringCodeGen",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachElementCodeGenTest::RunTest(const FString& Parameters)
+{
+    // 既存のForLoopテストから検証済みPrintString式を再利用する。
+    // Index参照がForEachローカル変数として生成されることを確認する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintString式を含むIRの生成"),
+        FBPSemanticLowering::LowerForLoop(MakeForLoopGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Loop = IR.Functions[0].Blocks[0].Statements[0];
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Loop.LoopElementVariable = TEXT("ForEachArrayElement");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("Numbers");
+    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+    Variable.Type.ContainerKind = TEXT("array");
+    Variable.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Variable);
+    // 元のForLoopのIndex式をForEachローカルIndexへ置換する。
+    FBPSemanticExpression& IndexText = Loop.LoopBodyStatements[0].Expression.Arguments[1];
+    if (TestTrue(TEXT("Index文字列変換式が存在"),
+        IndexText.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        IndexText.Arguments.Num() == 1) == false)
+    {
+        return false;
+    }
+    IndexText.Arguments[0].VariableName = Loop.LoopElementVariable;
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ForEach Indexのコード生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachIndexActor"),
+            TEXT("TEST_API"), Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("配列長で反復"), Files.SourceContent.Contains(TEXT("Numbers.Num()")));
+    TestTrue(TEXT("Elementを文字列化"),
+        Files.SourceContent.Contains(TEXT("Conv_IntToString(ForEachArrayElement)")));
+    TestTrue(TEXT("要素変数を生成"),
+        Files.SourceContent.Contains(TEXT("const int32 ForEachArrayElement = Numbers[ForEachArrayIndex];")));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachIndexElementTogetherCodeGenTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.IndexAndElementCodeGen",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachIndexElementTogetherCodeGenTest::RunTest(const FString& Parameters)
+{
+    // 同じループ内でIndexとElementを使った場合、両方が正しいスコープに
+    // 出力されることを確認する。Printfの引数対応ずれも検出する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("元のForLoopをLowering"),
+        FBPSemanticLowering::LowerForLoop(MakeForLoopGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Loop = IR.Functions[0].Blocks[0].Statements[0];
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Loop.LoopElementVariable = TEXT("ForEachArrayElement");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("Numbers");
+    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+    Variable.Type.ContainerKind = TEXT("array");
+    Variable.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Variable);
+
+    if (TestTrue(TEXT("2個のBody PrintStringが存在"),
+        Loop.LoopBodyStatements.Num() >= 2) == false)
+    {
+        return false;
+    }
+    FBPSemanticExpression& IndexText = Loop.LoopBodyStatements[0].Expression.Arguments[1];
+    if (TestTrue(TEXT("Index変換式が存在"),
+        IndexText.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        IndexText.Arguments.Num() == 1) == false)
+    {
+        return false;
+    }
+    IndexText.Arguments[0].VariableName = Loop.LoopIndexVariable;
+    FBPSemanticExpression& ElementText = Loop.LoopBodyStatements[1].Expression.Arguments[1];
+    ElementText = IndexText;
+    ElementText.Arguments[0].VariableName = Loop.LoopElementVariable;
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("IndexとElementのコード生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachBothActor"),
+            TEXT("TEST_API"), Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("正しいループヘッダ"),
+        Files.SourceContent.Contains(TEXT("for (int32 ForEachArrayIndex = 0; ForEachArrayIndex < Numbers.Num(); ++ForEachArrayIndex)")));
+    const int32 Declaration = Files.SourceContent.Find(
+        TEXT("const int32 ForEachArrayElement = Numbers[ForEachArrayIndex];"));
+    const int32 IndexPrint = Files.SourceContent.Find(
+        TEXT("Conv_IntToString(ForEachArrayIndex)"));
+    const int32 ElementPrint = Files.SourceContent.Find(
+        TEXT("Conv_IntToString(ForEachArrayElement)"));
+    TestTrue(TEXT("要素宣言と2個のPrintStringが正しい順序"),
+        Declaration != INDEX_NONE && IndexPrint > Declaration &&
+        ElementPrint > IndexPrint);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachTypeMismatchCodeGenTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.RejectsMismatchedArrayType",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachTypeMismatchCodeGenTest::RunTest(const FString& Parameters)
+{
+    // 配列の型がSemantic IR内で食い違う場合は、型推測で生成しない。
+    FBPSemanticIR IR;
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Loop.LoopElementVariable = TEXT("ForEachArrayElement");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::String;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("Numbers");
+    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+    Variable.Type.ContainerKind = TEXT("array");
+    Variable.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Variable);
+    Block.Statements.Add(MoveTemp(Loop));
+    Function.Blocks.Add(MoveTemp(Block));
+    IR.Functions.Add(MoveTemp(Function));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("矛盾する配列型は拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachTypeActor"),
+            TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("型矛盾の診断を出力"), Diagnostics.IsEmpty() == false);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachLocalNameCollisionTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.RejectsLocalNameCollision",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachLocalNameCollisionTest::RunTest(const FString& Parameters)
+{
+    // Blueprintメンバー名が生成予定のIndex/Elementと重なると、
+    // C++のローカル変数による名前隠蔽が起きるため生成を拒否する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("元のForLoopをLowering"),
+        FBPSemanticLowering::LowerForLoop(MakeForLoopGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Loop = IR.Functions[0].Blocks[0].Statements[0];
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Loop.LoopElementVariable = TEXT("ForEachArrayElement");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    FBPSemanticVariable Array;
+    Array.Name = TEXT("Numbers");
+    Array.Type.Kind = EBPSemanticTypeKind::Int32;
+    Array.Type.ContainerKind = TEXT("array");
+    Array.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Array);
+    FBPSemanticVariable Colliding;
+    Colliding.Name = Loop.LoopElementVariable;
+    Colliding.Type.Kind = EBPSemanticTypeKind::Int32;
+    Colliding.ReflectedCppType = TEXT("int32");
+    IR.Variables.Add(Colliding);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("要素ローカル変数との名前衝突を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachCollisionActor"),
+            TEXT("TEST_API"), Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("拒否理由がある"), Diagnostics.IsEmpty() == false);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachCompiledBlueprintLoweringTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.CompiledBlueprintLowering",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
+{
+    // Graphのノード・リンクは既存のForLoop fixtureをForEach形状へ組み替える。
+    // 配列変数だけは実際にコンパイルしたBlueprintから反射情報を取得する。
+    // このテストはGraph IR以降の縦断検証であり、実ノードの配置テストとは区別する。
+    const FName Name = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_ForEachLowering"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        AActor::StaticClass(), GetTransientPackage(), Name, BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("一時Blueprint"), Blueprint) == false)
+    {
+        return false;
+    }
+    FEdGraphPinType Type;
+    Type.PinCategory = UEdGraphSchema_K2::PC_Int;
+    Type.ContainerType = EPinContainerType::Array;
+    if (TestTrue(TEXT("配列変数を追加"),
+        FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("Numbers"), Type)) == false)
+    {
+        return false;
+    }
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (TestNotNull(TEXT("GeneratedClass"), Blueprint->GeneratedClass.Get()) == false)
+    {
+        return false;
+    }
+    FBPGraphIR GraphIR = MakeForLoopGraph();
+    GraphIR.AssetPath = Blueprint->GetPathName();
+    GraphIR.BlueprintVariableCount = Blueprint->NewVariables.Num();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    FBPIRNode& Loop = Graph.Nodes[1];
+    Loop.MacroGraphName = TEXT("ForEachLoop");
+    Loop.MacroGraphPath = TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoop");
+    // 既存fixtureのExec/Dataリンクが参照するPinIdは変更しない。
+    // ForLoop由来のピンをForEachの名前・方向に置き換える。
+    // 実ノードのピン配置と一致するかは別途Editor Golden Testで確認する。
+    Loop.Pins[1].Name = TEXT("Array");
+    Loop.Pins[1].DefaultValue.Reset();
+    Loop.Pins[2].Name = TEXT("Array Element");
+    Loop.Pins[2].Direction = EGPD_Output;
+    Loop.Pins[2].DefaultValue.Reset();
+    Loop.Pins[4].Name = TEXT("Array Index");
+    // Completedは元のPins[5]、LoopBodyはPins[3]に保持される。
+    // 実ノードではピン配列順に意味がないため、名前とGUIDで検証する。
+    FBPIRNode Getter;
+    Getter.Id = FGuid::NewGuid();
+    Getter.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_VariableGet");
+    Getter.VariableName = TEXT("Numbers");
+    Getter.bVariableSelfContext = true;
+    Getter.Pins.Add(MakeLoopPin(TEXT("Numbers"), EGPD_Output, TEXT("int")));
+    FBPIRLink ArrayEdge;
+    ArrayEdge.SourceNode = Getter.Id;
+    ArrayEdge.SourcePin = Getter.Pins[0].Id;
+    ArrayEdge.TargetNode = Loop.Id;
+    ArrayEdge.TargetPin = Loop.Pins[1].Id;
+    Graph.DataEdges.Add(ArrayEdge);
+    // GUIDの参照整合性が崩れると、Loweringは接続のない配列として拒否する。
+    // fixtureのピン差し替えによる回帰をここで検出する。
+    TestTrue(TEXT("配列入力のPinIdがデータリンクと一致"),
+        Graph.DataEdges.Last().TargetPin == Loop.Pins[1].Id);
+    TestTrue(TEXT("Index出力のPinIdが変換ノードへのリンクと一致"),
+        Graph.DataEdges[0].SourcePin == Loop.Pins[4].Id);
+    Graph.Nodes.Add(MoveTemp(Getter));
+    for (FBPIRNode& Node : Graph.Nodes)
+    {
+        if (Node.FunctionName == TEXT("PrintString"))
+        {
+            Node.FunctionOwnerPath = TEXT("/Script/Engine.KismetSystemLibrary");
+        }
+    }
+
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("コンパイル済みBlueprintからForEachをLowering"),
+        FBPSemanticLowering::Lower(Blueprint, GraphIR, SemanticIR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : SemanticIR.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("ForEach文へ構造化"),
+        SemanticIR.Functions.Num() == 1 &&
+        SemanticIR.Functions[0].Blocks.Num() == 1 &&
+        SemanticIR.Functions[0].Blocks[0].Statements.Num() == 1 &&
+        SemanticIR.Functions[0].Blocks[0].Statements[0].Kind ==
+            EBPSemanticStatementKind::ForEachLoop);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    const bool bGenerated = FBPSemanticCodeGenerator::Generate(
+        SemanticIR, TEXT("AForEachCompiledActor"), TEXT("TEST_API"),
+        Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly);
+    TestTrue(TEXT("Lowering結果からC++を生成"), bGenerated);
+    if (bGenerated)
+    {
+        TestTrue(TEXT("配列長による反復"),
+            Files.SourceContent.Contains(TEXT("Numbers.Num()")));
+        TestTrue(TEXT("Indexの文字列変換"),
+            Files.SourceContent.Contains(TEXT("Conv_IntToString(ForEachArrayIndex)")));
+    }
+    else
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+    }
+    if (bGenerated == false)
+    {
+        return false;
+    }
+
+    // 配列Getterから同じ入力への二重リンクは、リンク数が増えた時点で拒否する。
+    // 正常なIRをコピーして破壊するため、以降のケース間で状態を共有しない。
+    FBPGraphIR DuplicateGraph = GraphIR;
+    DuplicateGraph.Graphs[0].DataEdges.Add(ArrayEdge);
+    FBPSemanticIR DuplicateIR;
+    TestFalse(TEXT("配列入力への重複リンクを拒否"),
+        FBPSemanticLowering::Lower(Blueprint, DuplicateGraph, DuplicateIR));
+    TestTrue(TEXT("重複リンクの拒否理由を保持"),
+        DuplicateIR.HasErrors());
+
+    // リンク数が正常でも、配列Getterが別の入力ピンへ接続されていれば
+    // 正当な配列供給元と見なさない。リンク数だけの検証への退行を防ぐ。
+    FBPGraphIR WrongPinGraph = GraphIR;
+    WrongPinGraph.Graphs[0].DataEdges.Last().TargetPin = FGuid::NewGuid();
+    FBPSemanticIR WrongPinIR;
+    TestFalse(TEXT("配列入力の接続先GUID不一致を拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongPinGraph, WrongPinIR));
+    TestTrue(TEXT("接続先GUID不一致の診断を保持"),
+        WrongPinIR.HasErrors());
+
+    // 同名のユーザー定義マクロや、別の標準マクロのGraphを
+    // ForEachLoopと誤認してC++化しないことを検証する。
+    FBPGraphIR WrongMacroPath = GraphIR;
+    WrongMacroPath.Graphs[0].Nodes[1].MacroGraphPath =
+        TEXT("/Game/Macros.CustomMacros:ForEachLoop");
+    FBPSemanticIR WrongMacroPathIR;
+    TestFalse(TEXT("同名のユーザーマクロを拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongMacroPath, WrongMacroPathIR));
+    TestTrue(TEXT("ユーザーマクロの拒否理由を保持"),
+        WrongMacroPathIR.HasErrors());
+
+    FBPGraphIR WrongStandardMacro = GraphIR;
+    WrongStandardMacro.Graphs[0].Nodes[1].MacroGraphPath =
+        TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForLoop");
+    FBPSemanticIR WrongStandardMacroIR;
+    TestFalse(TEXT("異なる標準マクロのGraphを拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongStandardMacro, WrongStandardMacroIR));
+    TestTrue(TEXT("標準マクロGraph不一致の診断を保持"),
+        WrongStandardMacroIR.HasErrors());
+
+    // ForEach本体のElement/Index型も反射済みint32配列と整合する必要がある。
+    // 変換ノード側がint32でも、Macroの出力型が異なれば拒否する。
+    FBPGraphIR WrongElementType = GraphIR;
+    WrongElementType.Graphs[0].Nodes[1].Pins[2].Category = TEXT("float");
+    FBPSemanticIR WrongElementTypeIR;
+    TestFalse(TEXT("ForEach Element出力の型不一致を拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongElementType, WrongElementTypeIR));
+    TestTrue(TEXT("Element型不一致の診断を保持"),
+        WrongElementTypeIR.HasErrors());
+
+    FBPGraphIR WrongIndexType = GraphIR;
+    WrongIndexType.Graphs[0].Nodes[1].Pins[4].Category = TEXT("float");
+    FBPSemanticIR WrongIndexTypeIR;
+    TestFalse(TEXT("ForEach Index出力の型不一致を拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongIndexType, WrongIndexTypeIR));
+    TestTrue(TEXT("Index型不一致の診断を保持"),
+        WrongIndexTypeIR.HasErrors());
+
+    // 接続GUIDが正しくても、Conv_IntToStringのピン型が不正なら拒否する。
+    // 型の違うノードを関数名だけで誤変換しないための回帰検証。
+    FBPGraphIR WrongConverterInput = GraphIR;
+    WrongConverterInput.Graphs[0].Nodes[4].Pins[0].Category = TEXT("float");
+    FBPSemanticIR WrongConverterInputIR;
+    TestFalse(TEXT("変換ノードの非int32入力を拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongConverterInput, WrongConverterInputIR));
+    TestTrue(TEXT("変換入力型不一致の診断を保持"),
+        WrongConverterInputIR.HasErrors());
+
+    FBPGraphIR WrongConverterOutput = GraphIR;
+    WrongConverterOutput.Graphs[0].Nodes[4].Pins[1].Category = TEXT("text");
+    FBPSemanticIR WrongConverterOutputIR;
+    TestFalse(TEXT("変換ノードの非string出力を拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongConverterOutput, WrongConverterOutputIR));
+    TestTrue(TEXT("変換出力型不一致の診断を保持"),
+        WrongConverterOutputIR.HasErrors());
+
+    // 変換ノードへのIndexリンクをElementリンクに変更した場合は
+    // 誤ってIndex式として出力せず、実際の接続元に従って型付けする。
+    FBPGraphIR ElementGraph = GraphIR;
+    ElementGraph.Graphs[0].DataEdges[0].SourcePin =
+        ElementGraph.Graphs[0].Nodes[1].Pins[2].Id;
+    FBPSemanticIR ElementIR;
+    const bool bElementLowered =
+        FBPSemanticLowering::Lower(Blueprint, ElementGraph, ElementIR);
+    TestTrue(TEXT("Array Elementの接続元を識別"), bElementLowered);
+    if (bElementLowered)
+    {
+        FBPGeneratedActorFiles ElementFiles;
+        TArray<FString> ElementDiagnostics;
+        const bool bElementGenerated = FBPSemanticCodeGenerator::Generate(
+            ElementIR, TEXT("AForEachElementCompiledActor"), TEXT("TEST_API"),
+            ElementFiles, ElementDiagnostics,
+            EBPVariableFallbackMode::DeclarationOnly);
+        TestTrue(TEXT("Element参照のC++生成"), bElementGenerated);
+        if (bElementGenerated)
+        {
+            TestTrue(TEXT("Elementを配列から取得"),
+                ElementFiles.SourceContent.Contains(
+                    TEXT("const int32 ForEachArrayElement = Numbers[ForEachArrayIndex];")));
+            TestTrue(TEXT("Elementを文字列へ変換"),
+                ElementFiles.SourceContent.Contains(
+                    TEXT("Conv_IntToString(ForEachArrayElement)")));
+        }
+        else
+        {
+            for (const FString& Diagnostic : ElementDiagnostics)
+            {
+                AddError(Diagnostic);
+            }
+        }
+    }
+    else
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : ElementIR.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+    }
+    return bElementLowered;
 }
 
 #endif
