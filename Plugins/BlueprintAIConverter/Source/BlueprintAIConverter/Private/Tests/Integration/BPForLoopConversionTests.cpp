@@ -282,6 +282,88 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedIndexAdditionTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedIndexAddition",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedIndexAdditionTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR GraphIR = MakeForLoopBranchGraph();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    FBPIRNode& Inner = Graph.Nodes[2];
+    Inner.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+    Inner.MacroGraphName = TEXT("ForLoop");
+    Inner.Pins.Reset();
+    Inner.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("4")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+    Graph.Nodes.RemoveAt(5);
+    Graph.Nodes.RemoveAt(4);
+    Graph.ExecEdges.Reset();
+    const auto Connect = [&Graph](const FBPIRNode& Source, int32 Output,
+        const FBPIRNode& Target, int32 Input, bool bData)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Source.Id;
+        Edge.SourcePin = Source.Pins[Output].Id;
+        Edge.TargetNode = Target.Id;
+        Edge.TargetPin = Target.Pins[Input].Id;
+        if (bData)
+        {
+            Graph.DataEdges.Add(Edge);
+        }
+        else
+        {
+            Graph.ExecEdges.Add(Edge);
+        }
+    };
+    Connect(Graph.Nodes[0], 0, Graph.Nodes[1], 0, false);
+    Connect(Graph.Nodes[1], 3, Graph.Nodes[2], 0, false);
+    Connect(Graph.Nodes[2], 3, Graph.Nodes[3], 0, false);
+    FBPIRNode Addition;
+    Addition.Id = FGuid::NewGuid();
+    Addition.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Addition.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Addition.FunctionName = TEXT("Add_IntInt");
+    Addition.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("int")));
+    FBPIRNode Converter;
+    Converter.Id = FGuid::NewGuid();
+    Converter.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Converter.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+    Converter.FunctionName = TEXT("Conv_IntToString");
+    Converter.Pins.Add(MakeLoopPin(TEXT("InInt"), EGPD_Input, TEXT("int")));
+    Converter.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("string")));
+    Connect(Graph.Nodes[1], 4, Addition, 0, true);
+    Connect(Graph.Nodes[2], 4, Addition, 1, true);
+    Connect(Addition, 2, Converter, 0, true);
+    Connect(Converter, 1, Graph.Nodes[3], 1, true);
+    Graph.Nodes.Add(MoveTemp(Addition));
+    Graph.Nodes.Add(MoveTemp(Converter));
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("二重ForLoop Index加算Lowering"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("二重ForLoop Index加算CodeGen"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopIndexSumActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("外側と内側Indexの加算"),
+        Files.SourceContent.Contains(TEXT(
+            "UKismetStringLibrary::Conv_IntToString(UKismetMathLibrary::Add_IntInt(LoopIndex, InnerIndex))")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedMultipleIndexConvertersTest,
     "BlueprintAIConverter.Conversion.ForLoop.NestedMultipleIndexConverters",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
