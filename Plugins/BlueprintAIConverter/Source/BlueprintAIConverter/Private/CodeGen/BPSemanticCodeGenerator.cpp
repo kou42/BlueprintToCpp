@@ -1143,8 +1143,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         Files.SourceContent = FString::Printf(
             TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    for (int32 %s = 0; %s < %s.Num(); ++%s)\n    {\n%s%s    }\n%s}\n"),
             *BaseName, *UnrealTypeInclude, *ConstructorDefinition, *ClassName,
-            *Statement.LoopIndexVariable.ToString(), *Array.VariableName.ToString(),
-            *Statement.LoopIndexVariable.ToString(), *ElementDeclaration, *BodyCode, *CompletedCode);
+            *Statement.LoopIndexVariable.ToString(), *Statement.LoopIndexVariable.ToString(),
+            *Array.VariableName.ToString(), *Statement.LoopIndexVariable.ToString(),
+            *ElementDeclaration, *BodyCode, *CompletedCode);
         OutFiles = MoveTemp(Files);
         return true;
     }
