@@ -1686,6 +1686,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 return true;
             };
             const FBPIRPin* Operands[] = { A, B };
+            int32 ConsumedComparisonDataEdges = 1;
             for (const FBPIRPin* Operand : Operands)
             {
                 const FBPIRLink* IndexEdge = nullptr;
@@ -1704,7 +1705,8 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 }
                 if (IndexEdge != nullptr)
                 {
-                    // Indexだけをローカル変数として参照できる。未知のデータソースは拒否する。
+                    ++ConsumedComparisonDataEdges;
+                    // Indexまたは検証済みの一段四則演算だけを参照する。
                     if (IndexEdge->SourceNode != Loop->Id ||
                         IndexEdge->SourcePin != LoopIndex->Id)
                     {
@@ -1714,6 +1716,13 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                             AddDiagnostic(OutIR, EventGraph->Name, BodyComparison->Id,
                                 TEXT("ForLoop comparison operand source is unsupported"));
                             return false;
+                        }
+                        for (const FBPSemanticExpression& Argument : Arithmetic.Arguments)
+                        {
+                            if (Argument.Kind == EBPSemanticExpressionKind::VariableReference)
+                            {
+                                ++ConsumedComparisonDataEdges;
+                            }
                         }
                         BranchStatement.Expression.Arguments.Add(MoveTemp(Arithmetic));
                         continue;
@@ -1739,6 +1748,13 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                     BranchStatement.Expression.Arguments.Add(
                         Literal(Comparison.OperandType, Value, *BodyComparison, Operand->Name));
                 }
+            }
+            if (ConsumedComparisonDataEdges != EventGraph->DataEdges.Num() ||
+                (BodyArithmetic != nullptr && ConsumedComparisonDataEdges < 3))
+            {
+                AddDiagnostic(OutIR, EventGraph->Name, BodyComparison->Id,
+                    TEXT("ForLoop comparison contains disconnected or ambiguous data links"));
+                return false;
             }
         }
         FBPSemanticStatement ThenStatement;
