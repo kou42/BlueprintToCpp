@@ -1132,7 +1132,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         // 配列要素の参照がある場合のみローカル変数を生成する。
         // 未使用の要素コピーを避け、要素参照は現在の反復位置に限定する。
         const FString ElementDeclaration = bUsesElement
-            ? FString::Printf(TEXT("        const int32 %s = %s[%s];\\n"),
+            ? FString::Printf(TEXT("        const int32 %s = %s[%s];\n"),
                 *Statement.LoopElementVariable.ToString(),
                 *Array.VariableName.ToString(), *Statement.LoopIndexVariable.ToString())
             : FString();
