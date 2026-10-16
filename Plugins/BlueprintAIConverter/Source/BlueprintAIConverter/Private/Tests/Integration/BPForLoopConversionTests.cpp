@@ -347,7 +347,28 @@ bool FBPForLoopMultipleNestedComparisonsTest::RunTest(const FString& Parameters)
     Connect(OuterComparison, 2, Graph.Nodes[2], 1, true);
     Connect(InnerComparison, 2, Inner, 1, true);
     Connect(Graph.Nodes[1], 4, OuterComparison, 0, true);
-    Connect(Graph.Nodes[1], 4, InnerComparison, 0, true);
+    // 内側条件は (LoopIndex + 1) * 2 > 1 とし、多段演算を検証する。
+    FBPIRNode Addition;
+    Addition.Id = FGuid::NewGuid();
+    Addition.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Addition.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Addition.FunctionName = TEXT("Add_IntInt");
+    Addition.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), TEXT("1")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("int")));
+    FBPIRNode Multiplication;
+    Multiplication.Id = FGuid::NewGuid();
+    Multiplication.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Multiplication.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Multiplication.FunctionName = TEXT("Multiply_IntInt");
+    Multiplication.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+    Multiplication.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), TEXT("2")));
+    Multiplication.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("int")));
+    Connect(Graph.Nodes[1], 4, Addition, 0, true);
+    Connect(Addition, 2, Multiplication, 0, true);
+    Connect(Multiplication, 2, InnerComparison, 0, true);
+    Graph.Nodes.Add(MoveTemp(Addition));
+    Graph.Nodes.Add(MoveTemp(Multiplication));
     Graph.Nodes.Add(MoveTemp(Inner));
     Graph.Nodes.Add(MoveTemp(InnerFalse));
     Graph.Nodes.Add(MoveTemp(OuterComparison));
@@ -367,7 +388,8 @@ bool FBPForLoopMultipleNestedComparisonsTest::RunTest(const FString& Parameters)
         return false;
     }
     TestTrue(TEXT("外側比較"), Files.SourceContent.Contains(TEXT("if (LoopIndex < 5)")));
-    TestTrue(TEXT("内側比較"), Files.SourceContent.Contains(TEXT("if (LoopIndex > 1)")));
+    TestTrue(TEXT("内側の多段算術比較"),
+        Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Multiply_IntInt(UKismetMathLibrary::Add_IntInt(LoopIndex, 1), 2) > 1")));
     return true;
 }
 
