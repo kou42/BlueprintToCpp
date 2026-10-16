@@ -282,6 +282,72 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedLoopCompletedTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedLoopCompleted",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedLoopCompletedTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR GraphIR = MakeForLoopBranchGraph();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    FBPIRNode& Inner = Graph.Nodes[2];
+    Inner.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+    Inner.MacroGraphName = TEXT("ForLoop");
+    Inner.Pins.Reset();
+    Inner.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("4")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+    // 既存のTrue/False/Completed PrintStringをそれぞれBody/内側Completed/外側Completedへ割り当てる。
+    Graph.ExecEdges.Reset();
+    const auto Connect = [&Graph](const FBPIRNode& Source, int32 Output,
+        const FBPIRNode& Target, int32 Input)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Source.Id;
+        Edge.SourcePin = Source.Pins[Output].Id;
+        Edge.TargetNode = Target.Id;
+        Edge.TargetPin = Target.Pins[Input].Id;
+        Graph.ExecEdges.Add(Edge);
+    };
+    Connect(Graph.Nodes[0], 0, Graph.Nodes[1], 0);
+    Connect(Graph.Nodes[1], 3, Graph.Nodes[2], 0);
+    Connect(Graph.Nodes[2], 3, Graph.Nodes[3], 0);
+    Connect(Graph.Nodes[2], 5, Graph.Nodes[4], 0);
+    Connect(Graph.Nodes[1], 5, Graph.Nodes[5], 0);
+
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("二重ForLoopのCompletedをLowering"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Outer =
+        SemanticIR.Functions[0].Blocks[0].Statements[0];
+    TestEqual(TEXT("内側Completed"), Outer.LoopBodyStatements[0].CompletedStatements.Num(), 1);
+    TestEqual(TEXT("外側Completed"), Outer.CompletedStatements.Num(), 1);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("二重ForLoopのCompletedをC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopCompletedActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    const int32 InnerLoop = Files.SourceContent.Find(TEXT("for (int32 InnerIndex"));
+    const int32 InnerCompleted = Files.SourceContent.Find(TEXT("False body"));
+    const int32 OuterCompleted = Files.SourceContent.Find(TEXT("Branch completed"));
+    TestTrue(TEXT("内側Completedは内側ループの後"), InnerCompleted > InnerLoop);
+    TestTrue(TEXT("外側Completedは内側Completedの後"), OuterCompleted > InnerCompleted);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedLoopLoweringTest,
     "BlueprintAIConverter.Conversion.ForLoop.NestedLoopLowering",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
