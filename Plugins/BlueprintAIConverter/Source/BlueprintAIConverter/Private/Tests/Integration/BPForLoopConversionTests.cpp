@@ -1764,4 +1764,45 @@ bool FBPForEachElementCodeGenTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachTypeMismatchCodeGenTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.RejectsMismatchedArrayType",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachTypeMismatchCodeGenTest::RunTest(const FString& Parameters)
+{
+    // 配列の型がSemantic IR内で食い違う場合は、型推測で生成しない。
+    FBPSemanticIR IR;
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Loop.LoopElementVariable = TEXT("ForEachArrayElement");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::String;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("Numbers");
+    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+    Variable.Type.ContainerKind = TEXT("array");
+    Variable.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Variable);
+    Block.Statements.Add(MoveTemp(Loop));
+    Function.Blocks.Add(MoveTemp(Block));
+    IR.Functions.Add(MoveTemp(Function));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("矛盾する配列型は拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachTypeActor"),
+            TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("型矛盾の診断を出力"), Diagnostics.IsEmpty() == false);
+    return true;
+}
+
 #endif
