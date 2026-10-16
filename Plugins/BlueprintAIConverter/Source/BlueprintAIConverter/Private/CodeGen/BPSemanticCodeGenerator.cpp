@@ -496,7 +496,7 @@ bool ReadBoolLiteral(const FBPSemanticExpression& Expression, FString& OutValue)
 bool EmitNumericExpression(const FBPSemanticExpression& Expression,
     const EBPSemanticTypeKind OperandType,
     const TArray<FBPSemanticVariable>& Variables, FString& OutOperand,
-    TArray<FString>& Diagnostics)
+    TArray<FString>& Diagnostics, const FName LocalIndex = NAME_None)
 {
     if (Expression.Type.Kind != OperandType ||
         Expression.Type.bIsReference || Expression.Type.bIsConst)
@@ -528,9 +528,9 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         FString A;
         FString B;
         if (EmitNumericExpression(Expression.Arguments[0], OperandType,
-                Variables, A, Diagnostics) == false ||
+                Variables, A, Diagnostics, LocalIndex) == false ||
             EmitNumericExpression(Expression.Arguments[1], OperandType,
-                Variables, B, Diagnostics) == false)
+                Variables, B, Diagnostics, LocalIndex) == false)
         {
             return false;
         }
@@ -550,6 +550,13 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
     {
         Diagnostics.Add(TEXT("Numeric comparison variable name is invalid"));
         return false;
+    }
+    // ForLoopのIndexは反射メンバーではなくfor文のローカル変数。
+    if (LocalIndex.IsNone() == false && Expression.VariableName == LocalIndex &&
+        OperandType == EBPSemanticTypeKind::Int32)
+    {
+        OutOperand = Name;
+        return true;
     }
     const FBPSemanticVariable* Match = nullptr;
     for (const FBPSemanticVariable& Variable : Variables)
@@ -579,6 +586,37 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         return false;
     }
     OutOperand = Name;
+    return true;
+}
+
+bool EmitForLoopCondition(const FBPSemanticExpression& Expression,
+    const TArray<FBPSemanticVariable>& Variables, const FName LocalIndex,
+    FString& OutCondition, TArray<FString>& Diagnostics)
+{
+    if (ReadBoolLiteral(Expression, OutCondition))
+    {
+        return true;
+    }
+    FBPNumericComparison Comparison;
+    if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
+        Expression.Type.Kind != EBPSemanticTypeKind::Bool ||
+        Expression.Arguments.Num() != 2 ||
+        FBPNumericComparisonResolver::Resolve(Expression.FunctionOwnerPath,
+            Expression.FunctionName, Comparison, Diagnostics) == false)
+    {
+        Diagnostics.Add(TEXT("Unsupported ForLoop Branch comparison"));
+        return false;
+    }
+    FString A;
+    FString B;
+    if (EmitNumericExpression(Expression.Arguments[0], Comparison.OperandType,
+            Variables, A, Diagnostics, LocalIndex) == false ||
+        EmitNumericExpression(Expression.Arguments[1], Comparison.OperandType,
+            Variables, B, Diagnostics, LocalIndex) == false)
+    {
+        return false;
+    }
+    OutCondition = FString::Printf(TEXT("%s %s %s"), *A, *Comparison.OperatorToken, *B);
     return true;
 }
 
@@ -677,6 +715,60 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         TextExpression = FString::Printf(TEXT("UKismetStringLibrary::Conv_IntToString(%s)"),
             *TextArgument.Arguments[0].VariableName.ToString());
     }
+    else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
+        TextArgument.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+        TextArgument.FunctionName == TEXT("Conv_IntToString") &&
+        TextArgument.Arguments.Num() == 1)
+    {
+        // 二項演算を再帰的に展開する。深さ制限で循環的・異常なIRを拒否する。
+        // 変数参照は識別子検証し、関数名は許可リストで固定する。
+        TFunction<bool(const FBPSemanticExpression&, int32, FString&)> EmitInteger;
+        EmitInteger = [&](const FBPSemanticExpression& Expression,
+            int32 Depth, FString& Result) -> bool
+        {
+            if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::Int32)
+            {
+                return false;
+            }
+            if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
+            {
+                if (IsIdentifier(Expression.VariableName.ToString()) == false)
+                {
+                    return false;
+                }
+                Result = Expression.VariableName.ToString();
+                return true;
+            }
+            if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
+                Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
+                (Expression.FunctionName != TEXT("Add_IntInt") &&
+                    Expression.FunctionName != TEXT("Subtract_IntInt") &&
+                    Expression.FunctionName != TEXT("Multiply_IntInt")) ||
+                Expression.Arguments.Num() != 2)
+            {
+                return false;
+            }
+            FString Left;
+            FString Right;
+            if (EmitInteger(Expression.Arguments[0], Depth + 1, Left) == false ||
+                EmitInteger(Expression.Arguments[1], Depth + 1, Right) == false)
+            {
+                return false;
+            }
+            Result = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
+                *Expression.FunctionName.ToString(), *Left, *Right);
+            return true;
+        };
+        FString IntegerExpression;
+        if (EmitInteger(TextArgument.Arguments[0], 0, IntegerExpression) == false)
+        {
+            Diagnostics.Add(TEXT("Unsupported nested Index arithmetic expression"));
+            return false;
+        }
+        TextExpression = FString::Printf(
+            TEXT("UKismetStringLibrary::Conv_IntToString(%s)"), *IntegerExpression);
+    }
     else
     {
         Diagnostics.Add(TEXT("Unsupported PrintString text expression"));
@@ -719,6 +811,101 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         *FloatLiteral(LinearColor.R), *FloatLiteral(LinearColor.G),
         *FloatLiteral(LinearColor.B), *FloatLiteral(LinearColor.A),
         *FloatLiteral(Duration), *EscapedKey);
+    return true;
+}
+
+// ForLoopのBranchを再帰的に生成する。対応する葉はPrintStringのみとし、
+// 深さ制限で異常なSemantic IRによる過度な再帰を防ぐ。
+bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
+    const FString& ParentClassPath, const TArray<FBPSemanticVariable>& Variables,
+    const FName LocalIndex, const FString& Indent, int32 Depth,
+    FString& OutCode, TArray<FString>& Diagnostics)
+{
+    if (Depth > 16)
+    {
+        Diagnostics.Add(TEXT("ForLoop Branch nesting exceeds the supported depth"));
+        return false;
+    }
+    if (Statement.Kind == EBPSemanticStatementKind::Expression)
+    {
+        return EmitPrintStringStatement(Statement.Expression, ParentClassPath,
+            Indent, OutCode, Diagnostics);
+    }
+    if (Statement.Kind == EBPSemanticStatementKind::ForLoop)
+    {
+        // 内側ループは独立したIndex名を必須とし、外側Indexのシャドーイングを防ぐ。
+        // 現段階ではループ境界をint32リテラルに限定する。
+        int32 First = 0;
+        int32 Last = 0;
+        if (Statement.LoopIndexVariable.IsNone() ||
+            IsIdentifier(Statement.LoopIndexVariable.ToString()) == false ||
+            Statement.LoopIndexVariable == LocalIndex ||
+            Statement.LoopFirstIndex.Kind != EBPSemanticExpressionKind::Literal ||
+            Statement.LoopFirstIndex.Type.Kind != EBPSemanticTypeKind::Int32 ||
+            Statement.LoopLastIndex.Kind != EBPSemanticExpressionKind::Literal ||
+            Statement.LoopLastIndex.Type.Kind != EBPSemanticTypeKind::Int32 ||
+            LexTryParseString(First, *Statement.LoopFirstIndex.LiteralValue) == false ||
+            LexTryParseString(Last, *Statement.LoopLastIndex.LiteralValue) == false ||
+            Statement.LoopBodyStatements.IsEmpty())
+        {
+            Diagnostics.Add(TEXT("Nested ForLoop requires distinct index names and literal int32 bounds"));
+            return false;
+        }
+        const FString InnerIndent = Indent + TEXT("    ");
+        FString InnerCode;
+        for (const FBPSemanticStatement& Body : Statement.LoopBodyStatements)
+        {
+            FString Part;
+            if (EmitForLoopBodyStatement(Body, ParentClassPath, Variables,
+                    Statement.LoopIndexVariable, InnerIndent, Depth + 1,
+                    Part, Diagnostics) == false)
+            {
+                return false;
+            }
+            InnerCode += Part;
+        }
+        OutCode = FString::Printf(
+            TEXT("%sfor (int32 %s = %d; %s <= %d; ++%s)\\n%s{\\n%s%s}\\n"),
+            *Indent, *Statement.LoopIndexVariable.ToString(), First,
+            *Statement.LoopIndexVariable.ToString(), Last,
+            *Statement.LoopIndexVariable.ToString(), *Indent, *InnerCode, *Indent);
+        // Completedは内側ループ終了後、外側ループの同じ反復内で実行する。
+        for (const FBPSemanticStatement& Completed : Statement.CompletedStatements)
+        {
+            FString Part;
+            if (Completed.Kind != EBPSemanticStatementKind::Expression ||
+                EmitPrintStringStatement(Completed.Expression, ParentClassPath,
+                    Indent, Part, Diagnostics) == false)
+            {
+                Diagnostics.Add(TEXT("Nested ForLoop Completed supports PrintString only"));
+                return false;
+            }
+            OutCode += Part;
+        }
+        return true;
+    }
+    if (Statement.Kind != EBPSemanticStatementKind::Branch ||
+        Statement.ThenStatements.Num() != 1 || Statement.ElseStatements.Num() != 1)
+    {
+        Diagnostics.Add(TEXT("ForLoop Branch requires one statement per output"));
+        return false;
+    }
+    FString Condition;
+    FString ThenCode;
+    FString ElseCode;
+    if (EmitForLoopCondition(Statement.Expression, Variables, LocalIndex,
+            Condition, Diagnostics) == false ||
+        EmitForLoopBodyStatement(Statement.ThenStatements[0], ParentClassPath, Variables,
+            LocalIndex, Indent + TEXT("    "), Depth + 1, ThenCode, Diagnostics) == false ||
+        EmitForLoopBodyStatement(Statement.ElseStatements[0], ParentClassPath, Variables,
+            LocalIndex, Indent + TEXT("    "), Depth + 1, ElseCode, Diagnostics) == false)
+    {
+        return false;
+    }
+    OutCode = FString::Printf(
+        TEXT("%sif (%s)\\n%s{\\n%s%s}\\n%selse\\n%s{\\n%s%s}\\n"),
+        *Indent, *Condition, *Indent, *ThenCode, *Indent,
+        *Indent, *Indent, *Indent, *ElseCode, *Indent);
     return true;
 }
 
@@ -854,8 +1041,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             Statement.LoopLastIndex.Type.Kind != EBPSemanticTypeKind::Int32 ||
             LexTryParseString(FirstIndex, *Statement.LoopFirstIndex.LiteralValue) == false ||
             LexTryParseString(LastIndex, *Statement.LoopLastIndex.LiteralValue) == false ||
-            Statement.LoopBodyStatements.IsEmpty() ||
-            Statement.CompletedStatements.Num() > 1)
+            Statement.LoopBodyStatements.IsEmpty())
         {
             OutDiagnostics.Add(TEXT("ForLoop requires literal int32 bounds and one supported body statement"));
             return false;
@@ -864,51 +1050,28 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         for (const FBPSemanticStatement& BodyStatement : Statement.LoopBodyStatements)
         {
             FString StatementCode;
-            if (BodyStatement.Kind == EBPSemanticStatementKind::Expression)
+            if (EmitForLoopBodyStatement(BodyStatement, IR.ParentClassPath,
+                    IR.Variables, Statement.LoopIndexVariable, TEXT("        "),
+                    0, StatementCode, OutDiagnostics) == false)
             {
-                if (EmitPrintStringStatement(BodyStatement.Expression, IR.ParentClassPath,
-                    TEXT("        "), StatementCode, OutDiagnostics) == false)
-                {
-                    return false;
-                }
-            }
-            else if (BodyStatement.Kind == EBPSemanticStatementKind::Branch &&
-                BodyStatement.ThenStatements.Num() == 1 && BodyStatement.ElseStatements.Num() == 1)
-            {
-                FString Condition;
-                FString ThenCode;
-                FString ElseCode;
-                if (EmitBranchCondition(BodyStatement.Expression, IR.Variables,
-                        Condition, OutDiagnostics) == false ||
-                    EmitPrintStringStatement(BodyStatement.ThenStatements[0].Expression,
-                        IR.ParentClassPath, TEXT("            "), ThenCode, OutDiagnostics) == false ||
-                    EmitPrintStringStatement(BodyStatement.ElseStatements[0].Expression,
-                        IR.ParentClassPath, TEXT("            "), ElseCode, OutDiagnostics) == false)
-                {
-                    return false;
-                }
-                StatementCode = FString::Printf(
-                    TEXT("        if (%s)\n        {\n%s        }\n        else\n        {\n%s        }\n"),
-                    *Condition, *ThenCode, *ElseCode);
-            }
-            else
-            {
-                OutDiagnostics.Add(TEXT("ForLoop body contains an unsupported semantic statement"));
                 return false;
             }
             BodyCode += StatementCode;
         }
         FString CompletedCode;
-        if (Statement.CompletedStatements.Num() == 1)
+        // Completed はループ終了後の直列実行列として保持する。
+        // 各文を接続順に生成し、未対応の文種別は推測せずエラーにする。
+        for (const FBPSemanticStatement& CompletedStatement : Statement.CompletedStatements)
         {
-            const FBPSemanticStatement& CompletedStatement = Statement.CompletedStatements[0];
+            FString StatementCode;
             if (CompletedStatement.Kind != EBPSemanticStatementKind::Expression ||
                 EmitPrintStringStatement(CompletedStatement.Expression, IR.ParentClassPath,
-                    TEXT("    "), CompletedCode, OutDiagnostics) == false)
+                    TEXT("    "), StatementCode, OutDiagnostics) == false)
             {
                 OutDiagnostics.Add(TEXT("ForLoop Completed contains an unsupported semantic statement"));
                 return false;
             }
+            CompletedCode += StatementCode;
         }
 
         FString VariableDeclarations;
@@ -939,7 +1102,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration);
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    for (int32 %s = %d; %s <= %d; ++%s)\n    {\n%s    }\n%s}\n"),
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n    for (int32 %s = %d; %s <= %d; ++%s)\n    {\n%s    }\n%s}\n"),
             *BaseName, *UnrealTypeInclude, *ConstructorDefinition, *ClassName,
             *Statement.LoopIndexVariable.ToString(), FirstIndex,
             *Statement.LoopIndexVariable.ToString(), LastIndex,
