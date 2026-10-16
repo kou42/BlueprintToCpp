@@ -1419,9 +1419,13 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
         }
         const FBPIRPin* Input = FindPin(*Converter, TEXT("InInt"), EGPD_Input);
         const FBPIRPin* Output = FindPin(*Converter, TEXT("ReturnValue"), EGPD_Output);
-        if (Input == nullptr || Output == nullptr)
+        // 関数名と接続GUIDが正しくても、ピンの型が異なれば
+        // int32→FStringの変換として扱えない。破損IRや将来の型変更を拒否する。
+        if (Input == nullptr || Output == nullptr ||
+            Input->Category != TEXT("int") || Output->Category != TEXT("string"))
         {
-            AddDiagnostic(OutIR, Event->Name, Converter->Id, TEXT("ForEachLoop converter pins are missing"));
+            AddDiagnostic(OutIR, Event->Name, Converter->Id,
+                TEXT("ForEachLoop converter requires int32 input and string output"));
             return false;
         }
         const FBPIRPin* OriginPin = nullptr;
