@@ -1298,7 +1298,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     if (BeginPlay == nullptr || Loop == nullptr || Prints.IsEmpty() ||
         EventGraph->Nodes.Num() != 2 + Prints.Num() + (IndexToString != nullptr ? 1 : 0) +
             (BodyBranch != nullptr ? 1 : 0) ||
-        EventGraph->ExecEdges.Num() < 2 + (BodyBranch != nullptr ? 2 : 0) ||
+        EventGraph->ExecEdges.Num() != 1 + Prints.Num() + (BodyBranch != nullptr ? 1 : 0) ||
         (BodyBranch != nullptr && IndexToString != nullptr) ||
         (IndexToString == nullptr ? EventGraph->DataEdges.IsEmpty() == false : EventGraph->DataEdges.Num() != 2))
     {
