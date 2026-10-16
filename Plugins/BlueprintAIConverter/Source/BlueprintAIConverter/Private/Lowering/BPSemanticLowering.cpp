@@ -1322,10 +1322,11 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             BodyArithmeticNodes.Num() ||
         EventGraph->ExecEdges.Num() != 1 + Prints.Num() + BranchNodes.Num() ||
         (BodyBranch != nullptr && IndexToString != nullptr) ||
-        (BodyComparison == nullptr
+        (ComparisonNodes.IsEmpty()
             ? (IndexToString == nullptr ? EventGraph->DataEdges.IsEmpty() == false : EventGraph->DataEdges.Num() != 2)
-            : (EventGraph->DataEdges.Num() < 1 ||
-                EventGraph->DataEdges.Num() > 2 + BodyArithmeticNodes.Num() * 3)))
+            : (EventGraph->DataEdges.Num() < ComparisonNodes.Num() ||
+                EventGraph->DataEdges.Num() > ComparisonNodes.Num() * 3 +
+                    BodyArithmeticNodes.Num() * 3)))
     {
         AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
             TEXT("ForLoop conversion requires BeginPlay, ForLoop, one body PrintString, and optional Completed PrintString"));
@@ -1531,8 +1532,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     // 比較式・データ接続を含む複雑な経路は既存の単一Branch経路と分離する。
     if (BranchNodes.Num() > 1)
     {
-        if (BodyArithmeticNodes.IsEmpty() == false ||
-            IndexToString != nullptr || BodyPrint != nullptr || BranchNodes.Num() > 16 ||
+        if (IndexToString != nullptr || BodyPrint != nullptr || BranchNodes.Num() > 16 ||
             (ComparisonNodes.IsEmpty() && EventGraph->DataEdges.IsEmpty() == false))
         {
             AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
@@ -1555,7 +1555,104 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         TSet<FGuid> VisitedBranches;
         TSet<FGuid> VisitedPrints;
         TSet<FGuid> UsedComparisons;
+        TSet<FGuid> UsedArithmeticNodes;
+        TSet<FGuid> ActiveArithmeticNodes;
         int32 ConsumedConditionEdges = 0;
+        // 各Branchの比較オペランドを再帰的に解析する。
+        // ノード共有・循環・未接続の算術ノードを拒否して意味の曖昧な変換を防ぐ。
+        TFunction<bool(const FBPIRNode&, const FBPIRPin&, int32,
+            FBPSemanticExpression&)> BuildNumericOperand;
+        BuildNumericOperand = [&](const FBPIRNode& Owner, const FBPIRPin& Input,
+            int32 Depth, FBPSemanticExpression& Result) -> bool
+        {
+            if (Depth > 16 || FBPNumericComparisonResolver::MatchesPinType(
+                    Input.Category, Input.SubCategory, EBPSemanticTypeKind::Int32) == false)
+            {
+                return false;
+            }
+            const FBPIRLink* Source = nullptr;
+            for (const FBPIRLink& Edge : EventGraph->DataEdges)
+            {
+                if (Edge.TargetNode == Owner.Id && Edge.TargetPin == Input.Id)
+                {
+                    if (Source != nullptr)
+                    {
+                        return false;
+                    }
+                    Source = &Edge;
+                }
+            }
+            if (Source == nullptr)
+            {
+                FString Value;
+                if (FBPNumericComparisonResolver::CanonicalizeLiteral(
+                        EBPSemanticTypeKind::Int32, Input.DefaultValue, Value) == false)
+                {
+                    return false;
+                }
+                Result = Literal(EBPSemanticTypeKind::Int32, Value, Owner, Input.Name);
+                return true;
+            }
+            ++ConsumedConditionEdges;
+            if (Source->SourceNode == Loop->Id && Source->SourcePin == LoopIndex->Id)
+            {
+                Result.Kind = EBPSemanticExpressionKind::VariableReference;
+                Result.Type.Kind = EBPSemanticTypeKind::Int32;
+                Result.VariableName = LoopStatement.LoopIndexVariable;
+                Result.SourceNodeId = Loop->Id;
+                Result.SourcePinId = LoopIndex->Id;
+                return true;
+            }
+            const FBPIRNode* Arithmetic = nullptr;
+            for (const FBPIRNode* Candidate : BodyArithmeticNodes)
+            {
+                if (Candidate->Id == Source->SourceNode)
+                {
+                    Arithmetic = Candidate;
+                    break;
+                }
+            }
+            if (Arithmetic == nullptr || UsedArithmeticNodes.Contains(Arithmetic->Id) ||
+                ActiveArithmeticNodes.Contains(Arithmetic->Id))
+            {
+                return false;
+            }
+            FBPNumericArithmeticOperation Operation;
+            TArray<FString> Diagnostics;
+            if (FBPNumericArithmeticResolver::Resolve(Arithmetic->FunctionOwnerPath,
+                    Arithmetic->FunctionName, Operation, Diagnostics) == false ||
+                Operation.OperandType != EBPSemanticTypeKind::Int32)
+            {
+                return false;
+            }
+            const FBPIRPin* Output = FindPin(*Arithmetic, TEXT("ReturnValue"), EGPD_Output);
+            const FBPIRPin* A = FindPin(*Arithmetic, TEXT("A"), EGPD_Input);
+            const FBPIRPin* B = FindPin(*Arithmetic, TEXT("B"), EGPD_Input);
+            if (Output == nullptr || A == nullptr || B == nullptr ||
+                Source->SourcePin != Output->Id)
+            {
+                return false;
+            }
+            ActiveArithmeticNodes.Add(Arithmetic->Id);
+            Result.Kind = EBPSemanticExpressionKind::FunctionCall;
+            Result.Type.Kind = EBPSemanticTypeKind::Int32;
+            Result.FunctionName = Arithmetic->FunctionName;
+            Result.FunctionOwnerPath = Arithmetic->FunctionOwnerPath;
+            Result.SourceNodeId = Arithmetic->Id;
+            Result.SourcePinId = Output->Id;
+            FBPSemanticExpression Left;
+            FBPSemanticExpression Right;
+            if (BuildNumericOperand(*Arithmetic, *A, Depth + 1, Left) == false ||
+                BuildNumericOperand(*Arithmetic, *B, Depth + 1, Right) == false)
+            {
+                return false;
+            }
+            Result.Arguments.Add(MoveTemp(Left));
+            Result.Arguments.Add(MoveTemp(Right));
+            ActiveArithmeticNodes.Remove(Arithmetic->Id);
+            UsedArithmeticNodes.Add(Arithmetic->Id);
+            return true;
+        };
         TFunction<bool(const FBPIRNode&, int32, FBPSemanticStatement&)> BuildBranch;
         BuildBranch = [&](const FBPIRNode& Current, int32 Depth,
             FBPSemanticStatement& OutStatement) -> bool
@@ -1638,50 +1735,12 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 ++ConsumedConditionEdges;
                 for (const FBPIRPin* Input : Inputs)
                 {
-                    if (FBPNumericComparisonResolver::MatchesPinType(Input->Category,
-                            Input->SubCategory, EBPSemanticTypeKind::Int32) == false)
+                    FBPSemanticExpression Argument;
+                    if (BuildNumericOperand(*CurrentComparison, *Input, 0, Argument) == false)
                     {
                         return false;
                     }
-                    const FBPIRLink* Source = nullptr;
-                    for (const FBPIRLink& Edge : EventGraph->DataEdges)
-                    {
-                        if (Edge.TargetNode == CurrentComparison->Id && Edge.TargetPin == Input->Id)
-                        {
-                            if (Source != nullptr)
-                            {
-                                return false;
-                            }
-                            Source = &Edge;
-                        }
-                    }
-                    if (Source != nullptr)
-                    {
-                        if (Source->SourceNode != Loop->Id ||
-                            Source->SourcePin != LoopIndex->Id)
-                        {
-                            return false;
-                        }
-                        ++ConsumedConditionEdges;
-                        FBPSemanticExpression IndexReference;
-                        IndexReference.Kind = EBPSemanticExpressionKind::VariableReference;
-                        IndexReference.Type.Kind = EBPSemanticTypeKind::Int32;
-                        IndexReference.VariableName = LoopStatement.LoopIndexVariable;
-                        IndexReference.SourceNodeId = Loop->Id;
-                        IndexReference.SourcePinId = LoopIndex->Id;
-                        OutStatement.Expression.Arguments.Add(MoveTemp(IndexReference));
-                    }
-                    else
-                    {
-                        FString Value;
-                        if (FBPNumericComparisonResolver::CanonicalizeLiteral(
-                                EBPSemanticTypeKind::Int32, Input->DefaultValue, Value) == false)
-                        {
-                            return false;
-                        }
-                        OutStatement.Expression.Arguments.Add(
-                            Literal(EBPSemanticTypeKind::Int32, Value, *CurrentComparison, Input->Name));
-                    }
+                    OutStatement.Expression.Arguments.Add(MoveTemp(Argument));
                 }
                 UsedComparisons.Add(CurrentComparison->Id);
             }
@@ -1765,6 +1824,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             VisitedBranches.Num() != BranchNodes.Num() ||
             VisitedPrints.Num() + OrderedCompletedPrints.Num() != Prints.Num() ||
             UsedComparisons.Num() != ComparisonNodes.Num() ||
+            UsedArithmeticNodes.Num() != BodyArithmeticNodes.Num() ||
             ConsumedConditionEdges != EventGraph->DataEdges.Num())
         {
             AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
