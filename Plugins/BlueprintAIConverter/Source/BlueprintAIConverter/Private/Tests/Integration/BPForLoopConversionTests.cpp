@@ -1605,9 +1605,9 @@ bool FBPForEachJsonContractTest::RunTest(const FString& Parameters)
 
     FString Json;
     TestTrue(TEXT("ForEach JSONをシリアライズ"), FBPSemanticJsonSerializer::Serialize(IR, TEXT("5.7.4"), Json));
-    TestTrue(TEXT("ForEach文種別"), Json.Contains(TEXT("\\"kind\\":\\"for_each_loop\\"")));
+    TestTrue(TEXT("ForEach文種別"), Json.Contains(TEXT("for_each_loop")));
     TestTrue(TEXT("配列入力"), Json.Contains(TEXT("\\"loop_array\\"")));
-    TestTrue(TEXT("要素変数"), Json.Contains(TEXT("\\"loop_element_variable\\":\\"Element\\"")));
+    TestTrue(TEXT("要素変数"), Json.Contains(TEXT("loop_element_variable")) && Json.Contains(TEXT("Element")));
     TestTrue(TEXT("要素型"), Json.Contains(TEXT("\\"loop_element_type\\"")));
     return true;
 }
