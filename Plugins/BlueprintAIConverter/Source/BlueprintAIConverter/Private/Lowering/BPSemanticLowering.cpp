@@ -1260,6 +1260,7 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     const FBPIRNode* Getter = nullptr;
     TArray<const FBPIRNode*> Prints;
     const FBPIRNode* IndexConverter = nullptr;
+    const FBPIRNode* ElementConverter = nullptr;
     for (const FBPIRNode& Node : Event->Nodes)
     {
         if (Node.FunctionName == TEXT("ReceiveBeginPlay") &&
@@ -1288,6 +1289,17 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
                 return false;
             }
             IndexConverter = &Node;
+        }
+        else if (Node.FunctionName == TEXT("Conv_IntToString") &&
+            Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+            IndexConverter != nullptr)
+        {
+            if (ElementConverter != nullptr)
+            {
+                AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Too many int32 converters"));
+                return false;
+            }
+            ElementConverter = &Node;
         }
         else if (Node.FunctionName == TEXT("PrintString"))
         {
@@ -1326,33 +1338,62 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     // Array Elementの暗黙使用を見落とすと生成コードが元のBlueprintと異なる。
     bool bArrayConnected = false;
     const FBPIRNode* IndexConsumerPrint = nullptr;
-    if (IndexConverter != nullptr)
+    const FBPIRNode* ElementConsumerPrint = nullptr;
+    // 最大2つの変換ノードを、実際の接続元（Array Index / Array Element）で識別する。
+    // ノード列挙順や関数名だけでは要素とIndexを区別できない。
+    const FBPIRNode* Converters[2] = { IndexConverter, ElementConverter };
+    int32 ExpectedDataEdges = 1;
+    for (const FBPIRNode* Converter : Converters)
     {
-        const FBPIRPin* ConverterInput = FindPin(*IndexConverter, TEXT("InInt"), EGPD_Input);
-        const FBPIRPin* ConverterOutput = FindPin(*IndexConverter, TEXT("ReturnValue"), EGPD_Output);
-        if (ConverterInput == nullptr || ConverterOutput == nullptr ||
-            Event->DataEdges.Num() != 3)
+        if (Converter != nullptr)
         {
-            AddDiagnostic(OutIR, Event->Name, IndexConverter->Id,
-                TEXT("ForEachLoop Index converter pins or data flow are incomplete"));
+            ExpectedDataEdges += 2;
+        }
+    }
+    if (Event->DataEdges.Num() != ExpectedDataEdges)
+    {
+        AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop data link count is unsupported"));
+        return false;
+    }
+    int32 ArrayLinks = 0;
+    for (const FBPIRLink& Edge : Event->DataEdges)
+    {
+        if (Edge.SourceNode == Getter->Id && Edge.SourcePin == GetterValue->Id &&
+            Edge.TargetNode == Loop->Id && Edge.TargetPin == ArrayPin->Id)
+        {
+            ++ArrayLinks;
+        }
+    }
+    bArrayConnected = ArrayLinks == 1;
+    for (const FBPIRNode* Converter : Converters)
+    {
+        if (Converter == nullptr)
+        {
+            continue;
+        }
+        const FBPIRPin* Input = FindPin(*Converter, TEXT("InInt"), EGPD_Input);
+        const FBPIRPin* Output = FindPin(*Converter, TEXT("ReturnValue"), EGPD_Output);
+        if (Input == nullptr || Output == nullptr)
+        {
+            AddDiagnostic(OutIR, Event->Name, Converter->Id, TEXT("ForEachLoop converter pins are missing"));
             return false;
         }
-        bool bIndexConnected = false;
-        bool bPrintConnected = false;
+        const FBPIRPin* OriginPin = nullptr;
+        const FBPIRNode* Consumer = nullptr;
+        int32 InputLinks = 0;
+        int32 OutputLinks = 0;
         for (const FBPIRLink& Edge : Event->DataEdges)
         {
-            if (Edge.SourceNode == Getter->Id && Edge.SourcePin == GetterValue->Id &&
-                Edge.TargetNode == Loop->Id && Edge.TargetPin == ArrayPin->Id)
+            if (Edge.TargetNode == Converter->Id && Edge.TargetPin == Input->Id &&
+                Edge.SourceNode == Loop->Id)
             {
-                bArrayConnected = true;
+                if (Edge.SourcePin == IndexPin->Id || Edge.SourcePin == ElementPin->Id)
+                {
+                    OriginPin = Edge.SourcePin == IndexPin->Id ? IndexPin : ElementPin;
+                    ++InputLinks;
+                }
             }
-            else if (Edge.SourceNode == Loop->Id && Edge.SourcePin == IndexPin->Id &&
-                Edge.TargetNode == IndexConverter->Id && Edge.TargetPin == ConverterInput->Id)
-            {
-                bIndexConnected = true;
-            }
-            else if (Edge.SourceNode == IndexConverter->Id &&
-                Edge.SourcePin == ConverterOutput->Id)
+            if (Edge.SourceNode == Converter->Id && Edge.SourcePin == Output->Id)
             {
                 for (const FBPIRNode* Print : Prints)
                 {
@@ -1360,31 +1401,37 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
                     if (TextPin != nullptr && Edge.TargetNode == Print->Id &&
                         Edge.TargetPin == TextPin->Id)
                     {
-                        IndexConsumerPrint = Print;
-                        bPrintConnected = true;
+                        Consumer = Print;
+                        ++OutputLinks;
                     }
                 }
             }
-            else
-            {
-                AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("Unexpected ForEachLoop data connection"));
-                return false;
-            }
         }
-        if (bArrayConnected == false || bIndexConnected == false ||
-            bPrintConnected == false)
+        if (InputLinks != 1 || OutputLinks != 1 || Consumer == nullptr ||
+            (IndexConsumerPrint != nullptr && Consumer == IndexConsumerPrint) ||
+            (ElementConsumerPrint != nullptr && Consumer == ElementConsumerPrint))
         {
-            AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop Index connections are incomplete"));
+            AddDiagnostic(OutIR, Event->Name, Converter->Id, TEXT("ForEachLoop converter connections are ambiguous"));
             return false;
         }
-    }
-    else if (Event->DataEdges.Num() == 1 &&
-        Event->DataEdges[0].SourceNode == Getter->Id &&
-        Event->DataEdges[0].SourcePin == GetterValue->Id &&
-        Event->DataEdges[0].TargetNode == Loop->Id &&
-        Event->DataEdges[0].TargetPin == ArrayPin->Id)
-    {
-        bArrayConnected = true;
+        if (OriginPin == IndexPin)
+        {
+            if (IndexConsumerPrint != nullptr)
+            {
+                AddDiagnostic(OutIR, Event->Name, Converter->Id, TEXT("Multiple Array Index consumers"));
+                return false;
+            }
+            IndexConsumerPrint = Consumer;
+        }
+        else
+        {
+            if (ElementConsumerPrint != nullptr)
+            {
+                AddDiagnostic(OutIR, Event->Name, Converter->Id, TEXT("Multiple Array Element consumers"));
+                return false;
+            }
+            ElementConsumerPrint = Consumer;
+        }
     }
     if (bArrayConnected == false)
     {
@@ -1490,9 +1537,9 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
             Item.Kind = EBPSemanticStatementKind::Expression;
             Item.SourceNodeId = Print->Id;
             Item.Expression = MakePrintStringExpression(Values, *Print, GraphIR.ParentClassPath);
-            if (Print == IndexConsumerPrint)
+            if (Print == IndexConsumerPrint || Print == ElementConsumerPrint)
             {
-                // CompletedからIndexを読む場合は最後の反復値を再現できないため拒否する。
+                // Completedからループ内のIndex/Elementを読む場合は値の寿命が異なるため拒否する。
                 if (&Destination == &Statement.CompletedStatements)
                 {
                     AddDiagnostic(OutIR, Event->Name, Print->Id,
@@ -1502,15 +1549,31 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
                 FBPSemanticExpression Index;
                 Index.Kind = EBPSemanticExpressionKind::VariableReference;
                 Index.Type.Kind = EBPSemanticTypeKind::Int32;
-                Index.VariableName = Statement.LoopIndexVariable;
+                Index.VariableName = Print == IndexConsumerPrint
+                    ? Statement.LoopIndexVariable : Statement.LoopElementVariable;
                 Index.SourceNodeId = Loop->Id;
-                Index.SourcePinId = IndexPin->Id;
+                Index.SourcePinId = Print == IndexConsumerPrint
+                    ? IndexPin->Id : ElementPin->Id;
                 FBPSemanticExpression Conversion;
                 Conversion.Kind = EBPSemanticExpressionKind::FunctionCall;
                 Conversion.Type.Kind = EBPSemanticTypeKind::String;
                 Conversion.FunctionName = TEXT("Conv_IntToString");
                 Conversion.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
-                Conversion.SourceNodeId = IndexConverter->Id;
+                // 元の変換ノードGUIDは出典の追跡に必要。
+                for (const FBPIRNode* Converter : Converters)
+                {
+                    if (Converter != nullptr)
+                    {
+                        for (const FBPIRLink& Edge : Event->DataEdges)
+                        {
+                            if (Edge.SourceNode == Converter->Id &&
+                                Edge.TargetNode == Print->Id)
+                            {
+                                Conversion.SourceNodeId = Converter->Id;
+                            }
+                        }
+                    }
+                }
                 Conversion.Arguments.Add(MoveTemp(Index));
                 Item.Expression.Arguments[1] = MoveTemp(Conversion);
             }
