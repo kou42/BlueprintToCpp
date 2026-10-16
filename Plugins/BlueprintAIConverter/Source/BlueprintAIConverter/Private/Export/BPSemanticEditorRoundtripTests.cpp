@@ -127,4 +127,49 @@ bool FBPSemanticEditorRoundtripTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticIntArrayEditorTest,
+    "BlueprintAIConverter.SemanticJson.EditorIntArrayReflection",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticIntArrayEditorTest::RunTest(const FString& Parameters)
+{
+    // 実際のBlueprintをコンパイルし、PinCategoryだけでなく
+    // FArrayPropertyのInner型まで検証した配列型をIRへ伝播できるか確認する。
+    const FName Name = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_IntArrayReflection"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        AActor::StaticClass(), GetTransientPackage(), Name, BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("一時Blueprintを生成"), Blueprint) == false)
+    {
+        return false;
+    }
+    FEdGraphPinType ArrayType;
+    ArrayType.PinCategory = UEdGraphSchema_K2::PC_Int;
+    ArrayType.ContainerType = EPinContainerType::Array;
+    if (TestTrue(TEXT("int32配列メンバーを追加"),
+        FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("Numbers"), ArrayType)) == false)
+    {
+        return false;
+    }
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (TestNotNull(TEXT("コンパイル済みGeneratedClass"), Blueprint->GeneratedClass.Get()) == false)
+    {
+        return false;
+    }
+    FBPSemanticIR IR;
+    FBPSemanticVariableExtractor::Append(Blueprint, IR);
+    const FBPSemanticVariable* Variable = FindVariable(IR, TEXT("Numbers"));
+    if (TestNotNull(TEXT("配列変数を抽出"), Variable) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("配列コンテナ"), Variable->Type.ContainerKind, FString(TEXT("array")));
+    TestTrue(TEXT("要素型int32"), Variable->Type.Kind == EBPSemanticTypeKind::Int32);
+    TestTrue(TEXT("型ツリーに要素型を保持"),
+        Variable->Type.ElementType.IsValid() &&
+        Variable->Type.ElementType->Kind == EBPSemanticTypeKind::Int32);
+    TestEqual(TEXT("反射C++型"), Variable->ReflectedCppType, FString(TEXT("TArray<int32>")));
+    return true;
+}
+
 #endif
