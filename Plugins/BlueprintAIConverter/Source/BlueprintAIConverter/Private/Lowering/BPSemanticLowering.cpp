@@ -1271,7 +1271,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     if (NestedLoops.Num() == 2)
     {
         const FBPIRNode* Entry = nullptr;
-        const FBPIRNode* Print = nullptr;
+        TArray<const FBPIRNode*> PrintsInNestedGraph;
         for (const FBPIRNode& Node : EventGraph->Nodes)
         {
             if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
@@ -1282,11 +1282,13 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
                 Node.FunctionName == TEXT("PrintString"))
             {
-                Print = &Node;
+                PrintsInNestedGraph.Add(&Node);
             }
         }
-        if (Entry == nullptr || Print == nullptr || EventGraph->Nodes.Num() != 4 ||
-            EventGraph->ExecEdges.Num() != 3 || EventGraph->DataEdges.IsEmpty() == false)
+        if (Entry == nullptr || PrintsInNestedGraph.IsEmpty() ||
+            EventGraph->Nodes.Num() != 3 + PrintsInNestedGraph.Num() ||
+            EventGraph->ExecEdges.Num() != 2 + PrintsInNestedGraph.Num() ||
+            EventGraph->DataEdges.IsEmpty() == false)
         {
             AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
                 TEXT("Nested ForLoop requires BeginPlay, two loops and one PrintString"));
@@ -1326,9 +1328,47 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                             Edge.TargetNode == Target.Id && Edge.TargetPin == Execute->Id;
                     });
         };
-        if (Outer == nullptr || Inner == nullptr ||
+        const FBPIRNode* BodyPrint = nullptr;
+        const FBPIRNode* InnerCompletedPrint = nullptr;
+        const FBPIRNode* OuterCompletedPrint = nullptr;
+        if (Outer != nullptr && Inner != nullptr)
+        {
+            for (const FBPIRNode* Candidate : PrintsInNestedGraph)
+            {
+                if (HasExec(*Inner, TEXT("LoopBody"), *Candidate))
+                {
+                    BodyPrint = Candidate;
+                }
+                if (HasExec(*Inner, TEXT("Completed"), *Candidate))
+                {
+                    InnerCompletedPrint = Candidate;
+                }
+                if (HasExec(*Outer, TEXT("Completed"), *Candidate))
+                {
+                    OuterCompletedPrint = Candidate;
+                }
+            }
+        }
+        TSet<FGuid> UsedPrintIds;
+        if (BodyPrint != nullptr)
+        {
+            UsedPrintIds.Add(BodyPrint->Id);
+        }
+        if (InnerCompletedPrint != nullptr)
+        {
+            UsedPrintIds.Add(InnerCompletedPrint->Id);
+        }
+        if (OuterCompletedPrint != nullptr)
+        {
+            UsedPrintIds.Add(OuterCompletedPrint->Id);
+        }
+        if (Outer == nullptr || Inner == nullptr || BodyPrint == nullptr ||
             HasExec(*Outer, TEXT("LoopBody"), *Inner) == false ||
-            HasExec(*Inner, TEXT("LoopBody"), *Print) == false)
+            UsedPrintIds.Num() != PrintsInNestedGraph.Num() ||
+            (InnerCompletedPrint != nullptr && InnerCompletedPrint == BodyPrint) ||
+            (OuterCompletedPrint != nullptr &&
+                (OuterCompletedPrint == BodyPrint ||
+                    OuterCompletedPrint == InnerCompletedPrint)))
         {
             AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
                 TEXT("Nested ForLoop Exec flow is unsupported"));
@@ -1367,18 +1407,48 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 TEXT("Nested ForLoop bounds must be int32 literals"));
             return false;
         }
-        FBPPrintStringCall Values;
-        if (AnalyzeBranchPrint(GraphIR, *EventGraph, *Entry, *Print, Values, OutIR) == false)
+        // Completedは内側ループ終了時と外側ループ終了時でスコープが異なる。
+        // 各出力先を明示的に分離し、PrintStringの重複実行を防ぐ。
+        const auto LowerPrint = [&](const FBPIRNode& Node,
+            FBPSemanticStatement& Result) -> bool
+        {
+            FBPPrintStringCall Values;
+            if (AnalyzeBranchPrint(
+                    GraphIR, *EventGraph, *Entry, Node, Values, OutIR) == false)
+            {
+                return false;
+            }
+            Result.Kind = EBPSemanticStatementKind::Expression;
+            Result.SourceNodeId = Node.Id;
+            Result.Expression = MakePrintStringExpression(
+                Values, Node, GraphIR.ParentClassPath);
+            return true;
+        };
+        FBPSemanticStatement PrintStatement;
+        if (LowerPrint(*BodyPrint, PrintStatement) == false)
         {
             return false;
         }
-        FBPSemanticStatement PrintStatement;
-        PrintStatement.Kind = EBPSemanticStatementKind::Expression;
-        PrintStatement.SourceNodeId = Print->Id;
-        PrintStatement.Expression = MakePrintStringExpression(
-            Values, *Print, GraphIR.ParentClassPath);
         InnerStatement.LoopBodyStatements.Add(MoveTemp(PrintStatement));
+        if (InnerCompletedPrint != nullptr)
+        {
+            FBPSemanticStatement CompletedStatement;
+            if (LowerPrint(*InnerCompletedPrint, CompletedStatement) == false)
+            {
+                return false;
+            }
+            InnerStatement.CompletedStatements.Add(MoveTemp(CompletedStatement));
+        }
         OuterStatement.LoopBodyStatements.Add(MoveTemp(InnerStatement));
+        if (OuterCompletedPrint != nullptr)
+        {
+            FBPSemanticStatement CompletedStatement;
+            if (LowerPrint(*OuterCompletedPrint, CompletedStatement) == false)
+            {
+                return false;
+            }
+            OuterStatement.CompletedStatements.Add(MoveTemp(CompletedStatement));
+        }
         FBPSemanticFunction Function;
         Function.Name = TEXT("BeginPlay");
         Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
