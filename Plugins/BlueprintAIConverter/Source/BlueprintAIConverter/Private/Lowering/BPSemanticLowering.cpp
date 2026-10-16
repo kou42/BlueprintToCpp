@@ -1272,6 +1272,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     {
         const FBPIRNode* Entry = nullptr;
         TArray<const FBPIRNode*> PrintsInNestedGraph;
+        const FBPIRNode* IndexConverter = nullptr;
         for (const FBPIRNode& Node : EventGraph->Nodes)
         {
             if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
@@ -1284,11 +1285,26 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             {
                 PrintsInNestedGraph.Add(&Node);
             }
+            else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+                Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+                Node.FunctionName == TEXT("Conv_IntToString"))
+            {
+                if (IndexConverter != nullptr)
+                {
+                    AddDiagnostic(OutIR, EventGraph->Name, Node.Id,
+                        TEXT("Nested ForLoop supports one Index converter"));
+                    return false;
+                }
+                IndexConverter = &Node;
+            }
         }
         if (Entry == nullptr || PrintsInNestedGraph.IsEmpty() ||
-            EventGraph->Nodes.Num() != 3 + PrintsInNestedGraph.Num() ||
+            EventGraph->Nodes.Num() != 3 + PrintsInNestedGraph.Num() +
+                (IndexConverter != nullptr ? 1 : 0) ||
             EventGraph->ExecEdges.Num() != 2 + PrintsInNestedGraph.Num() ||
-            EventGraph->DataEdges.IsEmpty() == false)
+            (IndexConverter == nullptr
+                ? EventGraph->DataEdges.IsEmpty() == false
+                : EventGraph->DataEdges.Num() != 2))
         {
             AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
                 TEXT("Nested ForLoop requires BeginPlay, two loops and one PrintString"));
@@ -1422,8 +1438,83 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             Result.SourceNodeId = Node.Id;
             Result.Expression = MakePrintStringExpression(
                 Values, Node, GraphIR.ParentClassPath);
+            if (IndexConverter != nullptr)
+            {
+                const FBPIRPin* Input = FindPin(*IndexConverter, TEXT("InInt"), EGPD_Input);
+                const FBPIRPin* Output = FindPin(*IndexConverter, TEXT("ReturnValue"), EGPD_Output);
+                const FBPIRPin* TextPin = FindPin(Node, TEXT("InString"), EGPD_Input);
+                const FBPIRLink* ToPrint = EventGraph->DataEdges.FindByPredicate(
+                    [IndexConverter, Output, &Node, TextPin](const FBPIRLink& Edge)
+                    {
+                        return Output != nullptr && TextPin != nullptr &&
+                            Edge.SourceNode == IndexConverter->Id && Edge.SourcePin == Output->Id &&
+                            Edge.TargetNode == Node.Id && Edge.TargetPin == TextPin->Id;
+                    });
+                if (ToPrint != nullptr)
+                {
+                    const FBPIRNode* IndexOwner = nullptr;
+                    const FName* IndexName = nullptr;
+                    const FBPIRNode* Candidates[] = { Outer, Inner };
+                    const FName Names[] = { TEXT("LoopIndex"), TEXT("InnerIndex") };
+                    for (int32 I = 0; I < 2; ++I)
+                    {
+                        const FBPIRPin* Index = FindPin(*Candidates[I], TEXT("Index"), EGPD_Output);
+                        if (Input != nullptr && Index != nullptr &&
+                            EventGraph->DataEdges.ContainsByPredicate(
+                                [Candidates, I, Index, IndexConverter, Input](const FBPIRLink& Edge)
+                                {
+                                    return Edge.SourceNode == Candidates[I]->Id &&
+                                        Edge.SourcePin == Index->Id &&
+                                        Edge.TargetNode == IndexConverter->Id &&
+                                        Edge.TargetPin == Input->Id;
+                                }))
+                        {
+                            IndexOwner = Candidates[I];
+                            IndexName = &Names[I];
+                        }
+                    }
+                    if (IndexOwner == nullptr || IndexName == nullptr)
+                    {
+                        return false;
+                    }
+                    FBPSemanticExpression Conversion;
+                    Conversion.Kind = EBPSemanticExpressionKind::FunctionCall;
+                    Conversion.Type.Kind = EBPSemanticTypeKind::String;
+                    Conversion.FunctionName = TEXT("Conv_IntToString");
+                    Conversion.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+                    Conversion.SourceNodeId = IndexConverter->Id;
+                    Conversion.SourcePinId = Output->Id;
+                    FBPSemanticExpression Reference;
+                    Reference.Kind = EBPSemanticExpressionKind::VariableReference;
+                    Reference.Type.Kind = EBPSemanticTypeKind::Int32;
+                    Reference.VariableName = *IndexName;
+                    Reference.SourceNodeId = IndexOwner->Id;
+                    const FBPIRPin* Index = FindPin(*IndexOwner, TEXT("Index"), EGPD_Output);
+                    Reference.SourcePinId = Index->Id;
+                    Conversion.Arguments.Add(MoveTemp(Reference));
+                    Result.Expression.Arguments[1] = MoveTemp(Conversion);
+                }
+            }
             return true;
         };
+        // Converterを使用するPrintStringはループ本体または内側Completedに限定する。
+        // 外側CompletedではIndexのスコープ外参照を避けるため拒否する。
+        if (IndexConverter != nullptr)
+        {
+            const FBPIRPin* Output = FindPin(*IndexConverter, TEXT("ReturnValue"), EGPD_Output);
+            const FBPIRLink* Consumer = EventGraph->DataEdges.FindByPredicate(
+                [IndexConverter, Output](const FBPIRLink& Edge)
+                {
+                    return Output != nullptr && Edge.SourceNode == IndexConverter->Id &&
+                        Edge.SourcePin == Output->Id;
+                });
+            if (Consumer == nullptr || Consumer->TargetNode != BodyPrint->Id)
+            {
+                AddDiagnostic(OutIR, EventGraph->Name, IndexConverter->Id,
+                    TEXT("Nested ForLoop Index converter must feed the body PrintString"));
+                return false;
+            }
+        }
         FBPSemanticStatement PrintStatement;
         if (LowerPrint(*BodyPrint, PrintStatement) == false)
         {
