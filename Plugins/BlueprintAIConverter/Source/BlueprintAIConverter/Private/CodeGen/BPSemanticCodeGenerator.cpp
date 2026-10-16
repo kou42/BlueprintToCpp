@@ -1047,12 +1047,6 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             SourceVariable == nullptr ||
             SourceVariable->Type.ContainerKind != TEXT("array") ||
             SourceVariable->Type.Kind != EBPSemanticTypeKind::Int32 ||
-            // ContainerKindとKindだけでは不十分。Loweringが検証した
-            // ElementTypeまで一致させ、手動生成・破損IRを安全に拒否する。
-            SourceVariable->Type.ElementType.IsValid() == false ||
-            SourceVariable->Type.ElementType->Kind != EBPSemanticTypeKind::Int32 ||
-            Array.Type.ElementType.IsValid() == false ||
-            Array.Type.ElementType->Kind != EBPSemanticTypeKind::Int32 ||
             Array.Type.Kind != EBPSemanticTypeKind::Int32 ||
             Array.Type.Kind != SourceVariable->Type.Kind ||
             Array.Type.ContainerKind != SourceVariable->Type.ContainerKind ||
