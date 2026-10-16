@@ -1308,7 +1308,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         (BodyBranch != nullptr && IndexToString != nullptr) ||
         (BodyComparison == nullptr
             ? (IndexToString == nullptr ? EventGraph->DataEdges.IsEmpty() == false : EventGraph->DataEdges.Num() != 2)
-            : EventGraph->DataEdges.Num() != 1))
+            : (EventGraph->DataEdges.Num() != 1 && EventGraph->DataEdges.Num() != 2)))
     {
         AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
             TEXT("ForLoop conversion requires BeginPlay, ForLoop, one body PrintString, and optional Completed PrintString"));
@@ -1583,20 +1583,15 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 });
             const FBPIRPin* A = FindPin(*BodyComparison, TEXT("A"), EGPD_Input);
             const FBPIRPin* B = FindPin(*BodyComparison, TEXT("B"), EGPD_Input);
-            FString AValue;
-            FString BValue;
             if (ConditionEdge == nullptr || A == nullptr || B == nullptr ||
+                Comparison.OperandType != EBPSemanticTypeKind::Int32 ||
                 FBPNumericComparisonResolver::MatchesPinType(A->Category, A->SubCategory,
                     Comparison.OperandType) == false ||
                 FBPNumericComparisonResolver::MatchesPinType(B->Category, B->SubCategory,
-                    Comparison.OperandType) == false ||
-                FBPNumericComparisonResolver::CanonicalizeLiteral(
-                    Comparison.OperandType, A->DefaultValue, AValue) == false ||
-                FBPNumericComparisonResolver::CanonicalizeLiteral(
-                    Comparison.OperandType, B->DefaultValue, BValue) == false)
+                    Comparison.OperandType) == false)
             {
                 AddDiagnostic(OutIR, EventGraph->Name, BodyComparison->Id,
-                    TEXT("ForLoop comparison requires two unconnected numeric literals"));
+                    TEXT("ForLoop comparison requires int32 operands and a connected condition"));
                 return false;
             }
             BranchStatement.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
@@ -1605,10 +1600,55 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             BranchStatement.Expression.FunctionOwnerPath = BodyComparison->FunctionOwnerPath;
             BranchStatement.Expression.SourceNodeId = BodyComparison->Id;
             BranchStatement.Expression.SourcePinId = ReturnPin->Id;
-            BranchStatement.Expression.Arguments.Add(
-                Literal(Comparison.OperandType, AValue, *BodyComparison, TEXT("A")));
-            BranchStatement.Expression.Arguments.Add(
-                Literal(Comparison.OperandType, BValue, *BodyComparison, TEXT("B")));
+            const FBPIRPin* Operands[] = { A, B };
+            for (const FBPIRPin* Operand : Operands)
+            {
+                const FBPIRLink* IndexEdge = nullptr;
+                for (const FBPIRLink& Edge : EventGraph->DataEdges)
+                {
+                    if (Edge.TargetNode == BodyComparison->Id && Edge.TargetPin == Operand->Id)
+                    {
+                        if (IndexEdge != nullptr)
+                        {
+                            AddDiagnostic(OutIR, EventGraph->Name, BodyComparison->Id,
+                                TEXT("ForLoop comparison operand has multiple data sources"));
+                            return false;
+                        }
+                        IndexEdge = &Edge;
+                    }
+                }
+                if (IndexEdge != nullptr)
+                {
+                    // Indexだけをローカル変数として参照できる。未知のデータソースは拒否する。
+                    if (IndexEdge->SourceNode != Loop->Id ||
+                        IndexEdge->SourcePin != LoopIndex->Id)
+                    {
+                        AddDiagnostic(OutIR, EventGraph->Name, BodyComparison->Id,
+                            TEXT("ForLoop comparison operand source is unsupported"));
+                        return false;
+                    }
+                    FBPSemanticExpression IndexReference;
+                    IndexReference.Kind = EBPSemanticExpressionKind::VariableReference;
+                    IndexReference.Type.Kind = EBPSemanticTypeKind::Int32;
+                    IndexReference.SourceNodeId = Loop->Id;
+                    IndexReference.SourcePinId = LoopIndex->Id;
+                    IndexReference.VariableName = LoopStatement.LoopIndexVariable;
+                    BranchStatement.Expression.Arguments.Add(MoveTemp(IndexReference));
+                }
+                else
+                {
+                    FString Value;
+                    if (FBPNumericComparisonResolver::CanonicalizeLiteral(
+                        Comparison.OperandType, Operand->DefaultValue, Value) == false)
+                    {
+                        AddDiagnostic(OutIR, EventGraph->Name, BodyComparison->Id,
+                            TEXT("ForLoop comparison operand literal is invalid"));
+                        return false;
+                    }
+                    BranchStatement.Expression.Arguments.Add(
+                        Literal(Comparison.OperandType, Value, *BodyComparison, Operand->Name));
+                }
+            }
         }
         FBPSemanticStatement ThenStatement;
         ThenStatement.Kind = EBPSemanticStatementKind::Expression;
