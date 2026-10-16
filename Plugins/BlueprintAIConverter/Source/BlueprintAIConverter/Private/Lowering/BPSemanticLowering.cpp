@@ -1529,12 +1529,12 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     // 比較式・データ接続を含む複雑な経路は既存の単一Branch経路と分離する。
     if (BranchNodes.Num() > 1)
     {
-        if (BodyComparison != nullptr || BodyArithmeticNodes.IsEmpty() == false ||
-            EventGraph->DataEdges.IsEmpty() == false || IndexToString != nullptr ||
-            BodyPrint != nullptr || BranchNodes.Num() > 16)
+        if (BodyArithmeticNodes.IsEmpty() == false ||
+            IndexToString != nullptr || BodyPrint != nullptr || BranchNodes.Num() > 16 ||
+            (BodyComparison == nullptr && EventGraph->DataEdges.IsEmpty() == false))
         {
             AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
-                TEXT("Nested ForLoop Branch supports only literal bool conditions"));
+                TEXT("Nested ForLoop Branch supports bool literals and one int32 comparison"));
             return false;
         }
         const FBPIRNode* RootBranch = nullptr;
@@ -1552,6 +1552,8 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         }
         TSet<FGuid> VisitedBranches;
         TSet<FGuid> VisitedPrints;
+        bool bComparisonUsed = false;
+        int32 ConsumedConditionEdges = 0;
         TFunction<bool(const FBPIRNode&, int32, FBPSemanticStatement&)> BuildBranch;
         BuildBranch = [&](const FBPIRNode& Current, int32 Depth,
             FBPSemanticStatement& OutStatement) -> bool
@@ -1561,17 +1563,116 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 return false;
             }
             const FBPIRPin* Condition = FindPin(Current, TEXT("Condition"), EGPD_Input);
-            if (Condition == nullptr ||
-                (Condition->DefaultValue != TEXT("true") &&
-                    Condition->DefaultValue != TEXT("false")))
+            if (Condition == nullptr)
             {
                 return false;
             }
             VisitedBranches.Add(Current.Id);
             OutStatement.Kind = EBPSemanticStatementKind::Branch;
             OutStatement.SourceNodeId = Current.Id;
-            OutStatement.Expression = Literal(
-                EBPSemanticTypeKind::Bool, Condition->DefaultValue, Current, TEXT("Condition"));
+            const FBPIRLink* ConditionEdge = nullptr;
+            for (const FBPIRLink& Edge : EventGraph->DataEdges)
+            {
+                if (Edge.TargetNode == Current.Id && Edge.TargetPin == Condition->Id)
+                {
+                    if (ConditionEdge != nullptr)
+                    {
+                        return false;
+                    }
+                    ConditionEdge = &Edge;
+                }
+            }
+            if (ConditionEdge == nullptr)
+            {
+                if (Condition->DefaultValue != TEXT("true") &&
+                    Condition->DefaultValue != TEXT("false"))
+                {
+                    return false;
+                }
+                OutStatement.Expression = Literal(
+                    EBPSemanticTypeKind::Bool, Condition->DefaultValue, Current, TEXT("Condition"));
+            }
+            else
+            {
+                // 比較結果は1つのBranchだけに接続できる。Index参照とint32定数を検証する。
+                if (BodyComparison == nullptr || bComparisonUsed)
+                {
+                    return false;
+                }
+                FBPNumericComparison Comparison;
+                TArray<FString> Diagnostics;
+                if (FBPNumericComparisonResolver::Resolve(BodyComparison->FunctionOwnerPath,
+                        BodyComparison->FunctionName, Comparison, Diagnostics) == false ||
+                    Comparison.OperandType != EBPSemanticTypeKind::Int32)
+                {
+                    return false;
+                }
+                const FBPIRPin* ReturnPin = FindPin(*BodyComparison, TEXT("ReturnValue"), EGPD_Output);
+                const FBPIRPin* A = FindPin(*BodyComparison, TEXT("A"), EGPD_Input);
+                const FBPIRPin* B = FindPin(*BodyComparison, TEXT("B"), EGPD_Input);
+                if (ReturnPin == nullptr || A == nullptr || B == nullptr ||
+                    ConditionEdge->SourceNode != BodyComparison->Id ||
+                    ConditionEdge->SourcePin != ReturnPin->Id)
+                {
+                    return false;
+                }
+                OutStatement.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
+                OutStatement.Expression.Type.Kind = EBPSemanticTypeKind::Bool;
+                OutStatement.Expression.FunctionName = BodyComparison->FunctionName;
+                OutStatement.Expression.FunctionOwnerPath = BodyComparison->FunctionOwnerPath;
+                OutStatement.Expression.SourceNodeId = BodyComparison->Id;
+                OutStatement.Expression.SourcePinId = ReturnPin->Id;
+                const FBPIRPin* Inputs[] = { A, B };
+                ++ConsumedConditionEdges;
+                for (const FBPIRPin* Input : Inputs)
+                {
+                    if (FBPNumericComparisonResolver::MatchesPinType(Input->Category,
+                            Input->SubCategory, EBPSemanticTypeKind::Int32) == false)
+                    {
+                        return false;
+                    }
+                    const FBPIRLink* Source = nullptr;
+                    for (const FBPIRLink& Edge : EventGraph->DataEdges)
+                    {
+                        if (Edge.TargetNode == BodyComparison->Id && Edge.TargetPin == Input->Id)
+                        {
+                            if (Source != nullptr)
+                            {
+                                return false;
+                            }
+                            Source = &Edge;
+                        }
+                    }
+                    if (Source != nullptr)
+                    {
+                        if (Source->SourceNode != Loop->Id ||
+                            Source->SourcePin != LoopIndex->Id)
+                        {
+                            return false;
+                        }
+                        ++ConsumedConditionEdges;
+                        FBPSemanticExpression IndexReference;
+                        IndexReference.Kind = EBPSemanticExpressionKind::VariableReference;
+                        IndexReference.Type.Kind = EBPSemanticTypeKind::Int32;
+                        IndexReference.VariableName = LoopStatement.LoopIndexVariable;
+                        IndexReference.SourceNodeId = Loop->Id;
+                        IndexReference.SourcePinId = LoopIndex->Id;
+                        OutStatement.Expression.Arguments.Add(MoveTemp(IndexReference));
+                    }
+                    else
+                    {
+                        FString Value;
+                        if (FBPNumericComparisonResolver::CanonicalizeLiteral(
+                                EBPSemanticTypeKind::Int32, Input->DefaultValue, Value) == false)
+                        {
+                            return false;
+                        }
+                        OutStatement.Expression.Arguments.Add(
+                            Literal(EBPSemanticTypeKind::Int32, Value, *BodyComparison, Input->Name));
+                    }
+                }
+                bComparisonUsed = true;
+            }
             const FName Outputs[] = { UEdGraphSchema_K2::PN_Then, TEXT("else") };
             for (int32 OutputIndex = 0; OutputIndex < 2; ++OutputIndex)
             {
@@ -1650,7 +1751,9 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         if (RootBranch == nullptr ||
             BuildBranch(*RootBranch, 0, RootStatement) == false ||
             VisitedBranches.Num() != BranchNodes.Num() ||
-            VisitedPrints.Num() + OrderedCompletedPrints.Num() != Prints.Num())
+            VisitedPrints.Num() + OrderedCompletedPrints.Num() != Prints.Num() ||
+            (BodyComparison != nullptr && bComparisonUsed == false) ||
+            ConsumedConditionEdges != EventGraph->DataEdges.Num())
         {
             AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
                 TEXT("Nested ForLoop Branch has a cycle, shared target or unsupported Exec flow"));
