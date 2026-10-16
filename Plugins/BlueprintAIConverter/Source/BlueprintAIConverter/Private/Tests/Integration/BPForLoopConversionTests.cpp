@@ -1544,4 +1544,72 @@ bool FBPForLoopMultipleCompletedCodegenTest::RunTest(const FString& Parameters)
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachUnsupportedDiagnosticTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.UnresolvedArrayDiagnostic",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachUnsupportedDiagnosticTest::RunTest(const FString& Parameters)
+{
+    // 配列要素型が未解決のForEachを成功扱いせず、元ノードGUIDまで報告する。
+    for (const FString MacroName : { FString(TEXT("ForEachLoop")),
+                                     FString(TEXT("ForEachLoopWithBreak")) })
+    {
+        FBPGraphIR GraphIR;
+        GraphIR.AssetPath = TEXT("/Game/BP_ForEach");
+        GraphIR.ParentClassPath = TEXT("/Script/Engine.Actor");
+        FBPIRGraph Graph;
+        Graph.Name = TEXT("EventGraph");
+        Graph.Kind = TEXT("event");
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.MacroGraphName = MacroName;
+        Graph.Nodes.Add(Node);
+        GraphIR.Graphs.Add(Graph);
+
+        FBPSemanticIR SemanticIR;
+        TestFalse(TEXT("未解決ForEachを拒否"), FBPSemanticLowering::Lower(nullptr, GraphIR, SemanticIR));
+        TestTrue(TEXT("未解決ForEachに診断あり"), SemanticIR.HasErrors());
+        if (SemanticIR.Diagnostics.IsEmpty() == false)
+        {
+            TestEqual(TEXT("元ノードGUIDを保持"), SemanticIR.Diagnostics[0].NodeId, Node.Id);
+            TestTrue(TEXT("Macro名を診断に保持"),
+                SemanticIR.Diagnostics[0].Message.Contains(MacroName));
+        }
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachJsonContractTest,
+    "BlueprintAIConverter.Export.ForEachLoop.SemanticJsonContract",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachJsonContractTest::RunTest(const FString& Parameters)
+{
+    // 実際のLowering完了前でも、専用の配列・要素情報がJSON契約で失われないことを確認する。
+    FBPSemanticIR IR;
+    IR.AssetPath = TEXT("/Game/BP_ForEach");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Statement;
+    Statement.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Statement.LoopElementVariable = TEXT("Element");
+    Statement.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Statement.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Statement.LoopArray.VariableName = TEXT("Numbers");
+    Statement.LoopArray.Type.ContainerKind = TEXT("array");
+    Block.Statements.Add(Statement);
+    Function.Blocks.Add(Block);
+    IR.Functions.Add(Function);
+
+    FString Json;
+    TestTrue(TEXT("ForEach JSONをシリアライズ"), FBPSemanticJsonSerializer::Serialize(IR, TEXT("5.7.4"), Json));
+    TestTrue(TEXT("ForEach文種別"), Json.Contains(TEXT("\\"kind\\":\\"for_each_loop\\"")));
+    TestTrue(TEXT("配列入力"), Json.Contains(TEXT("\\"loop_array\\"")));
+    TestTrue(TEXT("要素変数"), Json.Contains(TEXT("\\"loop_element_variable\\":\\"Element\\"")));
+    TestTrue(TEXT("要素型"), Json.Contains(TEXT("\\"loop_element_type\\"")));
+    return true;
+}
+
 #endif
