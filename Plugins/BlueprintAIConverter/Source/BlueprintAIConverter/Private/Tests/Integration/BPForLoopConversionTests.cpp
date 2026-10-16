@@ -1966,11 +1966,16 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     FBPIRNode& Loop = Graph.Nodes[1];
     Loop.MacroGraphName = TEXT("ForEachLoop");
     Loop.MacroGraphPath = TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoop");
-    // 既存fixtureのExecピンGUIDとリンクを維持し、入力と出力を
-    // 実際のForEachピン名へ置き換える。
-    Loop.Pins[1] = MakeLoopPin(TEXT("Array"), EGPD_Input, TEXT("int"));
-    Loop.Pins[2] = MakeLoopPin(TEXT("Array Element"), EGPD_Output, TEXT("int"));
+    // 既存fixtureのExec/Dataリンクが参照するPinIdは変更しない。
+    // ForLoopのFirstIndex/LastIndexはForEachに存在しないため、
+    // LoopBodyとCompletedのGUIDを保持したまま不要ピンを除去する。
+    Loop.Pins[1].Name = TEXT("Array");
+    Loop.Pins[1].DefaultValue.Reset();
+    Loop.Pins[2].Name = TEXT("Array Element");
+    Loop.Pins[2].Direction = EGPD_Output;
     Loop.Pins[4].Name = TEXT("Array Index");
+    // Completedは元のPins[5]、LoopBodyはPins[3]に保持される。
+    // 実ノードではピン配列順に意味がないため、名前とGUIDで検証する。
     FBPIRNode Getter;
     Getter.Id = FGuid::NewGuid();
     Getter.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_VariableGet");
