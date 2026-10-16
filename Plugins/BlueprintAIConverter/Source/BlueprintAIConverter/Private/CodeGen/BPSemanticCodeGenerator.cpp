@@ -715,6 +715,34 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         TextExpression = FString::Printf(TEXT("UKismetStringLibrary::Conv_IntToString(%s)"),
             *TextArgument.Arguments[0].VariableName.ToString());
     }
+    else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
+        TextArgument.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+        TextArgument.FunctionName == TEXT("Conv_IntToString") &&
+        TextArgument.Arguments.Num() == 1)
+    {
+        const FBPSemanticExpression& Addition = TextArgument.Arguments[0];
+        if (Addition.Kind != EBPSemanticExpressionKind::FunctionCall ||
+            Addition.Type.Kind != EBPSemanticTypeKind::Int32 ||
+            Addition.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
+            Addition.FunctionName != TEXT("Add_IntInt") ||
+            Addition.Arguments.Num() != 2 ||
+            Addition.Arguments[0].Kind != EBPSemanticExpressionKind::VariableReference ||
+            Addition.Arguments[1].Kind != EBPSemanticExpressionKind::VariableReference ||
+            Addition.Arguments[0].Type.Kind != EBPSemanticTypeKind::Int32 ||
+            Addition.Arguments[1].Type.Kind != EBPSemanticTypeKind::Int32 ||
+            IsIdentifier(Addition.Arguments[0].VariableName.ToString()) == false ||
+            IsIdentifier(Addition.Arguments[1].VariableName.ToString()) == false)
+        {
+            Diagnostics.Add(TEXT("Unsupported nested Index arithmetic expression"));
+            return false;
+        }
+        // BlueprintのAdd_IntIntをそのままKismetMathLibrary呼び出しとして保持する。
+        TextExpression = FString::Printf(
+            TEXT("UKismetStringLibrary::Conv_IntToString(UKismetMathLibrary::Add_IntInt(%s, %s))"),
+            *Addition.Arguments[0].VariableName.ToString(),
+            *Addition.Arguments[1].VariableName.ToString());
+    }
     else
     {
         Diagnostics.Add(TEXT("Unsupported PrintString text expression"));
