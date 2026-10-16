@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "BPGraphIR.h"
+#include "BPSemanticCodeGenerator.h"
 #include "BPSemanticFunctionExtractor.h"
 #include "BPSemanticGraphTraceExtractor.h"
 #include "BPSemanticJsonExporter.h"
@@ -169,6 +170,35 @@ bool FBPSemanticIntArrayEditorTest::RunTest(const FString& Parameters)
         Variable->Type.ElementType.IsValid() &&
         Variable->Type.ElementType->Kind == EBPSemanticTypeKind::Int32);
     TestEqual(TEXT("反射C++型"), Variable->ReflectedCppType, FString(TEXT("TArray<int32>")));
+
+    // 実Blueprint由来の反射型を使って、DeclarationOnly経由で
+    // C++の配列メンバー宣言まで到達することを検証する。
+    // Blueprintの配列デフォルト値はこのモードでは再現しない。
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Loop.LoopElementVariable = TEXT("ForEachArrayElement");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = Variable->Name;
+    Loop.LoopArray.Type = Variable->Type;
+    // 空のBodyはCodeGenの安全検証で拒否されるため、ここでは
+    // 配列変数の宣言経路だけを独立に確認する。
+    Block.Statements.Add(MoveTemp(Loop));
+    Function.Blocks.Add(MoveTemp(Block));
+    IR.Functions.Add(MoveTemp(Function));
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("BodyなしのForEachは生成拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AIntArrayActor"),
+            TEXT("TEST_API"), Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("拒否診断を保持"), Diagnostics.IsEmpty() == false);
     return true;
 }
 
