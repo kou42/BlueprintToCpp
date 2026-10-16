@@ -282,6 +282,82 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedIndexToStringTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedIndexToString",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedIndexToStringTest::RunTest(const FString& Parameters)
+{
+    for (int32 IndexSource = 0; IndexSource < 2; ++IndexSource)
+    {
+        FBPGraphIR GraphIR = MakeForLoopBranchGraph();
+        FBPIRGraph& Graph = GraphIR.Graphs[0];
+        FBPIRNode& Inner = Graph.Nodes[2];
+        Inner.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+        Inner.MacroGraphName = TEXT("ForLoop");
+        Inner.Pins.Reset();
+        Inner.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Inner.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+        Inner.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("4")));
+        Inner.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+        Inner.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+        Inner.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+        Graph.Nodes.RemoveAt(5);
+        Graph.Nodes.RemoveAt(4);
+        Graph.ExecEdges.Reset();
+        const auto Connect = [&Graph](const FBPIRNode& Source, int32 Output,
+            const FBPIRNode& Target, int32 Input, bool bData)
+        {
+            FBPIRLink Edge;
+            Edge.SourceNode = Source.Id;
+            Edge.SourcePin = Source.Pins[Output].Id;
+            Edge.TargetNode = Target.Id;
+            Edge.TargetPin = Target.Pins[Input].Id;
+            if (bData)
+            {
+                Graph.DataEdges.Add(Edge);
+            }
+            else
+            {
+                Graph.ExecEdges.Add(Edge);
+            }
+        };
+        Connect(Graph.Nodes[0], 0, Graph.Nodes[1], 0, false);
+        Connect(Graph.Nodes[1], 3, Graph.Nodes[2], 0, false);
+        Connect(Graph.Nodes[2], 3, Graph.Nodes[3], 0, false);
+        FBPIRNode Converter;
+        Converter.Id = FGuid::NewGuid();
+        Converter.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Converter.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+        Converter.FunctionName = TEXT("Conv_IntToString");
+        Converter.Pins.Add(MakeLoopPin(TEXT("InInt"), EGPD_Input, TEXT("int")));
+        Converter.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("string")));
+        Connect(Graph.Nodes[IndexSource == 0 ? 1 : 2], IndexSource == 0 ? 4 : 4,
+            Converter, 0, true);
+        Connect(Converter, 1, Graph.Nodes[3], 1, true);
+        Graph.Nodes.Add(MoveTemp(Converter));
+        FBPSemanticIR SemanticIR;
+        if (TestTrue(TEXT("二重ループのIndex変換Lowering"),
+            FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+        {
+            return false;
+        }
+        FBPGeneratedActorFiles Files;
+        TArray<FString> Diagnostics;
+        if (TestTrue(TEXT("二重ループのIndex変換C++生成"),
+            FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopIndexActor"),
+                TEXT("TEST_API"), Files, Diagnostics)) == false)
+        {
+            return false;
+        }
+        const FString Name = IndexSource == 0 ? TEXT("LoopIndex") : TEXT("InnerIndex");
+        TestTrue(TEXT("対応するIndexの文字列変換"),
+            Files.SourceContent.Contains(FString::Printf(
+                TEXT("UKismetStringLibrary::Conv_IntToString(%s)"), *Name)));
+    }
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedLoopCompletedTest,
     "BlueprintAIConverter.Conversion.ForLoop.NestedLoopCompleted",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
