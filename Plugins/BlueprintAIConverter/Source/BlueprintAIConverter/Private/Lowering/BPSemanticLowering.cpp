@@ -1453,6 +1453,9 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
                 }
             }
         }
+        // 同じConverterの入力・出力だけでなく、他のConverterや配列Getterへ
+        // 同一ピンが二重接続されていないことをリンク数と併せて確認する。
+        // ForEachは純粋式の複製が起こり得るため、曖昧な共有接続を許容しない。
         if (InputLinks != 1 || OutputLinks != 1 || Consumer == nullptr ||
             (IndexConsumerPrint != nullptr && Consumer == IndexConsumerPrint) ||
             (ElementConsumerPrint != nullptr && Consumer == ElementConsumerPrint))
