@@ -282,6 +282,67 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedArithmeticComparisonTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedArithmeticComparison",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedArithmeticComparisonTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR GraphIR = MakeForLoopBranchGraph();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    const auto MakeMath = [](const TCHAR* Function, const TCHAR* DefaultB)
+    {
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Node.FunctionName = Function;
+        Node.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+        Node.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+        Node.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), DefaultB));
+        Node.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("int")));
+        return Node;
+    };
+    FBPIRNode Addition = MakeMath(TEXT("Add_IntInt"), TEXT("1"));
+    FBPIRNode Multiplication = MakeMath(TEXT("Multiply_IntInt"), TEXT("2"));
+    FBPIRNode Comparison = MakeMath(TEXT("Less_IntInt"), TEXT("10"));
+    Comparison.Pins[2].Category = TEXT("bool");
+    const auto Connect = [&Graph](const FBPIRNode& Source, int32 Output,
+        const FBPIRNode& Target, int32 Input)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Source.Id;
+        Edge.SourcePin = Source.Pins[Output].Id;
+        Edge.TargetNode = Target.Id;
+        Edge.TargetPin = Target.Pins[Input].Id;
+        Graph.DataEdges.Add(Edge);
+    };
+    Connect(Graph.Nodes[1], 4, Addition, 0);
+    Connect(Addition, 2, Multiplication, 0);
+    Connect(Multiplication, 2, Comparison, 0);
+    Connect(Comparison, 2, Graph.Nodes[2], 1);
+    Graph.Nodes.Add(MoveTemp(Addition));
+    Graph.Nodes.Add(MoveTemp(Multiplication));
+    Graph.Nodes.Add(MoveTemp(Comparison));
+
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("多段算術比較のLowering"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("多段算術比較のC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopNestedMathActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("多段算術式を保持"),
+        Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Multiply_IntInt(UKismetMathLibrary::Add_IntInt(LoopIndex, 1), 2) < 10")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopArithmeticComparisonBranchTest,
     "BlueprintAIConverter.Conversion.ForLoop.ArithmeticComparisonBranch",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
