@@ -1967,8 +1967,8 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     Loop.MacroGraphName = TEXT("ForEachLoop");
     Loop.MacroGraphPath = TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoop");
     // 既存fixtureのExec/Dataリンクが参照するPinIdは変更しない。
-    // ForLoopのFirstIndex/LastIndexはForEachに存在しないため、
-    // LoopBodyとCompletedのGUIDを保持したまま不要ピンを除去する。
+    // ForLoop由来のピンをForEachの名前・方向に置き換える。
+    // 実ノードのピン配置と一致するかは別途Editor Golden Testで確認する。
     Loop.Pins[1].Name = TEXT("Array");
     Loop.Pins[1].DefaultValue.Reset();
     Loop.Pins[2].Name = TEXT("Array Element");
@@ -2039,7 +2039,74 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
             AddError(Diagnostic);
         }
     }
-    return bGenerated;
+    if (bGenerated == false)
+    {
+        return false;
+    }
+
+    // 配列Getterから同じ入力への二重リンクは、リンク数が増えた時点で拒否する。
+    // 正常なIRをコピーして破壊するため、以降のケース間で状態を共有しない。
+    FBPGraphIR DuplicateGraph = GraphIR;
+    DuplicateGraph.Graphs[0].DataEdges.Add(ArrayEdge);
+    FBPSemanticIR DuplicateIR;
+    TestFalse(TEXT("配列入力への重複リンクを拒否"),
+        FBPSemanticLowering::Lower(Blueprint, DuplicateGraph, DuplicateIR));
+    TestTrue(TEXT("重複リンクの拒否理由を保持"),
+        DuplicateIR.HasErrors());
+
+    // リンク数が正常でも、配列Getterが別の入力ピンへ接続されていれば
+    // 正当な配列供給元と見なさない。リンク数だけの検証への退行を防ぐ。
+    FBPGraphIR WrongPinGraph = GraphIR;
+    WrongPinGraph.Graphs[0].DataEdges.Last().TargetPin = FGuid::NewGuid();
+    FBPSemanticIR WrongPinIR;
+    TestFalse(TEXT("配列入力の接続先GUID不一致を拒否"),
+        FBPSemanticLowering::Lower(Blueprint, WrongPinGraph, WrongPinIR));
+    TestTrue(TEXT("接続先GUID不一致の診断を保持"),
+        WrongPinIR.HasErrors());
+
+    // 変換ノードへのIndexリンクをElementリンクに変更した場合は
+    // 誤ってIndex式として出力せず、実際の接続元に従って型付けする。
+    FBPGraphIR ElementGraph = GraphIR;
+    ElementGraph.Graphs[0].DataEdges[0].SourcePin =
+        ElementGraph.Graphs[0].Nodes[1].Pins[2].Id;
+    FBPSemanticIR ElementIR;
+    const bool bElementLowered =
+        FBPSemanticLowering::Lower(Blueprint, ElementGraph, ElementIR);
+    TestTrue(TEXT("Array Elementの接続元を識別"), bElementLowered);
+    if (bElementLowered)
+    {
+        FBPGeneratedActorFiles ElementFiles;
+        TArray<FString> ElementDiagnostics;
+        const bool bElementGenerated = FBPSemanticCodeGenerator::Generate(
+            ElementIR, TEXT("AForEachElementCompiledActor"), TEXT("TEST_API"),
+            ElementFiles, ElementDiagnostics,
+            EBPVariableFallbackMode::DeclarationOnly);
+        TestTrue(TEXT("Element参照のC++生成"), bElementGenerated);
+        if (bElementGenerated)
+        {
+            TestTrue(TEXT("Elementを配列から取得"),
+                ElementFiles.SourceContent.Contains(
+                    TEXT("const int32 ForEachArrayElement = Numbers[ForEachArrayIndex];")));
+            TestTrue(TEXT("Elementを文字列へ変換"),
+                ElementFiles.SourceContent.Contains(
+                    TEXT("Conv_IntToString(ForEachArrayElement)")));
+        }
+        else
+        {
+            for (const FString& Diagnostic : ElementDiagnostics)
+            {
+                AddError(Diagnostic);
+            }
+        }
+    }
+    else
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : ElementIR.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+    }
+    return bElementLowered;
 }
 
 #endif
