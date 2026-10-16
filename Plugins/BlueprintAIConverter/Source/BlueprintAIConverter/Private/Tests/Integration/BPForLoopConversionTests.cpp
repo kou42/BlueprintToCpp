@@ -1612,4 +1612,38 @@ bool FBPForEachJsonContractTest::RunTest(const FString& Parameters)
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachCodeGenRejectsUnresolvedTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.RejectsUnresolvedArray",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachCodeGenRejectsUnresolvedTest::RunTest(const FString& Parameters)
+{
+    // 型が未確定の配列に対して、推測でC++を生成しないことを確認する。
+    FBPSemanticIR IR;
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ArrayIndex");
+    Loop.LoopElementVariable = TEXT("ArrayElement");
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("MissingArray");
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    Block.Statements.Add(Loop);
+    Function.Blocks.Add(Block);
+    IR.Functions.Add(Function);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("未解決配列を拒否"),
+        FBPSemanticCodeGenerator::Generate(
+            IR, TEXT("AForEachActor"), TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("拒否理由を診断"), Diagnostics.IsEmpty() == false);
+    return true;
+}
+
 #endif
