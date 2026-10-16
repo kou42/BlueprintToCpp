@@ -1988,6 +1988,12 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     ArrayEdge.TargetNode = Loop.Id;
     ArrayEdge.TargetPin = Loop.Pins[1].Id;
     Graph.DataEdges.Add(ArrayEdge);
+    // GUIDの参照整合性が崩れると、Loweringは接続のない配列として拒否する。
+    // fixtureのピン差し替えによる回帰をここで検出する。
+    TestTrue(TEXT("配列入力のPinIdがデータリンクと一致"),
+        Graph.DataEdges.Last().TargetPin == Loop.Pins[1].Id);
+    TestTrue(TEXT("Index出力のPinIdが変換ノードへのリンクと一致"),
+        Graph.DataEdges[0].SourcePin == Loop.Pins[4].Id);
     Graph.Nodes.Add(MoveTemp(Getter));
     for (FBPIRNode& Node : Graph.Nodes)
     {
