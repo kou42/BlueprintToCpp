@@ -282,6 +282,95 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopMultipleNestedComparisonsTest,
+    "BlueprintAIConverter.Conversion.ForLoop.MultipleNestedComparisons",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopMultipleNestedComparisonsTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR GraphIR = MakeForLoopBranchGraph();
+    FBPIRGraph& Graph = GraphIR.Graphs[0];
+    FBPIRNode Inner;
+    Inner.Id = FGuid::NewGuid();
+    Inner.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
+    Inner.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("Condition"), EGPD_Input, TEXT("bool")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Inner.Pins.Add(MakeLoopPin(TEXT("else"), EGPD_Output, TEXT("exec")));
+    FBPIRNode InnerFalse = Graph.Nodes[4];
+    InnerFalse.Id = FGuid::NewGuid();
+    InnerFalse.Pins[0].Id = FGuid::NewGuid();
+    InnerFalse.Pins[1].Id = FGuid::NewGuid();
+    InnerFalse.Pins[1].DefaultValue = TEXT("Inner false");
+    const auto MakeComparison = [](const TCHAR* Name, const TCHAR* Value)
+    {
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Node.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+        Node.FunctionName = Name;
+        Node.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+        Node.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), Value));
+        Node.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("bool")));
+        return Node;
+    };
+    FBPIRNode OuterComparison = MakeComparison(TEXT("Less_IntInt"), TEXT("5"));
+    FBPIRNode InnerComparison = MakeComparison(TEXT("Greater_IntInt"), TEXT("1"));
+    for (FBPIRLink& Edge : Graph.ExecEdges)
+    {
+        if (Edge.SourceNode == Graph.Nodes[2].Id &&
+            Edge.TargetNode == Graph.Nodes[3].Id)
+        {
+            Edge.TargetNode = Inner.Id;
+            Edge.TargetPin = Inner.Pins[0].Id;
+        }
+    }
+    const auto Connect = [&Graph](const FBPIRNode& Source, int32 Output,
+        const FBPIRNode& Target, int32 Input, bool bData)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Source.Id;
+        Edge.SourcePin = Source.Pins[Output].Id;
+        Edge.TargetNode = Target.Id;
+        Edge.TargetPin = Target.Pins[Input].Id;
+        if (bData)
+        {
+            Graph.DataEdges.Add(Edge);
+        }
+        else
+        {
+            Graph.ExecEdges.Add(Edge);
+        }
+    };
+    Connect(Inner, 2, Graph.Nodes[3], 0, false);
+    Connect(Inner, 3, InnerFalse, 0, false);
+    Connect(OuterComparison, 2, Graph.Nodes[2], 1, true);
+    Connect(InnerComparison, 2, Inner, 1, true);
+    Connect(Graph.Nodes[1], 4, OuterComparison, 0, true);
+    Connect(Graph.Nodes[1], 4, InnerComparison, 0, true);
+    Graph.Nodes.Add(MoveTemp(Inner));
+    Graph.Nodes.Add(MoveTemp(InnerFalse));
+    Graph.Nodes.Add(MoveTemp(OuterComparison));
+    Graph.Nodes.Add(MoveTemp(InnerComparison));
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("二つのネスト比較をLowering"),
+        FBPSemanticLowering::LowerForLoop(GraphIR, SemanticIR)) == false)
+    {
+        return false;
+    }
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("二つのネスト比較をC++生成"),
+        FBPSemanticCodeGenerator::Generate(SemanticIR, TEXT("AForLoopMultipleCompareActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("外側比較"), Files.SourceContent.Contains(TEXT("if (LoopIndex < 5)")));
+    TestTrue(TEXT("内側比較"), Files.SourceContent.Contains(TEXT("if (LoopIndex > 1)")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedIndexComparisonTest,
     "BlueprintAIConverter.Conversion.ForLoop.NestedIndexComparison",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
