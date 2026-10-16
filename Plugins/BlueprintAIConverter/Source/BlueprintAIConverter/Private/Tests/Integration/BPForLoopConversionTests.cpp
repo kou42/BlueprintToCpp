@@ -1764,6 +1764,80 @@ bool FBPForEachElementCodeGenTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachIndexElementTogetherCodeGenTest,
+    "BlueprintAIConverter.Conversion.ForEachLoop.IndexAndElementCodeGen",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForEachIndexElementTogetherCodeGenTest::RunTest(const FString& Parameters)
+{
+    // 同じループ内でIndexとElementを使った場合、両方が正しいスコープに
+    // 出力されることを確認する。Printfの引数対応ずれも検出する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("元のForLoopをLowering"),
+        FBPSemanticLowering::LowerForLoop(MakeForLoopGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Loop = IR.Functions[0].Blocks[0].Statements[0];
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopIndexVariable = TEXT("ForEachArrayIndex");
+    Loop.LoopElementVariable = TEXT("ForEachArrayElement");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("Numbers");
+    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+    Variable.Type.ContainerKind = TEXT("array");
+    Variable.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Variable);
+
+    if (TestTrue(TEXT("2個のBody PrintStringが存在"),
+        Loop.LoopBodyStatements.Num() >= 2) == false)
+    {
+        return false;
+    }
+    FBPSemanticExpression& IndexText = Loop.LoopBodyStatements[0].Expression.Arguments[1];
+    if (TestTrue(TEXT("Index変換式が存在"),
+        IndexText.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        IndexText.Arguments.Num() == 1) == false)
+    {
+        return false;
+    }
+    IndexText.Arguments[0].VariableName = Loop.LoopIndexVariable;
+    FBPSemanticExpression& ElementText = Loop.LoopBodyStatements[1].Expression.Arguments[1];
+    ElementText = IndexText;
+    ElementText.Arguments[0].VariableName = Loop.LoopElementVariable;
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("IndexとElementのコード生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachBothActor"),
+            TEXT("TEST_API"), Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("正しいループヘッダ"),
+        Files.SourceContent.Contains(TEXT("for (int32 ForEachArrayIndex = 0; ForEachArrayIndex < Numbers.Num(); ++ForEachArrayIndex)")));
+    const int32 Declaration = Files.SourceContent.Find(
+        TEXT("const int32 ForEachArrayElement = Numbers[ForEachArrayIndex];"));
+    const int32 IndexPrint = Files.SourceContent.Find(
+        TEXT("Conv_IntToString(ForEachArrayIndex)"));
+    const int32 ElementPrint = Files.SourceContent.Find(
+        TEXT("Conv_IntToString(ForEachArrayElement)"));
+    TestTrue(TEXT("要素宣言と2個のPrintStringが正しい順序"),
+        Declaration != INDEX_NONE && IndexPrint > Declaration &&
+        ElementPrint > IndexPrint);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForEachTypeMismatchCodeGenTest,
     "BlueprintAIConverter.Conversion.ForEachLoop.RejectsMismatchedArrayType",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
