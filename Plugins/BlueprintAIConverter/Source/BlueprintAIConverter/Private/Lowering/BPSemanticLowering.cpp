@@ -1298,7 +1298,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     if (BeginPlay == nullptr || Loop == nullptr || Prints.IsEmpty() ||
         EventGraph->Nodes.Num() != 2 + Prints.Num() + (IndexToString != nullptr ? 1 : 0) +
             (BodyBranch != nullptr ? 1 : 0) ||
-        EventGraph->ExecEdges.Num() != 1 + Prints.Num() + (BodyBranch != nullptr ? 1 : 0) ||
+        EventGraph->ExecEdges.Num() < 2 + (BodyBranch != nullptr ? 2 : 0) ||
         (BodyBranch != nullptr && IndexToString != nullptr) ||
         (IndexToString == nullptr ? EventGraph->DataEdges.IsEmpty() == false : EventGraph->DataEdges.Num() != 2))
     {
@@ -1426,8 +1426,54 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             return false;
         }
     }
+    // Completed の直列PrintStringをExec接続順に収集し、循環と分岐を拒否する。
+    TArray<const FBPIRNode*> OrderedCompletedPrints;
+    TSet<FGuid> VisitedCompleted;
+    const FBPIRNode* CurrentCompleted = CompletedPrint;
+    while (CurrentCompleted != nullptr)
+    {
+        if (VisitedCompleted.Contains(CurrentCompleted->Id) ||
+            VisitedBodyNodes.Contains(CurrentCompleted->Id))
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, CurrentCompleted->Id,
+                TEXT("ForLoop Completed contains an Exec cycle or shared body node"));
+            return false;
+        }
+        VisitedCompleted.Add(CurrentCompleted->Id);
+        OrderedCompletedPrints.Add(CurrentCompleted);
+        const FBPIRPin* ThenPin = FindPin(*CurrentCompleted, UEdGraphSchema_K2::PN_Then, EGPD_Output);
+        const FBPIRLink* NextEdge = nullptr;
+        for (const FBPIRLink& Edge : EventGraph->ExecEdges)
+        {
+            if (ThenPin != nullptr && Edge.SourceNode == CurrentCompleted->Id &&
+                Edge.SourcePin == ThenPin->Id)
+            {
+                if (NextEdge != nullptr)
+                {
+                    AddDiagnostic(OutIR, EventGraph->Name, CurrentCompleted->Id,
+                        TEXT("ForLoop Completed has multiple Exec successors"));
+                    return false;
+                }
+                NextEdge = &Edge;
+            }
+        }
+        if (NextEdge == nullptr)
+        {
+            break;
+        }
+        const FBPIRNode* NextPrint = FindPrintById(NextEdge->TargetNode);
+        const FBPIRPin* NextExecute = NextPrint != nullptr
+            ? FindPin(*NextPrint, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr;
+        if (NextExecute == nullptr || NextEdge->TargetPin != NextExecute->Id)
+        {
+            AddDiagnostic(OutIR, EventGraph->Name, CurrentCompleted->Id,
+                TEXT("ForLoop Completed contains an unsupported Exec target"));
+            return false;
+        }
+        CurrentCompleted = NextPrint;
+    }
     if (BodyBranch == nullptr &&
-        OrderedBodyPrints.Num() + (CompletedPrint != nullptr ? 1 : 0) != Prints.Num())
+        OrderedBodyPrints.Num() + OrderedCompletedPrints.Num() != Prints.Num())
     {
         AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
             TEXT("ForLoop contains a disconnected or ambiguous PrintString"));
@@ -1483,7 +1529,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             HasBranchEdge(Then, ThenPrint, ThenExecute) == false ||
             HasBranchEdge(Else, ElsePrint, ElseExecute) == false ||
             (Condition->DefaultValue != TEXT("true") && Condition->DefaultValue != TEXT("false")) ||
-            Prints.Num() != 2 + (CompletedPrint != nullptr ? 1 : 0))
+            Prints.Num() != 2 + OrderedCompletedPrints.Num())
         {
             AddDiagnostic(OutIR, EventGraph->Name, BodyBranch->Id,
                 TEXT("ForLoop Branch requires a bool literal and distinct True/False PrintString targets"));
@@ -1586,19 +1632,19 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         }
         LoopStatement.LoopBodyStatements.Add(MoveTemp(BodyStatement));
     }
-    if (CompletedPrint != nullptr)
+    for (const FBPIRNode* OrderedCompleted : OrderedCompletedPrints)
     {
         FBPPrintStringCall CompletedValues;
         if (AnalyzeBranchPrint(
-            GraphIR, *EventGraph, *BeginPlay, *CompletedPrint, CompletedValues, OutIR) == false)
+            GraphIR, *EventGraph, *BeginPlay, *OrderedCompleted, CompletedValues, OutIR) == false)
         {
             return false;
         }
         FBPSemanticStatement CompletedStatement;
         CompletedStatement.Kind = EBPSemanticStatementKind::Expression;
-        CompletedStatement.SourceNodeId = CompletedPrint->Id;
+        CompletedStatement.SourceNodeId = OrderedCompleted->Id;
         CompletedStatement.Expression = MakePrintStringExpression(
-            CompletedValues, *CompletedPrint, GraphIR.ParentClassPath);
+            CompletedValues, *OrderedCompleted, GraphIR.ParentClassPath);
         LoopStatement.CompletedStatements.Add(MoveTemp(CompletedStatement));
     }
     Block.Statements.Add(MoveTemp(LoopStatement));
