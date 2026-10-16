@@ -1294,7 +1294,9 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             }
             else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
                 Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetMathLibrary") &&
-                Node.FunctionName == TEXT("Add_IntInt"))
+                (Node.FunctionName == TEXT("Add_IntInt") ||
+                    Node.FunctionName == TEXT("Subtract_IntInt") ||
+                    Node.FunctionName == TEXT("Multiply_IntInt")))
             {
                 IndexAdditions.Add(&Node);
             }
@@ -1517,7 +1519,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 }
                 else
                 {
-                    // Add_IntIntの両オペランドを接続元のIndexで解決する。
+                    // 整数二項演算の両オペランドを接続元のIndexで解決する。
                     // 別ノードや未接続ピンはこの限定対応では許可しない。
                     if (IndexAdditions.Num() != 1 ||
                         Node.Id != BodyPrint->Id)
@@ -1542,7 +1544,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                     FBPSemanticExpression AdditionCall;
                     AdditionCall.Kind = EBPSemanticExpressionKind::FunctionCall;
                     AdditionCall.Type.Kind = EBPSemanticTypeKind::Int32;
-                    AdditionCall.FunctionName = TEXT("Add_IntInt");
+                    AdditionCall.FunctionName = Addition->FunctionName;
                     AdditionCall.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
                     AdditionCall.SourceNodeId = Addition->Id;
                     const FName Inputs[] = { TEXT("A"), TEXT("B") };
