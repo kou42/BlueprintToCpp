@@ -760,6 +760,48 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
     return true;
 }
 
+// ForLoopのBranchを再帰的に生成する。対応する葉はPrintStringのみとし、
+// 深さ制限で異常なSemantic IRによる過度な再帰を防ぐ。
+bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
+    const FString& ParentClassPath, const TArray<FBPSemanticVariable>& Variables,
+    const FName LocalIndex, const FString& Indent, int32 Depth,
+    FString& OutCode, TArray<FString>& Diagnostics)
+{
+    if (Depth > 16)
+    {
+        Diagnostics.Add(TEXT("ForLoop Branch nesting exceeds the supported depth"));
+        return false;
+    }
+    if (Statement.Kind == EBPSemanticStatementKind::Expression)
+    {
+        return EmitPrintStringStatement(Statement.Expression, ParentClassPath,
+            Indent, OutCode, Diagnostics);
+    }
+    if (Statement.Kind != EBPSemanticStatementKind::Branch ||
+        Statement.ThenStatements.Num() != 1 || Statement.ElseStatements.Num() != 1)
+    {
+        Diagnostics.Add(TEXT("ForLoop Branch requires one statement per output"));
+        return false;
+    }
+    FString Condition;
+    FString ThenCode;
+    FString ElseCode;
+    if (EmitForLoopCondition(Statement.Expression, Variables, LocalIndex,
+            Condition, Diagnostics) == false ||
+        EmitForLoopBodyStatement(Statement.ThenStatements[0], ParentClassPath, Variables,
+            LocalIndex, Indent + TEXT("    "), Depth + 1, ThenCode, Diagnostics) == false ||
+        EmitForLoopBodyStatement(Statement.ElseStatements[0], ParentClassPath, Variables,
+            LocalIndex, Indent + TEXT("    "), Depth + 1, ElseCode, Diagnostics) == false)
+    {
+        return false;
+    }
+    OutCode = FString::Printf(
+        TEXT("%sif (%s)\n%s{\n%s%s}\n%selse\n%s{\n%s%s}\n"),
+        *Indent, *Condition, *Indent, *ThenCode, *Indent,
+        *Indent, *Indent, *Indent, *ElseCode, *Indent);
+    return true;
+}
+
 bool EmitActorLocationStatement(const FBPSemanticExpression& Call,
     const FString& ParentClassPath, FString& OutStatement,
     TArray<FString>& Diagnostics)
@@ -901,36 +943,10 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         for (const FBPSemanticStatement& BodyStatement : Statement.LoopBodyStatements)
         {
             FString StatementCode;
-            if (BodyStatement.Kind == EBPSemanticStatementKind::Expression)
+            if (EmitForLoopBodyStatement(BodyStatement, IR.ParentClassPath,
+                    IR.Variables, Statement.LoopIndexVariable, TEXT("        "),
+                    0, StatementCode, OutDiagnostics) == false)
             {
-                if (EmitPrintStringStatement(BodyStatement.Expression, IR.ParentClassPath,
-                    TEXT("        "), StatementCode, OutDiagnostics) == false)
-                {
-                    return false;
-                }
-            }
-            else if (BodyStatement.Kind == EBPSemanticStatementKind::Branch &&
-                BodyStatement.ThenStatements.Num() == 1 && BodyStatement.ElseStatements.Num() == 1)
-            {
-                FString Condition;
-                FString ThenCode;
-                FString ElseCode;
-                if (EmitForLoopCondition(BodyStatement.Expression, IR.Variables,
-                        Statement.LoopIndexVariable, Condition, OutDiagnostics) == false ||
-                    EmitPrintStringStatement(BodyStatement.ThenStatements[0].Expression,
-                        IR.ParentClassPath, TEXT("            "), ThenCode, OutDiagnostics) == false ||
-                    EmitPrintStringStatement(BodyStatement.ElseStatements[0].Expression,
-                        IR.ParentClassPath, TEXT("            "), ElseCode, OutDiagnostics) == false)
-                {
-                    return false;
-                }
-                StatementCode = FString::Printf(
-                    TEXT("        if (%s)\n        {\n%s        }\n        else\n        {\n%s        }\n"),
-                    *Condition, *ThenCode, *ElseCode);
-            }
-            else
-            {
-                OutDiagnostics.Add(TEXT("ForLoop body contains an unsupported semantic statement"));
                 return false;
             }
             BodyCode += StatementCode;
