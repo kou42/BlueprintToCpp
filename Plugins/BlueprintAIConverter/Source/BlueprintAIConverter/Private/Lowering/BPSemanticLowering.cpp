@@ -1271,7 +1271,10 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
         }
         else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
             Node.MacroGraphName == TEXT("ForEachLoop") &&
-            Node.MacroGraphPath.StartsWith(TEXT("/Engine/EditorBlueprintResources/StandardMacros.")))
+            // 名前だけでなく標準マクロの正規Graphパスを照合する。
+            // 同名のユーザーマクロを標準ForEachとして誤変換しない。
+            Node.MacroGraphPath ==
+                TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoop"))
         {
             if (Loop != nullptr) { AddDiagnostic(OutIR, Event->Name, Node.Id, TEXT("Multiple ForEachLoop nodes")); return false; }
             Loop = &Node;
