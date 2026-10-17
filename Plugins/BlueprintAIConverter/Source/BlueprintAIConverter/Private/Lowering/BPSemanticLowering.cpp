@@ -1733,24 +1733,51 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
         return false;
     }
     // Edge配列の列挙順はBlueprintの実行順序ではない。
-    // GUIDによって入口を一意に検証し、LoopBody/Completedは後段で追跡する。
-    int32 EntryEdgeCount = 0;
-    for (const FBPIRLink& Edge : Event->ExecEdges)
-    {
-        if (Edge.SourceNode == Begin->Id && Edge.SourcePin == BeginThen->Id &&
-            Edge.TargetNode == Loop->Id && Edge.TargetPin == Execute->Id)
-        {
-            ++EntryEdgeCount;
-        }
-    }
-    if (Event->ExecEdges.Num() < 2 || EntryEdgeCount != 1)
-    {
-        AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop entry Exec is invalid"));
-        return false;
-    }
+    // BeginPlayからLoopまでのPrintString列も実行順に辿り、ループ前の処理を失わない。
+    // 直結だけを要求すると、有効な BeginPlay -> PrintString -> ForEachLoop を拒否してしまう。
+    TArray<const FBPIRNode*> EntryPrints;
     TArray<const FBPIRNode*> BodyPrints;
     TArray<const FBPIRNode*> CompletedPrints;
     TSet<FGuid> Visited;
+    auto ReadEntryChain = [&]() -> bool
+    {
+        FGuid SourceNode = Begin->Id;
+        FGuid SourcePin = BeginThen->Id;
+        while (true)
+        {
+            const FBPIRLink* Next = nullptr;
+            for (const FBPIRLink& Edge : Event->ExecEdges)
+            {
+                if (Edge.SourceNode == SourceNode && Edge.SourcePin == SourcePin)
+                {
+                    if (Next != nullptr) { return false; }
+                    Next = &Edge;
+                }
+            }
+            if (Next == nullptr) { return false; }
+            if (Next->TargetNode == Loop->Id && Next->TargetPin == Execute->Id)
+            {
+                return true;
+            }
+            const FBPIRNode* Target = Event->Nodes.FindByPredicate(
+                [Next](const FBPIRNode& Node) { return Node.Id == Next->TargetNode; });
+            if (Target == nullptr || Target->FunctionName != TEXT("PrintString") ||
+                Visited.Contains(Target->Id))
+            {
+                return false;
+            }
+            const FBPIRPin* TargetExec = FindPin(*Target, TEXT("execute"), EGPD_Input);
+            const FBPIRPin* Then = FindPin(*Target, TEXT("then"), EGPD_Output);
+            if (TargetExec == nullptr || TargetExec->Id != Next->TargetPin || Then == nullptr)
+            {
+                return false;
+            }
+            Visited.Add(Target->Id);
+            EntryPrints.Add(Target);
+            SourceNode = Target->Id;
+            SourcePin = Then->Id;
+        }
+    };
     auto ReadChain = [&](const FBPIRPin* Start, const bool bAllowBreak,
         TArray<const FBPIRNode*>& OutPrints, bool& bOutEndsWithBreak) -> bool
     {
@@ -1794,7 +1821,8 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     };
     bool bBodyEndsWithBreak = false;
     bool bCompletedEndsWithBreak = false;
-    if (ReadChain(BodyPin, bWithBreak, BodyPrints, bBodyEndsWithBreak) == false ||
+    if (ReadEntryChain() == false ||
+        ReadChain(BodyPin, bWithBreak, BodyPrints, bBodyEndsWithBreak) == false ||
         ReadChain(CompletedPin, false, CompletedPrints, bCompletedEndsWithBreak) == false ||
         BodyPrints.IsEmpty() || Visited.Num() != Prints.Num() ||
         bCompletedEndsWithBreak || bBodyEndsWithBreak != bWithBreak ||
@@ -1887,7 +1915,8 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
         }
         return true;
     };
-    if (AppendPrints(BodyPrints, Statement.LoopBodyStatements) == false ||
+    if (AppendPrints(EntryPrints, Block.Statements) == false ||
+        AppendPrints(BodyPrints, Statement.LoopBodyStatements) == false ||
         AppendPrints(CompletedPrints, Statement.CompletedStatements) == false)
     {
         return false;

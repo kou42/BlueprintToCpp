@@ -2,6 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 #include "BPSemanticParityChecker.h"
+#include "BPActorCodeGenerator.h"
 
 namespace
 {

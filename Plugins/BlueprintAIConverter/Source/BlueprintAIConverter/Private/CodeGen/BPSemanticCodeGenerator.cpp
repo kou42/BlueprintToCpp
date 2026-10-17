@@ -1272,9 +1272,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         return false;
     }
     const FBPSemanticFunction& Function = IR.Functions[0];
-    if (Function.Blocks.Num() != 1 || Function.Blocks[0].Statements.Num() != 1)
+    if (Function.Blocks.Num() != 1 || Function.Blocks[0].Statements.IsEmpty())
     {
-        OutDiagnostics.Add(TEXT("Semantic MVP requires one function block and statement"));
+        OutDiagnostics.Add(TEXT("Semantic MVP requires one non-empty function block"));
         return false;
     }
     FGeneratedFunctionShape FunctionShape;
@@ -1283,7 +1283,30 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     {
         return false;
     }
-    const FBPSemanticStatement& Statement = Function.Blocks[0].Statements[0];
+    const TArray<FBPSemanticStatement>& Statements = Function.Blocks[0].Statements;
+    FString LeadingCode;
+    for (int32 Index = 0; Index + 1 < Statements.Num(); ++Index)
+    {
+        const FBPSemanticStatement& LeadingStatement = Statements[Index];
+        FString Part;
+        if (LeadingStatement.Kind != EBPSemanticStatementKind::Expression ||
+            EmitExpressionStatement(LeadingStatement.Expression, IR.ParentClassPath,
+                TEXT("    "), Part, OutDiagnostics) == false)
+        {
+            OutDiagnostics.Add(TEXT("Function entry sequence contains an unsupported semantic statement"));
+            return false;
+        }
+        LeadingCode += Part;
+    }
+    // 既存の単一文出力は完全一致を維持する。先行文がある場合だけ、
+    // 共通式Emitterが必要とし得るヘッダーを追加する。
+    const FString LeadingIncludes = LeadingCode.IsEmpty()
+        ? FString()
+        : TEXT("#include \"Engine/HitResult.h\"\n")
+          TEXT("#include \"Kismet/KismetMathLibrary.h\"\n")
+          TEXT("#include \"Kismet/KismetStringLibrary.h\"\n")
+          TEXT("#include \"Kismet/KismetSystemLibrary.h\"\n");
+    const FBPSemanticStatement& Statement = Statements.Last();
     const FBPSemanticExpression& Call = Statement.Expression;
     if (Statement.Kind == EBPSemanticStatementKind::ForEachLoop)
     {
@@ -1423,9 +1446,10 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
                 *Array.VariableName.ToString(), *Statement.LoopIndexVariable.ToString())
             : FString();
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n%s%s\n%s\n{\n%s    for (int32 %s = 0; %s < %s.Num(); ++%s)\n    {\n%s%s    }\n%s}\n"),
-            *BaseName, *UnrealTypeInclude, *ConstructorDefinition, *FunctionShape.Definition,
-            *FunctionShape.Prologue,
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n%s%s%s\n%s\n{\n%s%s    for (int32 %s = 0; %s < %s.Num(); ++%s)\n    {\n%s%s    }\n%s}\n"),
+            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
+            *FunctionShape.Definition,
+            *FunctionShape.Prologue, *LeadingCode,
             *Statement.LoopIndexVariable.ToString(), *Statement.LoopIndexVariable.ToString(),
             *Array.VariableName.ToString(), *Statement.LoopIndexVariable.ToString(),
             *ElementDeclaration, *BodyCode, *CompletedCode);
@@ -1505,9 +1529,10 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\n%s\n{\n%s    for (int32 %s = %d; %s <= %d; ++%s)\n    {\n%s    }\n%s}\n"),
-            *BaseName, *UnrealTypeInclude, *ConstructorDefinition, *FunctionShape.Definition,
-            *FunctionShape.Prologue,
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s\n%s\n{\n%s%s    for (int32 %s = %d; %s <= %d; ++%s)\n    {\n%s    }\n%s}\n"),
+            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
+            *FunctionShape.Definition,
+            *FunctionShape.Prologue, *LeadingCode,
             *Statement.LoopIndexVariable.ToString(), FirstIndex,
             *Statement.LoopIndexVariable.ToString(), LastIndex,
             *Statement.LoopIndexVariable.ToString(), *BodyCode, *CompletedCode);
@@ -1574,10 +1599,10 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\n%s\n{\n%s    if (%s)\n    {\n%s    }\n    else\n    {\n%s    }\n}\n"),
-            *BaseName, *UnrealTypeInclude, *ConstructorDefinition,
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s\n%s\n{\n%s%s    if (%s)\n    {\n%s    }\n    else\n    {\n%s    }\n}\n"),
+            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
             *FunctionShape.Definition, *FunctionShape.Prologue,
-            *Condition, *ThenCode, *ElseCode);
+            *LeadingCode, *Condition, *ThenCode, *ElseCode);
         OutFiles = MoveTemp(Files);
         return true;
     }
@@ -1618,9 +1643,10 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Engine/HitResult.h\"\n%s%s\n%s\n{\n%s%s}\n"),
-            *BaseName, *UnrealTypeInclude, *ConstructorDefinition,
-            *FunctionShape.Definition, *FunctionShape.Prologue, *ActorLocationStatement);
+            TEXT("#include \"%s.h\"\n#include \"Engine/HitResult.h\"\n%s%s%s\n%s\n{\n%s%s%s}\n"),
+            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
+            *FunctionShape.Definition, *FunctionShape.Prologue, *LeadingCode,
+            *ActorLocationStatement);
         OutFiles = MoveTemp(Files);
         return true;
     }
@@ -1705,9 +1731,10 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName, *ParentClass.CppClassName,
         *VariableDeclarations, *ConstructorDeclaration, *FunctionShape.Declaration);
     Files.SourceContent = FString::Printf(
-        TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s\n%s\n{\n%s    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n}\n"),
-        *BaseName, *UnrealTypeInclude, *ConstructorDefinition,
-        *FunctionShape.Definition, *FunctionShape.Prologue, *EscapedText, *Screen, *Log,
+        TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s\n%s\n{\n%s%s    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n}\n"),
+        *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
+        *FunctionShape.Definition, *FunctionShape.Prologue, *LeadingCode,
+        *EscapedText, *Screen, *Log,
         *FloatLiteral(LinearColor.R), *FloatLiteral(LinearColor.G),
         *FloatLiteral(LinearColor.B), *FloatLiteral(LinearColor.A),
         *FloatLiteral(Duration), *EscapedKey);

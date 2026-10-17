@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "BPSemanticIR.h"
-#include "BPActorCodeGenerator.h"
+#include "BPGeneratedCode.h"
 
 enum class EBPVariableFallbackMode : uint8
 {

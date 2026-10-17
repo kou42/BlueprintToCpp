@@ -2,16 +2,10 @@
 
 #include "CoreMinimal.h"
 #include "BPGraphIR.h"
+#include "BPGeneratedCode.h"
 
-// 生成コードはファイル保存とは分離し、プレビューやテストから利用できるようにする。
-struct FBPGeneratedActorFiles
-{
-    FString HeaderFileName;
-    FString HeaderContent;
-    FString SourceFileName;
-    FString SourceContent;
-};
-
+// 非推奨のDirect Graph IR経路。移行期間中のParityテスト専用。
+// Editorの製品導線からは参照せず、Semantic経路の安定後に削除する。
 class BLUEPRINTAICONVERTER_API FBPActorCodeGenerator
 {
 public:

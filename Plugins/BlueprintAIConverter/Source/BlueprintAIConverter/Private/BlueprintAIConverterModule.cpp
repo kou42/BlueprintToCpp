@@ -2,7 +2,6 @@
 #include "ToolMenus.h"
 #include "ContentBrowserMenuContexts.h"
 #include "Engine/Blueprint.h"
-#include "BPSnapshotExporter.h"
 #include "BPSemanticJsonSerializer.h"
 #include "BPSemanticVariableExtractor.h"
 #include "BPSemanticFunctionExtractor.h"
@@ -11,8 +10,6 @@
 #include "BPCopilotGraphJsonExporter.h"
 #include "Misc/EngineVersion.h"
 #include "BPGraphIR.h"
-#include "BPActorCodeGenerator.h"
-#include "BPSemanticParityChecker.h"
 #include "BPSemanticLowering.h"
 #include "BPSemanticCodeGenerator.h"
 #include "BPGeneratedCodePreview.h"
@@ -23,6 +20,19 @@
 #include "HAL/FileManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogBlueprintAIConverter, Log, All);
+
+namespace
+{
+FString JoinSemanticDiagnostics(const FBPSemanticIR& IR)
+{
+    TArray<FString> Messages;
+    for (const FBPSemanticDiagnostic& Diagnostic : IR.Diagnostics)
+    {
+        Messages.Add(Diagnostic.Message);
+    }
+    return FString::Join(Messages, TEXT("\n"));
+}
+}
 
 class FBlueprintAIConverterModule final : public IModuleInterface
 {
@@ -52,7 +62,7 @@ private:
             return;
         }
         FToolMenuSection& Section = Menu->FindOrAddSection(TEXT("BlueprintAIConverter"));
-        Section.AddDynamicEntry(TEXT("ExportBlueprintSnapshot"), FNewToolMenuSectionDelegate::CreateLambda(
+        Section.AddDynamicEntry(TEXT("BlueprintAIConverterActions"), FNewToolMenuSectionDelegate::CreateLambda(
             [](FToolMenuSection& InSection)
             {
                 const auto* Context = InSection.FindContext<UContentBrowserAssetContextMenuContext>();
@@ -73,12 +83,12 @@ private:
                 {
                     return;
                 }
-                // 既存のJSON Exportとは独立した、C++直接解析の最小Editor導線。
-                // ファイルへの書き込みは行わず、生成結果をSlate画面で確認する。
+                // C++変換のEditor導線はSemantic IR経路へ一本化する。
+                // 旧Direct Generatorは移行期のParityテスト専用としてUIから分離する。
                 InSection.AddMenuEntry(
                     TEXT("BlueprintAIConverter.CopyGeneratedCpp"),
                     FText::FromString(TEXT("Convert to C++ (Preview)")),
-                    FText::FromString(TEXT("Preview generated Actor C++ files in a read-only window (no files written)")),
+                    FText::FromString(TEXT("Preview C++ generated via Semantic IR (no files written)")),
                     FSlateIcon(),
                     FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
                     {
@@ -102,90 +112,13 @@ private:
                             return;
                         }
 
-                        FBPGraphIR IR;
-                        if (FBPGraphIRBuilder::Build(Blueprint, IR) == false)
-                        {
-                            FMessageDialog::Open(EAppMsgType::Ok,
-                                FText::FromString(FString::Join(IR.Diagnostics, TEXT("\\n"))));
-                            return;
-                        }
-
-                        // クラス名はBlueprintのアセット名から作り、識別子として不正な名前は
-                        // Generator側で拒否する。勝手に置換するとクラス名の衝突が起こり得る。
-                        const FString ClassName = TEXT("A") + Blueprint->GetName() + TEXT("Generated");
-                        FBPGeneratedActorFiles Files;
-                        TArray<FString> Diagnostics;
-                        // 同名ゲームモジュールのBuild.csが存在する場合だけAPIマクロを付ける。
-                        // 推測した名前で別モジュールのAPIを参照しない。
-                        const FString ModuleName = FApp::GetProjectName();
-                        const FString BuildRules = FPaths::Combine(
-                            FPaths::ProjectDir(), TEXT("Source"), ModuleName, ModuleName + TEXT(".Build.cs"));
-                        const FString ApiMacro = IFileManager::Get().FileExists(*BuildRules)
-                            ? ModuleName.ToUpper() + TEXT("_API") : FString();
-                        if (FBPActorCodeGenerator::Generate(IR, ClassName, ApiMacro, Files, Diagnostics) == false)
-                        {
-                            const FString Message = FString::Join(Diagnostics, TEXT("\\n"));
-                            UE_LOG(LogBlueprintAIConverter, Warning, TEXT("C++ preview failed: %s"), *Message);
-                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
-                            return;
-                        }
-
-                        // Shadow Mode: 旧Generatorのプレビュー結果はそのまま使用し、
-                        // Semantic経路との差異のみOutput Logへ記録する。差異があっても保存先は変えない。
-                        TArray<FString> ParityDiagnostics;
-                        if (FBPSemanticParityChecker::Compare(IR, ClassName, ApiMacro, Files, ParityDiagnostics))
-                        {
-                            UE_LOG(LogBlueprintAIConverter, Display,
-                                TEXT("Semantic IR parity passed for %s"), *Blueprint->GetName());
-                        }
-                        else
-                        {
-                            UE_LOG(LogBlueprintAIConverter, Warning,
-                                TEXT("Semantic IR parity failed for %s: %s"),
-                                *Blueprint->GetName(), *FString::Join(ParityDiagnostics, TEXT("; ")));
-                        }
-
-                        // 生成内容は読み取り専用の別ウィンドウで表示する。
-                        // コピー操作はウィンドウ内の個別ボタンから行える。
-                        FBPGeneratedCodePreview::Show(Files, IR, ClassName);
-                        UE_LOG(LogBlueprintAIConverter, Display,
-                            TEXT("C++ preview opened for %s: %s, %s"),
-                            *Blueprint->GetName(), *Files.HeaderFileName, *Files.SourceFileName);
-                    }));
-
-                // Semantic IRを明示的に試す独立プレビュー。
-                // 旧プレビューを既定経路として維持し、段階的に新経路を検証する。
-                InSection.AddMenuEntry(
-                    TEXT("BlueprintAIConverter.SemanticPreview"),
-                    FText::FromString(TEXT("Convert to C++ (Semantic Preview)")),
-                    FText::FromString(TEXT("Preview C++ generated via Semantic IR (no files written)")),
-                    FSlateIcon(),
-                    FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
-                    {
-                        const auto* Ctx = MenuContext.FindContext<UContentBrowserAssetContextMenuContext>();
-                        if (Ctx == nullptr)
-                        {
-                            return;
-                        }
-                        if (Ctx->SelectedAssets.Num() != 1)
-                        {
-                            FMessageDialog::Open(EAppMsgType::Ok,
-                                FText::FromString(TEXT("Select exactly one Blueprint for C++ preview.")));
-                            return;
-                        }
-                        UBlueprint* Blueprint = Cast<UBlueprint>(Ctx->SelectedAssets[0].GetAsset());
-                        if (Blueprint == nullptr)
-                        {
-                            FMessageDialog::Open(EAppMsgType::Ok,
-                                FText::FromString(TEXT("The selected asset is not a Blueprint.")));
-                            return;
-                        }
-
                         FBPGraphIR GraphIR;
                         if (FBPGraphIRBuilder::Build(Blueprint, GraphIR) == false)
                         {
                             FMessageDialog::Open(EAppMsgType::Ok,
-                                FText::FromString(FString::Join(GraphIR.Diagnostics, TEXT("\\n"))));
+                                FText::FromString(FString::Printf(
+                                    TEXT("C++ CONVERSION FAILED\n\n%s"),
+                                    *FString::Join(GraphIR.Diagnostics, TEXT("\n")))));
                             return;
                         }
 
@@ -197,44 +130,53 @@ private:
                             {
                                 Messages.Add(Diagnostic.Message);
                             }
-                            const FString Message = FString::Join(Messages, TEXT("\\n"));
-                            UE_LOG(LogBlueprintAIConverter, Warning, TEXT("Semantic preview Lowering failed: %s"), *Message);
-                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
+                            const FString Message = FString::Join(Messages, TEXT("\n"));
+                            UE_LOG(LogBlueprintAIConverter, Warning,
+                                TEXT("C++ preview Lowering failed: %s"), *Message);
+                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(
+                                FString::Printf(TEXT("C++ CONVERSION FAILED\n\n%s"), *Message)));
                             return;
                         }
 
                         const FString ClassPrefix = Blueprint->ParentClass != nullptr
                             ? Blueprint->ParentClass->GetPrefixCPP() : FString();
-                        const FString ClassName = ClassPrefix + Blueprint->GetName() + TEXT("Generated");
+                        const FString ClassName =
+                            ClassPrefix + Blueprint->GetName() + TEXT("Generated");
+                        // 同名ゲームモジュールのBuild.csが存在する場合だけAPIマクロを付ける。
+                        // 推測した名前で別モジュールのAPIを参照しない。
                         const FString ModuleName = FApp::GetProjectName();
                         const FString BuildRules = FPaths::Combine(
                             FPaths::ProjectDir(), TEXT("Source"), ModuleName, ModuleName + TEXT(".Build.cs"));
                         const FString ApiMacro = IFileManager::Get().FileExists(*BuildRules)
                             ? ModuleName.ToUpper() + TEXT("_API") : FString();
 
-                        FBPGeneratedActorFiles SemanticFiles;
+                        FBPGeneratedActorFiles Files;
                         TArray<FString> Diagnostics;
                         if (FBPSemanticCodeGenerator::Generate(
-                            SemanticIR, ClassName, ApiMacro, SemanticFiles, Diagnostics,
+                            SemanticIR, ClassName, ApiMacro, Files, Diagnostics,
                             EBPVariableFallbackMode::DeclarationOnly) == false)
                         {
-                            const FString Message = FString::Join(Diagnostics, TEXT("\\n"));
-                            UE_LOG(LogBlueprintAIConverter, Warning, TEXT("Semantic preview generation failed: %s"), *Message);
-                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
+                            const FString Message = FString::Join(Diagnostics, TEXT("\n"));
+                            UE_LOG(LogBlueprintAIConverter, Warning,
+                                TEXT("C++ preview generation failed: %s"), *Message);
+                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(
+                                FString::Printf(TEXT("C++ CONVERSION FAILED\n\n%s"), *Message)));
                             return;
                         }
 
-                        // Preview画面は既存のものを再利用し、保存時の安全性チェックも共有する。
-                        FBPGeneratedCodePreview::Show(SemanticFiles, GraphIR, ClassName);
+                        // 生成内容は読み取り専用の別ウィンドウで表示する。
+                        // コピー操作はウィンドウ内の個別ボタンから行える。
+                        FBPGeneratedCodePreview::Show(Files, ClassName, ApiMacro);
                         UE_LOG(LogBlueprintAIConverter, Display,
-                            TEXT("Semantic C++ preview opened for %s"), *Blueprint->GetName());
+                            TEXT("C++ preview opened for %s: %s, %s"),
+                            *Blueprint->GetName(), *Files.HeaderFileName, *Files.SourceFileName);
                     }));
 
-                // 保存前に内容を確認できるよう、JSON文字列のコピー機能を別途提供する。
+                // ファイルを書かず、Semantic JSON文字列を直接クリップボードへコピーする。
                 InSection.AddMenuEntry(
                     TEXT("BlueprintAIConverter.CopySemanticJson"),
-                    FText::FromString(TEXT("Copy Semantic JSON v2 (Preview)")),
-                    FText::FromString(TEXT("Copy Semantic JSON v2 to clipboard without writing files")),
+                    FText::FromString(TEXT("Copy Semantic JSON")),
+                    FText::FromString(TEXT("Copy Semantic JSON to clipboard without writing files")),
                     FSlateIcon(),
                     FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
                     {
@@ -289,15 +231,20 @@ private:
                             return;
                         }
                         FPlatformApplicationMisc::ClipboardCopy(*Json);
-                        FMessageDialog::Open(EAppMsgType::Ok,
-                            FText::FromString(TEXT("Semantic JSON v2 copied to clipboard (no files written).")));
+                        const FString Message = SemanticIR.HasErrors()
+                            ? FString::Printf(
+                                TEXT("COPY SUCCEEDED, BUT SEMANTIC CONVERSION FAILED\n\n")
+                                TEXT("Diagnostic JSON was copied to the clipboard.\n\n%s"),
+                                *JoinSemanticDiagnostics(SemanticIR))
+                            : TEXT("COPY SUCCEEDED\n\nSemantic JSON was copied to the clipboard. No file was written.");
+                        FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
                     }));
 
                 // Snapshot v1とは独立したSemantic JSON v2の明示的な保存導線。
                 // Loweringに失敗しても診断をJSONへ含め、失敗を成功扱いしない。
                 InSection.AddMenuEntry(
                     TEXT("BlueprintAIConverter.ExportSemanticJson"),
-                    FText::FromString(TEXT("Export Semantic JSON v2")),
+                    FText::FromString(TEXT("Export Semantic JSON")),
                     FText::FromString(TEXT("Export Semantic IR and diagnostics to Saved/BlueprintSemanticJson")),
                     FSlateIcon(),
                     FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
@@ -355,21 +302,33 @@ private:
                             SemanticIR, FEngineVersion::Current().ToString(), Path, Error) == false)
                         {
                             UE_LOG(LogBlueprintAIConverter, Error, TEXT("Semantic JSON export failed: %s"), *Error);
-                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Error));
+                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(
+                                FString::Printf(
+                                    TEXT("EXPORT FAILED\n\nNo Semantic JSON file was saved.\n\nReason: %s"),
+                                    *Error)));
                             return;
                         }
                         const FString Status = SemanticIR.HasErrors() ? TEXT("unsupported") : TEXT("partial");
                         UE_LOG(LogBlueprintAIConverter, Display,
                             TEXT("Semantic JSON exported (%s): %s"), *Status, *Path);
-                        FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(
-                            FString::Printf(TEXT("Semantic JSON exported (%s):\n%s"), *Status, *Path)));
+                        const FString Message = SemanticIR.HasErrors()
+                            ? FString::Printf(
+                                TEXT("FILE EXPORT SUCCEEDED, BUT SEMANTIC CONVERSION FAILED\n\n")
+                                TEXT("A diagnostic JSON file was saved. Generated C++ is not available for this result.\n\n")
+                                TEXT("File:\n%s\n\nDiagnostics:\n%s"),
+                                *Path, *JoinSemanticDiagnostics(SemanticIR))
+                            : FString::Printf(
+                                TEXT("EXPORT SUCCEEDED\n\n")
+                                TEXT("Semantic conversion succeeded for the supported graph.\n\nFile:\n%s"),
+                                *Path);
+                        FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
                     }));
 
                 // Semantic JSON v2とは独立して、未対応ノードも含むGraph IRをCopilot用に保存する。
                 InSection.AddMenuEntry(
                     TEXT("BlueprintAIConverter.ExportCopilotGraphJson"),
-                    FText::FromString(TEXT("Export Copilot Graph JSON")),
-                    FText::FromString(TEXT("Export node, pin, function reference and link data to Saved/BlueprintCopilotJson")),
+                    FText::FromString(TEXT("Export Raw Blueprint Graph JSON")),
+                    FText::FromString(TEXT("Export raw node, pin, function reference and link data to Saved/BlueprintCopilotJson")),
                     FSlateIcon(),
                     FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
                     {
@@ -411,50 +370,21 @@ private:
                             GraphIR, FEngineVersion::Current().ToString(), Path, Error, &SemanticIR) == false)
                         {
                             UE_LOG(LogBlueprintAIConverter, Error, TEXT("Copilot JSON export failed: %s"), *Error);
-                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Error));
+                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(
+                                FString::Printf(
+                                    TEXT("EXPORT FAILED\n\nNo Raw Blueprint Graph JSON file was saved.\n\nReason: %s"),
+                                    *Error)));
                             return;
                         }
-                        UE_LOG(LogBlueprintAIConverter, Display, TEXT("Copilot graph JSON exported: %s"), *Path);
+                        UE_LOG(LogBlueprintAIConverter, Display, TEXT("Raw Blueprint graph JSON exported: %s"), *Path);
                         FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(
-                            FString::Printf(TEXT("Copilot graph JSON exported (partial):\\n%s"), *Path)));
+                            FString::Printf(
+                                TEXT("EXPORT SUCCEEDED\n\n")
+                                TEXT("The raw Blueprint graph was saved successfully.\n")
+                                TEXT("Semantic declarations are supplemental and may be partial.\n\nFile:\n%s"),
+                                *Path)));
                     }));
 
-                InSection.AddMenuEntry(
-                    TEXT("BlueprintAIConverter.Export"),
-                    FText::FromString(TEXT("Export Blueprint Snapshot (JSON)")),
-                    FText::FromString(TEXT("Export selected Blueprints to Saved/BlueprintSnapshots")),
-                    FSlateIcon(),
-                    FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& MenuContext)
-                    {
-                        const auto* Ctx = MenuContext.FindContext<UContentBrowserAssetContextMenuContext>();
-                        if (Ctx == nullptr)
-                        {
-                            return;
-                        }
-                        int32 Success = 0, Failure = 0;
-                        for (const FAssetData& Asset : Ctx->SelectedAssets)
-                        {
-                            UBlueprint* BP = Cast<UBlueprint>(Asset.GetAsset());
-                            if (BP == nullptr)
-                            {
-                                continue;
-                            }
-                            FString Path, Error;
-                            if (FBPSnapshotExporter::Export(BP, Path, Error))
-                            {
-                                ++Success;
-                                UE_LOG(LogBlueprintAIConverter, Display, TEXT("Exported: %s"), *Path);
-                            }
-                            else
-                            {
-                                ++Failure;
-                                UE_LOG(LogBlueprintAIConverter, Error, TEXT("Export failed: %s"), *Error);
-                            }
-                        }
-                        FMessageDialog::Open(EAppMsgType::Ok, FText::Format(
-                            FText::FromString(TEXT("Blueprint snapshots: {0} exported, {1} failed. See Output Log.")),
-                            FText::AsNumber(Success), FText::AsNumber(Failure)));
-                    }));
             }));
     }
 };

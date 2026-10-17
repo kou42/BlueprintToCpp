@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "BPActorCodeGenerator.h"
+#include "BPGeneratedCode.h"
 
 // 生成コードの保存をプレビュー表示から分離する。
 // 既存ファイルを上書きせず、二つのファイルの片方だけが残らないよう処理する。

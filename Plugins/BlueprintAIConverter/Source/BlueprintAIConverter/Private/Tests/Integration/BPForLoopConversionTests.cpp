@@ -2194,6 +2194,67 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
         return false;
     }
 
+    // 実Blueprintで現れる BeginPlay -> PrintString -> ForEachLoop を再現する。
+    // ループ前の文を保持しつつ、続くForEachを同じBlockへLoweringできることを検証する。
+    FBPGraphIR EntryPrintGraph = GraphIR;
+    FBPIRGraph& EntryPrintEvent = EntryPrintGraph.Graphs[0];
+    FBPIRNode EntryPrint;
+    EntryPrint.Id = FGuid::NewGuid();
+    EntryPrint.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    EntryPrint.FunctionName = TEXT("PrintString");
+    EntryPrint.FunctionOwnerPath = TEXT("/Script/Engine.KismetSystemLibrary");
+    EntryPrint.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+    EntryPrint.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    EntryPrint.Pins.Add(MakeLoopPin(
+        TEXT("InString"), EGPD_Input, TEXT("string"), TEXT("Before loop")));
+    FBPIRLink& OriginalEntry = EntryPrintEvent.ExecEdges[0];
+    const FGuid LoopNodeId = OriginalEntry.TargetNode;
+    const FGuid LoopExecPinId = OriginalEntry.TargetPin;
+    OriginalEntry.TargetNode = EntryPrint.Id;
+    OriginalEntry.TargetPin = EntryPrint.Pins[0].Id;
+    FBPIRLink EntryPrintToLoop;
+    EntryPrintToLoop.SourceNode = EntryPrint.Id;
+    EntryPrintToLoop.SourcePin = EntryPrint.Pins[1].Id;
+    EntryPrintToLoop.TargetNode = LoopNodeId;
+    EntryPrintToLoop.TargetPin = LoopExecPinId;
+    EntryPrintEvent.ExecEdges.Add(EntryPrintToLoop);
+    EntryPrintEvent.Nodes.Add(MoveTemp(EntryPrint));
+
+    FBPSemanticIR EntryPrintIR;
+    if (TestTrue(TEXT("ループ前PrintStringを含むForEachをLowering"),
+        FBPSemanticLowering::Lower(Blueprint, EntryPrintGraph, EntryPrintIR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : EntryPrintIR.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    const TArray<FBPSemanticStatement>& EntryStatements =
+        EntryPrintIR.Functions[0].Blocks[0].Statements;
+    TestTrue(TEXT("ループ前文とForEachを順序どおり保持"),
+        EntryStatements.Num() == 2 &&
+        EntryStatements[0].Kind == EBPSemanticStatementKind::Expression &&
+        EntryStatements[1].Kind == EBPSemanticStatementKind::ForEachLoop);
+    FBPGeneratedActorFiles EntryPrintFiles;
+    TArray<FString> EntryPrintDiagnostics;
+    if (TestTrue(TEXT("ループ前文を含むForEachのC++生成"),
+        FBPSemanticCodeGenerator::Generate(
+            EntryPrintIR, TEXT("AForEachEntryPrintActor"), TEXT("TEST_API"),
+            EntryPrintFiles, EntryPrintDiagnostics,
+            EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Diagnostic : EntryPrintDiagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    const int32 EntryPrintPosition = EntryPrintFiles.SourceContent.Find(TEXT("Before loop"));
+    const int32 EntryLoopPosition = EntryPrintFiles.SourceContent.Find(TEXT("Numbers.Num()"));
+    TestTrue(TEXT("生成C++でもPrintStringがForEachより前"),
+        EntryPrintPosition != INDEX_NONE && EntryLoopPosition > EntryPrintPosition);
+
     // Break入力を持つ標準マクロの限定形状を同じ実Blueprint型情報で縦断する。
     // 本体末尾からBreakへ戻るExecエッジを、暗黙に捨てずSemantic Breakへ変換する。
     FBPGraphIR BreakGraph = GraphIR;

@@ -1,10 +1,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "BPActorCodeGenerator.h"
+#include "BPGeneratedCode.h"
+#include "BPGraphIR.h"
 
-// 既存生成経路を維持したまま、新Semantic経路との差異を観測する。
-// 比較が失敗しても旧Generatorの出力・保存経路は変更しない。
+// 非推奨Direct GeneratorとSemantic Generatorの移行期テスト専用比較器。
+// Editorの製品導線からは参照せず、Direct Generatorと同時に削除する。
 class BLUEPRINTAICONVERTER_API FBPSemanticParityChecker
 {
 public:

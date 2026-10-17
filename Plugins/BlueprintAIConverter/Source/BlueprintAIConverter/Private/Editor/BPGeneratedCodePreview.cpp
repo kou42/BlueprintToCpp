@@ -17,7 +17,7 @@
 #include "Widgets/SBoxPanel.h"
 
 void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files,
-    const FBPGraphIR& IR, const FString& ClassName)
+    const FString& ClassName, const FString& ModuleApiMacro)
 {
     // 生成結果は値として保持し、元Blueprintの変更・破棄の影響を受けない。
     const FString Header = Files.HeaderContent;
@@ -131,7 +131,7 @@ void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files,
                 [
                     SNew(SButton)
                     .Text(FText::FromString(TEXT("Save to Module...")))
-                    .OnClicked_Lambda([IR, ClassName, Window]()
+                    .OnClicked_Lambda([Files, ClassName, ModuleApiMacro, Window]()
                     {
                         IDesktopPlatform* Desktop = FDesktopPlatformModule::Get();
                         if (Desktop == nullptr)
@@ -164,13 +164,19 @@ void FBPGeneratedCodePreview::Show(const FBPGeneratedActorFiles& Files,
                         // 公開ヘッダーの参照関係を保つため、両ディレクトリは既存のみ許可する。
                         const FString HeaderDir = FPaths::Combine(Root, TEXT("Public"));
                         const FString SourceDir = FPaths::Combine(Root, TEXT("Private"));
-                        FBPGeneratedActorFiles ModuleFiles;
-                        TArray<FString> Diagnostics;
-                        if (FBPActorCodeGenerator::Generate(IR, ClassName,
-                                ModuleName.ToUpper() + TEXT("_API"), ModuleFiles, Diagnostics) == false)
+                        FBPGeneratedActorFiles ModuleFiles = Files;
+                        const FString OldDeclaration = ModuleApiMacro.IsEmpty()
+                            ? FString::Printf(TEXT("class %s"), *ClassName)
+                            : FString::Printf(TEXT("class %s %s"),
+                                *ModuleApiMacro, *ClassName);
+                        const FString NewDeclaration = FString::Printf(
+                            TEXT("class %s_API %s"), *ModuleName.ToUpper(), *ClassName);
+                        if (ModuleFiles.HeaderContent.ReplaceInline(
+                                *OldDeclaration, *NewDeclaration,
+                                ESearchCase::CaseSensitive) != 1)
                         {
                             FMessageDialog::Open(EAppMsgType::Ok,
-                                FText::FromString(FString::Join(Diagnostics, TEXT("\\n"))));
+                                FText::FromString(TEXT("Generated class declaration could not be rebound to the selected module.")));
                             return FReply::Handled();
                         }
                         if (FMessageDialog::Open(EAppMsgType::YesNo,
