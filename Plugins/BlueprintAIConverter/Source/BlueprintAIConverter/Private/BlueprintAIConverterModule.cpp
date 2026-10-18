@@ -4,6 +4,7 @@
 #include "Engine/Blueprint.h"
 #include "BPSemanticJsonSerializer.h"
 #include "BPSemanticVariableExtractor.h"
+#include "BPSemanticClassExtractor.h"
 #include "BPSemanticFunctionExtractor.h"
 #include "BPSemanticGraphTraceExtractor.h"
 #include "BPSemanticJsonExporter.h"
@@ -219,6 +220,7 @@ private:
                                 SemanticIR.Diagnostics.Add(MoveTemp(Diagnostic));
                             }
                         }
+                        FBPSemanticClassExtractor::Append(Blueprint, SemanticIR);
                         FBPSemanticVariableExtractor::Append(Blueprint, SemanticIR);
                         FBPSemanticFunctionExtractor::Append(Blueprint, SemanticIR);
                         FBPSemanticGraphTraceExtractor::Append(GraphIR, SemanticIR);
@@ -293,6 +295,7 @@ private:
                             }
                         }
 
+                        FBPSemanticClassExtractor::Append(Blueprint, SemanticIR);
                         FBPSemanticVariableExtractor::Append(Blueprint, SemanticIR);
                         FBPSemanticFunctionExtractor::Append(Blueprint, SemanticIR);
                         FBPSemanticGraphTraceExtractor::Append(GraphIR, SemanticIR);
@@ -362,6 +365,7 @@ private:
                         FBPSemanticIR SemanticIR;
                         SemanticIR.AssetPath = GraphIR.AssetPath;
                         SemanticIR.ParentClassPath = GraphIR.ParentClassPath;
+                        FBPSemanticClassExtractor::Append(Blueprint, SemanticIR);
                         FBPSemanticVariableExtractor::Append(Blueprint, SemanticIR);
                         FBPSemanticFunctionExtractor::Append(Blueprint, SemanticIR);
                         FString Path;
