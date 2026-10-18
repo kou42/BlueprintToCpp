@@ -25,6 +25,13 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
         Files.HeaderContent.Contains(TEXT("ReflectionGeneratedActor.generated.h")));
     TestTrue(TEXT("元クラスのメンバーを複製しない"),
         Files.HeaderContent.Contains(TEXT("UPROPERTY(")) == false);
+    TestTrue(TEXT("BeginPlayの明示的override生成"),
+        FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(
+            Info, TEXT("AReflectionGeneratedActor"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("BeginPlayの宣言"),
+        Files.HeaderContent.Contains(TEXT("virtual void BeginPlay() override;")));
+    TestTrue(TEXT("Super呼び出し"),
+        Files.SourceContent.Contains(TEXT("Super::BeginPlay();")));
     return true;
 }
 
