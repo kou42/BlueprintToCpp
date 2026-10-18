@@ -15,6 +15,10 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     FBPSemanticIR IR;
     IR.AssetPath = TEXT("/Game/BP_Test.BP_Test");
     IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    IR.ClassInfo.Origin = EBPSemanticClassOrigin::Blueprint;
+    IR.ClassInfo.ClassPath = TEXT("/Game/BP_Test.BP_Test_C");
+    IR.ClassInfo.ClassName = TEXT("BP_Test_C");
+    IR.ClassInfo.InterfacePaths.Add(TEXT("/Script/Test.TestInterface"));
 
     FBPSemanticFunction Function;
     Function.Name = TEXT("BeginPlay");
