@@ -10,6 +10,8 @@
 #include "Engine/Blueprint.h"
 #include "GameFramework/Actor.h"
 #include "HAL/FileManager.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_Event.h"
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_FunctionResult.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -152,6 +154,81 @@ bool FBPGeneratedUserFunctionAssetTest::RunTest(const FString& Parameters)
         return false;
     }
 
+    // ユーザー関数のシグネチャが確定した後にEvent Graphへ呼び出しを配置する。
+    // 先に反射済みUFunctionを取得することで、引数・戻り値Pinの型を手動複製しない。
+    UEdGraph* EventGraph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+    if (TestNotNull(TEXT("Event Graph"), EventGraph) == false)
+    {
+        return false;
+    }
+    UK2Node_Event* BeginPlay = nullptr;
+    UK2Node_CallFunction* Call = nullptr;
+    for (UEdGraphNode* Node : EventGraph->Nodes)
+    {
+        UK2Node_Event* Event = Cast<UK2Node_Event>(Node);
+        if (Event != nullptr && Event->EventReference.GetMemberName() == TEXT("ReceiveBeginPlay"))
+        {
+            BeginPlay = Event;
+        }
+        UK2Node_CallFunction* Candidate = Cast<UK2Node_CallFunction>(Node);
+        if (Candidate != nullptr && Candidate->FunctionReference.GetMemberName() == FunctionName)
+        {
+            Call = Candidate;
+        }
+    }
+    if (BeginPlay == nullptr)
+    {
+        BeginPlay = NewObject<UK2Node_Event>(EventGraph);
+        EventGraph->AddNode(BeginPlay, false, false);
+        BeginPlay->CreateNewGuid();
+        BeginPlay->PostPlacedNewNode();
+        BeginPlay->EventReference.SetExternalMember(TEXT("ReceiveBeginPlay"), AActor::StaticClass());
+        BeginPlay->bOverrideFunction = true;
+        BeginPlay->AllocateDefaultPins();
+    }
+    if (Call == nullptr)
+    {
+        Call = NewObject<UK2Node_CallFunction>(EventGraph);
+        EventGraph->AddNode(Call, false, false);
+        Call->CreateNewGuid();
+        Call->PostPlacedNewNode();
+        Call->SetFromFunction(Reflected);
+        Call->AllocateDefaultPins();
+    }
+    const UEdGraphSchema_K2* EventSchema = Cast<UEdGraphSchema_K2>(EventGraph->GetSchema());
+    UEdGraphPin* BeginThen = BeginPlay->FindPin(UEdGraphSchema_K2::PN_Then);
+    UEdGraphPin* CallExec = Call->FindPin(UEdGraphSchema_K2::PN_Execute);
+    UEdGraphPin* CallInput = Call->FindPin(TEXT("InputValue"));
+    UEdGraphPin* CallReturn = Call->FindPin(TEXT("ReturnValue"));
+    if (TestNotNull(TEXT("Event Schema"), EventSchema) == false ||
+        TestNotNull(TEXT("BeginPlay Then"), BeginThen) == false ||
+        TestNotNull(TEXT("ComputeValue Exec"), CallExec) == false ||
+        TestNotNull(TEXT("ComputeValue InputValue"), CallInput) == false ||
+        TestNotNull(TEXT("ComputeValue ReturnValue"), CallReturn) == false)
+    {
+        return false;
+    }
+    if (BeginThen->LinkedTo.Contains(CallExec) == false)
+    {
+        if (TestTrue(TEXT("BeginPlay -> ComputeValue"),
+            EventSchema->TryCreateConnection(BeginThen, CallExec)) == false)
+        {
+            return false;
+        }
+    }
+    // 引数は明示的な整数リテラルとして渡す。戻り値は型とPinの存在を
+    // 検証し、後続の消費ノードを追加する段階でデータリンクも検証する。
+    CallInput->DefaultValue = TEXT("42");
+    TestEqual(TEXT("戻り値Pin型"), CallReturn->PinType.PinCategory,
+        UEdGraphSchema_K2::PC_Int);
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (TestTrue(TEXT("関数呼び出し追加後のコンパイル"),
+        Blueprint->Status != BS_Error) == false)
+    {
+        return false;
+    }
+
     FBPSemanticIR Semantic;
     FBPSemanticFunctionExtractor::Append(Blueprint, Semantic);
     const FBPSemanticFunction* Function = Semantic.Functions.FindByPredicate(
@@ -188,6 +265,23 @@ bool FBPGeneratedUserFunctionAssetTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Entry/Resultノード数"), IRFunction->Nodes.Num(), 2);
     TestEqual(TEXT("関数Exec接続数"), IRFunction->ExecEdges.Num(), 1);
     TestEqual(TEXT("引数から戻り値への接続数"), IRFunction->DataEdges.Num(), 1);
+    const FBPIRGraph* IREvent = GraphIR.Graphs.FindByPredicate(
+        [](const FBPIRGraph& Item)
+        {
+            return Item.Kind == TEXT("event");
+        });
+    if (TestNotNull(TEXT("Event Graph IR"), IREvent) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("Event GraphにComputeValue呼び出しが存在"),
+        IREvent->Nodes.ContainsByPredicate(
+            [FunctionName](const FBPIRNode& Node)
+            {
+                return Node.FunctionName == FunctionName;
+            }));
+    TestEqual(TEXT("BeginPlayから関数へのExec接続数"), IREvent->ExecEdges.Num(), 1);
+
 
     Blueprint->MarkPackageDirty();
     const FString Filename = FPackageName::LongPackageNameToFilename(
