@@ -16,12 +16,14 @@
 #include "K2Node_Event.h"
 #include "K2Node_IfThenElse.h"
 #include "K2Node_MacroInstance.h"
+#include "K2Node_VariableGet.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/EngineVersion.h"
 #include "Misc/PackageName.h"
+#include "Misc/Paths.h"
 #include "UObject/SavePackage.h"
 
 namespace
