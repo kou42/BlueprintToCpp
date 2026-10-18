@@ -2,13 +2,13 @@
 
 更新日: 2026-10-18
 
-この文書では、CJ1〜CJ2でExporterを拡張する際にUnreal Editor上で作成する検証ケースを定義する。CJ0-G01とCJ0-G02の基本ケースをAutomationで検証する。CJ0-G03は入力と戻り値の基本署名に限定してテストを追加した。out引数と既定値の網羅は未完了であり、CJ0-G04以降を対応済みとして扱ってはならない。CJ0-G01は一時BlueprintからのCopilot Graph JSON v1保存・再読込とGUID/Exec接続の検証も行うが、テストは保存ファイルを削除するため、実プロジェクト由来のGolden Fixture収集を完了したことにはならない。
+この文書では、CJ1〜CJ2でExporterを拡張する際にUnreal Editor上で作成する検証ケースを定義する。CJ0-G01とCJ0-G02の基本ケースをAutomationで検証する。CJ0-G03は入力・戻り値・out引数・未接続Entry Pinの数値既定値についてテストを追加した。ただし型や既定値パターンの網羅は未完了であり、CJ0-G04以降を対応済みとして扱ってはならない。CJ0-G01は一時BlueprintからのCopilot Graph JSON v1保存・再読込とGUID/Exec接続の検証も行うが、テストは保存ファイルを削除するため、実プロジェクト由来のGolden Fixture収集を完了したことにはならない。
 
 | ID | Blueprintの構成 | Snapshot v1 | Graph IR | Semantic v2 | Automation Test |
 | --- | --- | --- | --- | --- | --- |
 | CJ0-G01 | Actorの`BeginPlay -> PrintString("CJ0 golden")` | 抽出済み | 抽出済み | 部分対応 | `BlueprintAIConverter.CopilotJson.CJ0.MinimalNativeCallGolden` |
 | CJ0-G02 | 引数なし・戻り値voidのBlueprint関数（Entry→PrintString） | 未検証 | 抽出とGUID/Exec接続を検査 | 反射宣言を検査（本体の意味一致は未検証） | `BlueprintAIConverter.CopilotJson.CJ0.VoidFunctionGolden` |
-| CJ0-G03 | 入力、既定値、out引数、戻り値を持つBlueprint関数 | 未検証 | int入力→int戻り値のData接続を検査 | 反射署名・引数順序・戻り値の限定検証（out・既定値は未完了） | `BlueprintAIConverter.CopilotJson.CJ0.FunctionSignatureGolden`（限定） |
+| CJ0-G03 | 入力、既定値、out引数、戻り値を持つBlueprint関数 | 未検証 | int入力→int戻り値のData接続を検査 | 反射署名・引数順序・戻り値・out引数・数値既定値の限定検証 | `BlueprintAIConverter.CopilotJson.CJ0.FunctionSignatureGolden`（限定） |
 | CJ0-G04 | 同一アセット内の別Blueprint関数を呼び出す | 生Call・リンクを抽出予定 | 生Call・リンクを抽出予定 | 対応するLoweringがなければunsupported | 未実装 |
 | CJ0-G05 | Pure式をBranchへ入力し、両分岐がReturnへ到達 | 生Exec/Dataリンクを抽出予定 | 正規化済みEdgeを抽出予定 | 形状によりpartialまたはunsupported | 未実装 |
 | CJ0-G06 | EntryとReturnの間に未対応ノードを接続 | 生ノード・リンクを抽出予定 | 生ノード・リンクを抽出予定 | ノードGUID付きunsupported | 未実装 |
