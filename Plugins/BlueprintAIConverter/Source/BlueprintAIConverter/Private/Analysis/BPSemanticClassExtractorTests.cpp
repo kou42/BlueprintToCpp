@@ -23,6 +23,8 @@ bool FBPSemanticClassExtractorTest::RunTest(const FString& Parameters)
         {
             return Member.Name.IsEmpty() == false && Member.CppType.IsEmpty() == false;
         }));
+    TestEqual(TEXT("宣言関数と署名の件数"), Info.DeclaredFunctions.Num(),
+        Info.DeclaredFunctionSignatures.Num());
     TestTrue(TEXT("宣言関数のパスが取得できる"),
         Info.DeclaredFunctions.ContainsByPredicate([](const FBPSemanticClassMember& Member)
         {
