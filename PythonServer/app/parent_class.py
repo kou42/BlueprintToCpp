@@ -6,7 +6,6 @@ Only verified native parents are listed here; unknown paths must be rejected.
 from dataclasses import dataclass
 import re
 
-from .code_generator import GenerationError
 from .node_registry import UnsupportedNodeError
 
 
@@ -33,6 +32,8 @@ def resolve_parent(parent_path: str, class_name: str) -> ParentClass:
     if parent is None:
         raise UnsupportedNodeError(
             f"unsupported parent class {parent_path!r}: BeginPlay/header metadata unavailable")
+    # 循環importを避けるため、エラー型は検証時に取得する。
+    from .code_generator import GenerationError
     if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", class_name):
         raise GenerationError("class_name must be a valid C++ identifier")
     if not class_name.startswith(parent.prefix) or len(class_name) <= len(parent.prefix):
