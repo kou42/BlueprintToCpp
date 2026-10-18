@@ -132,3 +132,35 @@ bool FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(
         TEXT("\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n}\n"), *NewClassName);
     return true;
 }
+
+bool FBPNativeSubclassGenerator::GenerateWithTickOverride(
+    const FBPSemanticClassInfo& Info, const FString& NewClassName,
+    const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles,
+    TArray<FString>& OutDiagnostics)
+{
+    if (Generate(Info, NewClassName, ModuleApiMacro, OutFiles, OutDiagnostics) == false)
+    {
+        return false;
+    }
+
+    // AActor::Tick(float)の署名は既知だが、実行可否はbCanEverTickなどの設定に依存する。
+    // 設定値を推測で変更せず、overrideとSuper呼び出しだけを生成する。
+    UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
+    if (ParentClass == nullptr || ParentClass->IsChildOf(AActor::StaticClass()) == false)
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Add(TEXT("Tick override requires a loaded AActor-derived native class"));
+        return false;
+    }
+    const FString Declaration = TEXT("    virtual void Tick(float DeltaTime) override;\n");
+    if (OutFiles.HeaderContent.ReplaceInline(TEXT("    GENERATED_BODY()\n};"),
+        *(FString(TEXT("    GENERATED_BODY()\n\npublic:\n")) + Declaration + TEXT("};"))) == 0)
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Add(TEXT("Generated header structure was not recognized"));
+        return false;
+    }
+    OutFiles.SourceContent += FString::Printf(
+        TEXT("\nvoid %s::Tick(float DeltaTime)\n{\n    Super::Tick(DeltaTime);\n}\n"), *NewClassName);
+    return true;
+}
