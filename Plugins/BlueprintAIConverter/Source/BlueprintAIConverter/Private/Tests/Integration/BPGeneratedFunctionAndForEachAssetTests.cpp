@@ -6,8 +6,6 @@
 #include "BPGraphIR.h"
 #include "BPSemanticCodeGenerator.h"
 #include "BPSemanticLowering.h"
-#include "BPSemanticCodeGenerator.h"
-#include "BPSemanticLowering.h"
 #include "Dom/JsonObject.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
@@ -106,6 +104,80 @@ bool CheckJsonLinks(const FBPIRGraph& Graph, const TSharedPtr<FJsonObject>& Json
         }
     }
     return true;
+}
+
+// JSONのPin配列について、IR側のID・名前・方向・型・既定値を照合する。
+// 並び順はExporterがGUID順に正規化するため、位置ではなくIDで比較する。
+bool CheckJsonNodesAndPins(const FBPIRGraph& Graph, const TSharedPtr<FJsonObject>& JsonGraph)
+{
+    const TArray<TSharedPtr<FJsonValue>>& Nodes = JsonGraph->GetArrayField(TEXT("nodes"));
+    if (Nodes.Num() != Graph.Nodes.Num())
+    {
+        return false;
+    }
+    TMap<FString, const FBPIRNode*> ExpectedNodes;
+    for (const FBPIRNode& Node : Graph.Nodes)
+    {
+        ExpectedNodes.Add(Node.Id.ToString(EGuidFormats::DigitsWithHyphens), &Node);
+    }
+    TSet<FString> SeenNodes;
+    for (const TSharedPtr<FJsonValue>& Value : Nodes)
+    {
+        const TSharedPtr<FJsonObject> JsonNode = Value->AsObject();
+        if (JsonNode.IsValid() == false)
+        {
+            return false;
+        }
+        const FString NodeId = JsonNode->GetStringField(TEXT("id"));
+        const FBPIRNode* const* ExpectedNode = ExpectedNodes.Find(NodeId);
+        if (ExpectedNode == nullptr || SeenNodes.Contains(NodeId))
+        {
+            return false;
+        }
+        SeenNodes.Add(NodeId);
+        if (JsonNode->GetStringField(TEXT("class_path")) != (*ExpectedNode)->ClassPath ||
+            JsonNode->GetStringField(TEXT("function_name")) != (*ExpectedNode)->FunctionName.ToString() ||
+            JsonNode->GetStringField(TEXT("macro_graph_name")) != (*ExpectedNode)->MacroGraphName)
+        {
+            return false;
+        }
+        const TArray<TSharedPtr<FJsonValue>>& Pins = JsonNode->GetArrayField(TEXT("pins"));
+        if (Pins.Num() != (*ExpectedNode)->Pins.Num())
+        {
+            return false;
+        }
+        TMap<FString, const FBPIRPin*> ExpectedPins;
+        for (const FBPIRPin& Pin : (*ExpectedNode)->Pins)
+        {
+            ExpectedPins.Add(Pin.Id.ToString(EGuidFormats::DigitsWithHyphens), &Pin);
+        }
+        TSet<FString> SeenPins;
+        for (const TSharedPtr<FJsonValue>& PinValue : Pins)
+        {
+            const TSharedPtr<FJsonObject> JsonPin = PinValue->AsObject();
+            if (JsonPin.IsValid() == false)
+            {
+                return false;
+            }
+            const FString PinId = JsonPin->GetStringField(TEXT("id"));
+            const FBPIRPin* const* ExpectedPin = ExpectedPins.Find(PinId);
+            if (ExpectedPin == nullptr || SeenPins.Contains(PinId))
+            {
+                return false;
+            }
+            SeenPins.Add(PinId);
+            if (JsonPin->GetStringField(TEXT("name")) != (*ExpectedPin)->Name.ToString() ||
+                JsonPin->GetStringField(TEXT("category")) != (*ExpectedPin)->Category.ToString() ||
+                JsonPin->GetStringField(TEXT("subcategory")) != (*ExpectedPin)->SubCategory.ToString() ||
+                JsonPin->GetStringField(TEXT("default_value")) != (*ExpectedPin)->DefaultValue ||
+                JsonPin->GetStringField(TEXT("direction")) !=
+                    ((*ExpectedPin)->Direction == EGPD_Input ? TEXT("input") : TEXT("output")))
+            {
+                return false;
+            }
+        }
+    }
+    return SeenNodes.Num() == Graph.Nodes.Num();
 }
 
 bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
@@ -256,6 +328,8 @@ bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
         bFoundGraph = true;
         Test.TestEqual(TEXT("JSONノード数"), JsonGraph->GetArrayField(TEXT("nodes")).Num(),
             bForEach ? 5 : 2);
+        Test.TestTrue(TEXT("ノードとPinの属性完全一致"),
+            CheckJsonNodesAndPins(*Event, JsonGraph));
         Test.TestTrue(TEXT("Exec接続のNode/Pin完全一致"),
             CheckJsonLinks(*Event, JsonGraph, TEXT("exec_edges")));
         Test.TestTrue(TEXT("Data接続のNode/Pin完全一致"),
