@@ -22,8 +22,7 @@ Copilotの出力をゴールデンの正解データとして使用してはな�
 
 ## Copilot Graph JSON v1 の検証手順（旧 CJ0_JSON_VALIDATION_GUIDE.md から移管）
 
-
-## 構造検証
+### 構造検証
 
 `cd PythonServer` から以下を実行する。
 
@@ -34,16 +33,16 @@ python -m app.validate_copilot_graph_json /path/to/BP.copilot.graph.json
 
 検証器はCopilot Graph JSON v1のGUID、リンク参照、診断配列、関数識別子の基本的な整合性を検査する。**Blueprintの意味的な完全性やC++生成の正しさは判定しない**。
 
-## Golden Fixtureの取得
+### Golden Fixtureの取得
 
 1. UE 5.7.4で本書のCJ0-G01〜CJ0-G06、および `CJ0_JSON_AUDIT.md` に記録された旧G01〜G07を作成する。
 2. `Saved/BlueprintCopilotJson/`に出力したJSONを保管する。実測JSONと手書きの合成Fixtureを混同しない。
 3. アセット名、UEバージョン、Export操作、テスト結果を記録する。GUIDは元の値とリンク関係を維持し、必要な匿名化は整合性を保って行う。
 4. 上記バリデータを実行する。失敗時はJSONを自動修復せず、Node/Pin GUIDと診断を記録する。
-5. 旧監査ケース（G01〜G07）の各構成。現行のCJ0-G01〜CJ0-G06とはIDと内容が一対一対応しないため、必ずケース名も記録するをそれぞれ検査する。
+5. 各ケースの期待フィールドと実測JSONを照合する。旧監査ケース（G01〜G07）と現行ケース（CJ0-G01〜CJ0-G06）は一対一対応しないため、IDに加えてBlueprint構成とケース名を記録する。
 6. JSON構造検証、UE Automation、UHT/UBT、動作比較は別々の結果として残す。
 
-## 現状
+### 現状
 
 - ソースベースのバリデータ・合成テストは追加済み。
 - 実Blueprintから取得したGolden Fixtureは**未収集**。
