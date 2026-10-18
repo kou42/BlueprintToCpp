@@ -234,6 +234,25 @@ struct FBPSemanticClassMember
     FString Flags;
 };
 
+// UFunctionの宣言署名。C++の関数本体を復元できるという意味ではない。
+struct FBPSemanticReflectedParameter
+{
+    FString Name;
+    FString CppType;
+    bool bIsOut = false;
+    bool bIsReference = false;
+    bool bIsConst = false;
+};
+
+struct FBPSemanticReflectedFunction
+{
+    FString Name;
+    FString ReflectionPath;
+    FString Flags;
+    FString ReturnCppType = TEXT("void");
+    TArray<FBPSemanticReflectedParameter> Parameters;
+};
+
 struct FBPSemanticClassInfo
 {
     EBPSemanticClassOrigin Origin = EBPSemanticClassOrigin::Unknown;
@@ -243,6 +262,7 @@ struct FBPSemanticClassInfo
     TArray<FString> InterfacePaths;
     TArray<FBPSemanticClassMember> DeclaredProperties;
     TArray<FBPSemanticClassMember> DeclaredFunctions;
+    TArray<FBPSemanticReflectedFunction> DeclaredFunctionSignatures;
 };
 
 struct FBPSemanticIR
