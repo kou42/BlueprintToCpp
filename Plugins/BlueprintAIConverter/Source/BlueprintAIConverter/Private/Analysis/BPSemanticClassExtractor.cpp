@@ -3,6 +3,7 @@
 #include "Engine/Blueprint.h"
 #include "UObject/Class.h"
 #include "UObject/Interface.h"
+#include "UObject/UnrealType.h"
 
 bool FBPSemanticClassExtractor::Extract(const UClass* Class, FBPSemanticClassInfo& OutInfo)
 {
@@ -46,6 +47,47 @@ bool FBPSemanticClassExtractor::Extract(const UClass* Class, FBPSemanticClassInf
         }
     }
     OutInfo.InterfacePaths.Sort();
+
+    // IncludeSuperを指定せず、このクラスで宣言されたリフレクションメンバーのみを収集する。
+    // Blueprintのグラフ本体とネイティブ関数のC++本体はここから復元できない。
+    for (TFieldIterator<FProperty> It(Class, EFieldIteratorFlags::ExcludeSuper); It; ++It)
+    {
+        const FProperty* Property = *It;
+        if (Property == nullptr)
+        {
+            continue;
+        }
+        FBPSemanticClassMember Member;
+        Member.Name = Property->GetName();
+        Member.CppType = Property->GetCPPType();
+        Member.ReflectionPath = Property->GetPathName();
+        Member.Flags = FString::Printf(TEXT("0x%llx"),
+            static_cast<unsigned long long>(Property->GetPropertyFlags()));
+        OutInfo.DeclaredProperties.Add(MoveTemp(Member));
+    }
+    for (TFieldIterator<UFunction> It(Class, EFieldIteratorFlags::ExcludeSuper); It; ++It)
+    {
+        const UFunction* Function = *It;
+        if (Function == nullptr)
+        {
+            continue;
+        }
+        FBPSemanticClassMember Member;
+        Member.Name = Function->GetName();
+        Member.ReflectionPath = Function->GetPathName();
+        Member.Flags = FString::Printf(TEXT("0x%x"),
+            static_cast<uint32>(Function->FunctionFlags));
+        // 戻り値や引数を持つ関数の署名を関数名だけから推測しない。
+        OutInfo.DeclaredFunctions.Add(MoveTemp(Member));
+    }
+    OutInfo.DeclaredProperties.Sort([](const FBPSemanticClassMember& A, const FBPSemanticClassMember& B)
+    {
+        return A.Name < B.Name;
+    });
+    OutInfo.DeclaredFunctions.Sort([](const FBPSemanticClassMember& A, const FBPSemanticClassMember& B)
+    {
+        return A.Name < B.Name;
+    });
     return true;
 }
 
