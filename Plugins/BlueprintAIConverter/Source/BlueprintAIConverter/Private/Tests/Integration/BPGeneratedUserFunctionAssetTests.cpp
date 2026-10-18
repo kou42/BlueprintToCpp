@@ -164,7 +164,11 @@ bool FBPGeneratedUserFunctionAssetTest::RunTest(const FString& Parameters)
         return false;
     }
     TestEqual(TEXT("関数引数数"), Function->Parameters.Num(), 1);
-    TestEqual(TEXT("関数引数名"), Function->Parameters[0].Name, FName(TEXT("InputValue")));
+    if (Function->Parameters.Num() == 1)
+    {
+        TestEqual(TEXT("関数引数名"), Function->Parameters[0].Name,
+            FName(TEXT("InputValue")));
+    }
 
     FBPGraphIR GraphIR;
     if (TestTrue(TEXT("関数Graph IR生成"),
