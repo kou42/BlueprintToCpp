@@ -291,11 +291,17 @@ bool FBPNativeSubclassGenerator::GenerateWithTickOverride(
     TArray<FString>& OutDiagnostics)
 {
     UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
-    const bool bComponent = ParentClass != nullptr &&
-        ParentClass->IsChildOf(UActorComponent::StaticClass());
+    const FBPVerifiedOverrideFunction* Function =
+        ResolveVerifiedOverride(ParentClass, TEXT("Tick"));
+    if (Function == nullptr)
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Reset();
+        OutDiagnostics.Add(TEXT("No verified Tick override for the parent class"));
+        return false;
+    }
     return GenerateWithVerifiedOverrides(Info, NewClassName, ModuleApiMacro,
-        {*(bComponent ? FindComponentTickOverride() : FindActorOverride(TEXT("Tick")))},
-        OutFiles, OutDiagnostics);
+        {*Function}, OutFiles, OutDiagnostics);
 }
 
 bool FBPNativeSubclassGenerator::GenerateWithLifecycleOverrides(
@@ -311,9 +317,16 @@ bool FBPNativeSubclassGenerator::GenerateWithLifecycleOverrides(
     if (bTick)
     {
         UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
-        const bool bComponent = ParentClass != nullptr &&
-            ParentClass->IsChildOf(UActorComponent::StaticClass());
-        Functions.Add(*(bComponent ? FindComponentTickOverride() : FindActorOverride(TEXT("Tick"))));
+        const FBPVerifiedOverrideFunction* Function =
+            ResolveVerifiedOverride(ParentClass, TEXT("Tick"));
+        if (Function == nullptr)
+        {
+            OutFiles = FBPGeneratedActorFiles();
+            OutDiagnostics.Reset();
+            OutDiagnostics.Add(TEXT("No verified Tick override for the parent class"));
+            return false;
+        }
+        Functions.Add(*Function);
     }
     return GenerateWithVerifiedOverrides(Info, NewClassName, ModuleApiMacro,
         Functions, OutFiles, OutDiagnostics);
