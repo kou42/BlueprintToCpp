@@ -227,6 +227,23 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
         Interfaces.Add(MakeShared<FJsonValueString>(InterfacePath));
     }
     ClassJson->SetArrayField(TEXT("interface_paths"), Interfaces);
+    // 宣言メンバーのリフレクション情報を、既存の意味解析済みvariables/functionsと分離する。
+    auto MembersToJson = [](const TArray<FBPSemanticClassMember>& Members)
+    {
+        TArray<TSharedPtr<FJsonValue>> Result;
+        for (const FBPSemanticClassMember& Member : Members)
+        {
+            TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+            Entry->SetStringField(TEXT("name"), Member.Name);
+            Entry->SetStringField(TEXT("cpp_type"), Member.CppType);
+            Entry->SetStringField(TEXT("reflection_path"), Member.ReflectionPath);
+            Entry->SetStringField(TEXT("flags"), Member.Flags);
+            Result.Add(MakeShared<FJsonValueObject>(Entry));
+        }
+        return Result;
+    };
+    ClassJson->SetArrayField(TEXT("declared_properties"), MembersToJson(IR.ClassInfo.DeclaredProperties));
+    ClassJson->SetArrayField(TEXT("declared_functions"), MembersToJson(IR.ClassInfo.DeclaredFunctions));
     Root->SetObjectField(TEXT("class_info"), ClassJson);
 
     // 現行IRは解析対象全体の網羅性を証明できない。成功時もpartialとし、AIによる過信を防ぐ。
