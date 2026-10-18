@@ -1640,12 +1640,13 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
+        // ActorLocation文の生成は既存Emitterに委ね、関数定義の外枠だけを共有する。
+        const FString Body = LeadingCode + ActorLocationStatement;
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Engine/HitResult.h\"\n%s%s%s\n%s\n{\n%s%s%s}\n"),
-            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
-            *FunctionShape.Definition, *FBPFunctionDefinitionEmitter::RenderBodyPrefix(FunctionShape), *LeadingCode,
-            *ActorLocationStatement);
-        OutFiles = MoveTemp(Files);
+            TEXT("#include \"%s.h\"\n#include \"Engine/HitResult.h\"\n%s%s%s"),
+            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
+        Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
+            OutFiles = MoveTemp(Files);
         return true;
     }
     if (Statement.Kind != EBPSemanticStatementKind::Expression ||
@@ -1728,14 +1729,18 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
         *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName, *ParentClass.CppClassName,
         *VariableDeclarations, *ConstructorDeclaration, *FunctionShape.Declaration);
-    Files.SourceContent = FString::Printf(
-        TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s\n%s\n{\n%s%s    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n}\n"),
-        *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
-        *FunctionShape.Definition, *FBPFunctionDefinitionEmitter::RenderBodyPrefix(FunctionShape), *LeadingCode,
+    // PrintStringの引数検証と文字列エスケープは従来どおり行い、定義出力だけ共通化する。
+    const FString PrintStatement = FString::Printf(
+        TEXT("    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n"),
         *EscapedText, *Screen, *Log,
         *FloatLiteral(LinearColor.R), *FloatLiteral(LinearColor.G),
         *FloatLiteral(LinearColor.B), *FloatLiteral(LinearColor.A),
         *FloatLiteral(Duration), *EscapedKey);
-    OutFiles = MoveTemp(Files);
+    const FString Body = LeadingCode + PrintStatement;
+    Files.SourceContent = FString::Printf(
+        TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s"),
+        *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
+    Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
+        OutFiles = MoveTemp(Files);
     return true;
 }
