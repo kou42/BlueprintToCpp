@@ -164,3 +164,50 @@ bool FBPNativeSubclassGenerator::GenerateWithTickOverride(
         TEXT("\nvoid %s::Tick(float DeltaTime)\n{\n    Super::Tick(DeltaTime);\n}\n"), *NewClassName);
     return true;
 }
+
+bool FBPNativeSubclassGenerator::GenerateWithLifecycleOverrides(
+    const FBPSemanticClassInfo& Info, const FString& NewClassName,
+    const FString& ModuleApiMacro, bool bBeginPlay, bool bTick,
+    FBPGeneratedActorFiles& OutFiles, TArray<FString>& OutDiagnostics)
+{
+    if (Generate(Info, NewClassName, ModuleApiMacro, OutFiles, OutDiagnostics) == false)
+    {
+        return false;
+    }
+    if (bBeginPlay == false && bTick == false)
+    {
+        return true;
+    }
+
+    // 複数のoverrideを個別生成後に結合するとクラス定義が重複する。
+    // 一つのUCLASSへアクセス指定子ごとに宣言をまとめて挿入する。
+    UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
+    if (ParentClass == nullptr || ParentClass->IsChildOf(AActor::StaticClass()) == false)
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Add(TEXT("Lifecycle overrides require an AActor-derived native class"));
+        return false;
+    }
+
+    FString Declarations = TEXT("    GENERATED_BODY()\n");
+    if (bBeginPlay)
+    {
+        Declarations += TEXT("\nprotected:\n    virtual void BeginPlay() override;\n");
+        OutFiles.SourceContent += FString::Printf(
+            TEXT("\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n}\n"), *NewClassName);
+    }
+    if (bTick)
+    {
+        Declarations += TEXT("\npublic:\n    virtual void Tick(float DeltaTime) override;\n");
+        OutFiles.SourceContent += FString::Printf(
+            TEXT("\nvoid %s::Tick(float DeltaTime)\n{\n    Super::Tick(DeltaTime);\n}\n"), *NewClassName);
+    }
+    if (OutFiles.HeaderContent.ReplaceInline(TEXT("    GENERATED_BODY()\n};"),
+        *(Declarations + TEXT("};"))) == 0)
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Add(TEXT("Generated header structure was not recognized"));
+        return false;
+    }
+    return true;
+}
