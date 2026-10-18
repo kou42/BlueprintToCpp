@@ -114,7 +114,7 @@ const FBPVerifiedOverrideFunction* FindActorOverride(const FString& Name)
 namespace
 {
 // ActorComponent専用のTick署名をActorのTickと混同しない。
-const FBPVerifiedOverrideFunction* FindComponentTickOverride()
+const FBPVerifiedOverrideFunction* FindComponentOverride(const FString& Name)
 {
     static const FBPVerifiedOverrideFunction Tick = {
         TEXT("TickComponent"),
@@ -123,7 +123,22 @@ const FBPVerifiedOverrideFunction* FindComponentTickOverride()
         TEXT("Super::TickComponent(DeltaTime, TickType, ThisTickFunction);"),
         TEXT("public")
     };
-    return &Tick;
+    static const FBPVerifiedOverrideFunction EndPlay = {
+        TEXT("EndPlay"),
+        TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;"),
+        TEXT("void %s::EndPlay(const EEndPlayReason::Type EndPlayReason)"),
+        TEXT("Super::EndPlay(EndPlayReason);"),
+        TEXT("protected")
+    };
+    if (Name == TEXT("TickComponent"))
+    {
+        return &Tick;
+    }
+    if (Name == TEXT("EndPlay"))
+    {
+        return &EndPlay;
+    }
+    return nullptr;
 }
 }
 
@@ -190,7 +205,7 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
     const bool bActor = ParentClass->IsChildOf(AActor::StaticClass());
     const bool bActorComponent = ParentClass->IsChildOf(UActorComponent::StaticClass());
     // ActorComponentのBeginPlayはActorと同じ検証済み署名を持つ。
-    // Tick/EndPlayはComponent側で署名が異なるため、Actor用定義を流用しない。
+    // ComponentのTickComponentとEndPlayは専用の検証済み定義を使う。
     if (bActor == false && bActorComponent == false)
     {
         OutFiles = FBPGeneratedActorFiles();
@@ -204,8 +219,8 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
     {
         // 外部入力のC++断片をそのまま挿入せず、検証済み定義と完全一致するものだけを許可する。
         const FBPVerifiedOverrideFunction* Verified = bActorComponent &&
-            Function.Name == TEXT("TickComponent")
-            ? FindComponentTickOverride() : FindActorOverride(Function.Name);
+            (Function.Name == TEXT("TickComponent") || Function.Name == TEXT("EndPlay"))
+            ? FindComponentOverride(Function.Name) : FindActorOverride(Function.Name);
         if (Verified == nullptr || Seen.Contains(Function.Name) ||
             Verified->Declaration != Function.Declaration ||
             Verified->DefinitionSignature != Function.DefinitionSignature ||
@@ -217,7 +232,7 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
             return false;
         }
         if (bActorComponent && Function.Name != TEXT("BeginPlay") &&
-            Function.Name != TEXT("TickComponent"))
+            Function.Name != TEXT("TickComponent") && Function.Name != TEXT("EndPlay"))
         {
             OutFiles = FBPGeneratedActorFiles();
             OutDiagnostics.Add(TEXT("ActorComponent override requires a component-specific verified signature"));
