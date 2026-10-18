@@ -1,4 +1,5 @@
 #include "BPNativeSubclassGenerator.h"
+#include "BPGeneratedFunctionShape.h"
 
 #include "BPParentClassResolver.h"
 #include "GameFramework/Actor.h"
@@ -192,9 +193,14 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
             CurrentAccess = Function.AccessSpecifier;
             Declarations += FString::Printf(TEXT("\n%s:\n"), *CurrentAccess);
         }
-        Declarations += FString::Printf(TEXT("    %s\n"), *Function.Declaration);
-        OutFiles.SourceContent += FString::Printf(TEXT("\n%s\n{\n    %s\n}\n"),
-            *Function.DefinitionSignature.Replace(TEXT("%s"), *NewClassName), *Function.SuperCall);
+        // Semantic関数と同じFunction Shapeへ正規化する。NativeのPrologueは検証済みSuper呼び出しのみ。
+        FBPGeneratedFunctionShape Shape;
+        Shape.Declaration = FString::Printf(TEXT("    %s\n"), *Function.Declaration);
+        Shape.Definition = Function.DefinitionSignature.Replace(TEXT("%s"), *NewClassName);
+        Shape.Prologue = FString::Printf(TEXT("    %s\n"), *Function.SuperCall);
+        Declarations += Shape.Declaration;
+        OutFiles.SourceContent += FString::Printf(TEXT("\n%s\n{\n%s}\n"),
+            *Shape.Definition, *Shape.Prologue);
     }
     if (OutFiles.HeaderContent.ReplaceInline(TEXT("    GENERATED_BODY()\n};"),
         *(Declarations + TEXT("};"))) == 0)
