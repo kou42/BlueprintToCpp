@@ -84,6 +84,12 @@ bool FBPSemanticClassExtractor::Extract(const UClass* Class, FBPSemanticClassInf
         Signature.Name = Function->GetName();
         Signature.ReflectionPath = Function->GetPathName();
         Signature.Flags = FString::Printf(TEXT("0x%x"), static_cast<uint32>(Function->FunctionFlags));
+        Signature.bIsNative = Function->HasAnyFunctionFlags(FUNC_Native);
+        Signature.bIsStatic = Function->HasAnyFunctionFlags(FUNC_Static);
+        Signature.bIsConst = Function->HasAnyFunctionFlags(FUNC_Const);
+        Signature.bIsBlueprintEvent = Function->HasAnyFunctionFlags(FUNC_BlueprintEvent);
+        Signature.bIsNet = Function->HasAnyFunctionFlags(FUNC_Net);
+        Signature.bIsFinal = Function->HasAnyFunctionFlags(FUNC_Final);
         // CPF_Parmを持つFPropertyだけが引数・戻り値。ローカルプロパティを混入させない。
         for (TFieldIterator<FProperty> ParamIt(Function); ParamIt; ++ParamIt)
         {
