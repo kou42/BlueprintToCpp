@@ -12,7 +12,8 @@
 - [x] Semantic関数とNative overrideの宣言・定義・Prologueを共通 `FBPGeneratedFunctionShape` に正規化する（関数形状の共有まで）。
 - [x] Function Shapeを受け取る共通定義Emitterを導入し、Native定義とSemanticのPrologue出力を共有する。
 - [x] SemanticのForEachLoop / ForLoop / Branch経路で、関数定義の外枠を共通Emitterに統合する。
-- [ ] Semanticの残りのStatement経路も共通Emitterへ移し、実BlueprintのFunctionGraphとイベントの生成経路を統合する。
+- [x] SemanticのActorLocation / PrintString経路も共通Emitterへ移し、現行の5種類の関数定義出力経路を統合する。
+- [ ] 複数のFunctionGraphとイベントを同時に変換する生成経路を実装する（現行の単一関数出力とは別課題）。
 - [ ] 親C++関数のvirtual属性・アクセス指定子・Super呼び出し規則を検証可能な情報源から解決する。UFunctionのみから推測しない。
 - [ ] Actor以外のComponent/Widget等への適用は、親クラス固有の検証を実装してから進める。
 
