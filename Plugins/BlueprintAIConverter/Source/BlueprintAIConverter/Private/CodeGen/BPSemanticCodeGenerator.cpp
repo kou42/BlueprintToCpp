@@ -1448,7 +1448,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n%s%s%s"),
             *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
         Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
-        OutFiles = MoveTemp(Files);
+    OutFiles = MoveTemp(Files);
         return true;
     }
     if (Statement.Kind == EBPSemanticStatementKind::ForLoop)
@@ -1646,7 +1646,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             TEXT("#include \"%s.h\"\n#include \"Engine/HitResult.h\"\n%s%s%s"),
             *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
         Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
-            OutFiles = MoveTemp(Files);
+        OutFiles = MoveTemp(Files);
         return true;
     }
     if (Statement.Kind != EBPSemanticStatementKind::Expression ||
