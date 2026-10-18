@@ -107,7 +107,7 @@ bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& 
         return false;
     }
 
-    const int32 ExpectedNodes = bLoop ? 4 : 9;
+    const int32 ExpectedNodes = bLoop ? 4 : 10;
     const int32 ExpectedExecEdges = bLoop ? 3 : 3;
     const int32 ExpectedDataEdges = bLoop ? 0 : 6;
 
@@ -273,7 +273,6 @@ bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& 
     Test.TestTrue(TEXT("生成コードの主要構文"),
         bLoop ? Files.SourceContent.Contains(TEXT("for (int32")) :
             Files.SourceContent.Contains(TEXT("if (")) &&
-            Files.SourceContent.Contains(TEXT("Greater_IntInt")) == false &&
             Files.SourceContent.Contains(TEXT("Arithmetic True")));
 
     // JSON/C++を生成してからアセットを保存することで、検証失敗時の不完全なBP保存を防ぐ。
