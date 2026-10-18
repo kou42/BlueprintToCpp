@@ -189,7 +189,14 @@ bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
     {
         return false;
     }
-    UBlueprint* Blueprint = FindObject<UBlueprint>(Package, *AssetName);
+    // 既存の保存済みアセットをロードし、同名の別オブジェクトを生成しない。
+    // これによりEditorを再起動した後の再実行でも同じパッケージを更新できる。
+    UBlueprint* Blueprint = LoadObject<UBlueprint>(
+        nullptr, *(PackagePath + TEXT(".") + AssetName));
+    if (Blueprint == nullptr)
+    {
+        Blueprint = FindObject<UBlueprint>(Package, *AssetName);
+    }
     if (Blueprint == nullptr)
     {
         Blueprint = FKismetEditorUtilities::CreateBlueprint(
@@ -282,6 +289,11 @@ bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
     }
 
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (Test.TestTrue(TEXT("Blueprintコンパイルエラーなし"),
+        Blueprint->Status != BS_Error) == false)
+    {
+        return false;
+    }
     if (Test.TestNotNull(TEXT("GeneratedClass"), Blueprint->GeneratedClass.Get()) == false)
     {
         return false;
