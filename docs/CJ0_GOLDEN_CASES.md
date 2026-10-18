@@ -1,8 +1,8 @@
 # CJ0 Blueprintゴールデンケース
 
-更新日: 2026-10-16
+更新日: 2026-10-18
 
-この文書では、CJ1〜CJ2でExporterを拡張する際にUnreal Editor上で作成する検証ケースを定義する。現在自動化されているのは最初のケースだけであり、残りのケースを対応済みとして扱ってはならない。
+この文書では、CJ1〜CJ2でExporterを拡張する際にUnreal Editor上で作成する検証ケースを定義する。現在自動化されているのは最初のケースだけであり、残りのケースを対応済みとして扱ってはならない。CJ0-G01は一時BlueprintからのCopilot Graph JSON v1保存・再読込とGUID/Exec接続の検証も行うが、テストは保存ファイルを削除するため、実プロジェクト由来のGolden Fixture収集を完了したことにはならない。
 
 | ID | Blueprintの構成 | Snapshot v1 | Graph IR | Semantic v2 | Automation Test |
 | --- | --- | --- | --- | --- | --- |
@@ -45,5 +45,5 @@ python -m app.validate_copilot_graph_json /path/to/BP.copilot.graph.json
 ### 現状
 
 - ソースベースのバリデータ・合成テストは追加済み。
-- 実Blueprintから取得したGolden Fixtureは**未収集**。
-- UE 5.7.4実機検証とPythonテスト実行結果は**未確認**。
+- CJ0-G01の一時Blueprint由来Copilot Graph JSONはAutomation内で生成・再読込・削除する。実プロジェクトのBlueprintから取得し保存したGolden Fixtureは**未収集**。
+- この変更で追加したCJ0-G01のCopilot Graph JSON保存検証は**UE 5.7.4で未実行**。Pythonテストも今回新たに実行していない。過去のCJトラック全体の実機検証記録とは区別する。
