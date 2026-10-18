@@ -350,6 +350,97 @@ bool FBPGeneratedUserFunctionAssetTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("戻り値からSetterへのData接続数"), IREvent->DataEdges.Num(), 1);
 
 
+    // Copilot JSONでも関数呼び出しのExec/Data接続が失われていないことを確認する。
+    FString JsonPath;
+    FString JsonError;
+    if (TestTrue(TEXT("ユーザー関数BPのCopilot Graph JSONを出力"),
+        FBPCopilotGraphJsonExporter::Export(
+            GraphIR, FEngineVersion::Current().ToString(), JsonPath, JsonError)) == false)
+    {
+        AddError(JsonError);
+        return false;
+    }
+    FString JsonText;
+    TSharedPtr<FJsonObject> JsonRoot;
+    if (TestTrue(TEXT("JSONファイル読込"),
+        FFileHelper::LoadFileToString(JsonText, *JsonPath)) == false ||
+        TestTrue(TEXT("JSONパース"),
+            FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(JsonText), JsonRoot) &&
+            JsonRoot.IsValid()) == false)
+    {
+        return false;
+    }
+    bool bFoundEvent = false;
+    bool bFoundFunction = false;
+    for (const TSharedPtr<FJsonValue>& GraphValue : JsonRoot->GetArrayField(TEXT("graphs")))
+    {
+        const TSharedPtr<FJsonObject> JsonGraph = GraphValue->AsObject();
+        if (JsonGraph.IsValid() == false)
+        {
+            continue;
+        }
+        const FString Name = JsonGraph->GetStringField(TEXT("name"));
+        const FBPIRGraph* Expected = GraphIR.Graphs.FindByPredicate(
+            [&Name](const FBPIRGraph& Graph)
+            {
+                return Graph.Name == Name;
+            });
+        if (Expected == nullptr)
+        {
+            AddError(TEXT("JSONに不明なGraphが含まれています"));
+            return false;
+        }
+        const auto CheckEdges = [&JsonGraph](
+            const TCHAR* Field, const TArray<FBPIRLink>& Edges)
+        {
+            const TArray<TSharedPtr<FJsonValue>>& JsonEdges =
+                JsonGraph->GetArrayField(Field);
+            if (JsonEdges.Num() != Edges.Num())
+            {
+                return false;
+            }
+            TSet<FString> Keys;
+            for (const TSharedPtr<FJsonValue>& Value : JsonEdges)
+            {
+                const TSharedPtr<FJsonObject> Edge = Value->AsObject();
+                if (Edge.IsValid() == false)
+                {
+                    return false;
+                }
+                Keys.Add(Edge->GetStringField(TEXT("source_node_id")) + TEXT("/") +
+                    Edge->GetStringField(TEXT("source_pin_id")) + TEXT("/") +
+                    Edge->GetStringField(TEXT("target_node_id")) + TEXT("/") +
+                    Edge->GetStringField(TEXT("target_pin_id")));
+            }
+            for (const FBPIRLink& Edge : Edges)
+            {
+                const FString Key =
+                    Edge.SourceNode.ToString(EGuidFormats::DigitsWithHyphens) + TEXT("/") +
+                    Edge.SourcePin.ToString(EGuidFormats::DigitsWithHyphens) + TEXT("/") +
+                    Edge.TargetNode.ToString(EGuidFormats::DigitsWithHyphens) + TEXT("/") +
+                    Edge.TargetPin.ToString(EGuidFormats::DigitsWithHyphens);
+                if (Keys.Contains(Key) == false)
+                {
+                    return false;
+                }
+            }
+            return Keys.Num() == Edges.Num();
+        };
+        if (TestTrue(TEXT("JSON ExecエッジGUID一致"),
+            CheckEdges(TEXT("exec_edges"), Expected->ExecEdges)) == false ||
+            TestTrue(TEXT("JSON DataエッジGUID一致"),
+                CheckEdges(TEXT("data_edges"), Expected->DataEdges)) == false)
+        {
+            return false;
+        }
+        bFoundEvent |= Expected == IREvent;
+        bFoundFunction |= Expected == IRFunction;
+    }
+    if (TestTrue(TEXT("JSONにEvent/Function両Graphを保持"),
+        bFoundEvent && bFoundFunction) == false)
+    {
+        return false;
+    }
     Blueprint->MarkPackageDirty();
     const FString Filename = FPackageName::LongPackageNameToFilename(
         PackagePath, FPackageName::GetAssetPackageExtension());
@@ -362,6 +453,7 @@ bool FBPGeneratedUserFunctionAssetTest::RunTest(const FString& Parameters)
         return false;
     }
     AddInfo(FString::Printf(TEXT("GENERATED_BLUEPRINT=%s"), *Filename));
+    AddInfo(FString::Printf(TEXT("GENERATED_JSON=%s"), *JsonPath));
     return true;
 }
 
