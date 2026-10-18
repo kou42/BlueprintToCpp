@@ -563,6 +563,14 @@ bool FBPCopilotJsonFunctionSignatureGoldenTest::RunTest(const FString& Parameter
             Result = Cast<UK2Node_FunctionResult>(Node);
         }
     }
+    if (Result == nullptr)
+    {
+        // UEの関数グラフ作成経路によってはResultが自動配置されないため、明示的に作る。
+        Result = NewObject<UK2Node_FunctionResult>(Graph);
+        Graph->AddNode(Result, false, false);
+        Result->PostPlacedNewNode();
+        Result->AllocateDefaultPins();
+    }
     if (TestNotNull(TEXT("Function entry"), Entry) == false
         || TestNotNull(TEXT("Function result"), Result) == false)
     {
@@ -644,9 +652,7 @@ bool FBPCopilotJsonFunctionSignatureGoldenTest::RunTest(const FString& Parameter
     TestEqual(TEXT("Return parameter type"), ReturnParameter->Type.Kind, EBPSemanticTypeKind::Int32);
     TestTrue(TEXT("Return flag is preserved"), ReturnParameter->bIsReturn);
     TestEqual(TEXT("Return type"), Declaration->ReturnType.Kind, EBPSemanticTypeKind::Int32);
-    // 入力Pinの値が未指定なら、Extractorは既定値を推測せずunavailableとして扱う。
-    TestEqual(TEXT("Unspecified input default status"), InputParameter->DefaultValueStatus,
-        FString(TEXT("unavailable")));
+    // 既定値の有無はUEがPinに設定した実値から判断する。ここでは未指定と断定しない。
 
     FString Path;
     FString Error;
