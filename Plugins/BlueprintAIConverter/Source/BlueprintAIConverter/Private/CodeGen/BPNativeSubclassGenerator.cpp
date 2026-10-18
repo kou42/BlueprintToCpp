@@ -169,7 +169,7 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
         OutDiagnostics.Add(TEXT("Verified Actor overrides require an AActor-derived native class"));
         return false;
     }
-    FString Declarations = TEXT("    GENERATED_BODY()\\n");
+    FString Declarations = TEXT("    GENERATED_BODY()\n");
     FString CurrentAccess;
     TSet<FString> Seen;
     for (const FBPVerifiedOverrideFunction& Function : Functions)
@@ -190,13 +190,13 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
         if (CurrentAccess != Function.AccessSpecifier)
         {
             CurrentAccess = Function.AccessSpecifier;
-            Declarations += FString::Printf(TEXT("\\n%s:\\n"), *CurrentAccess);
+            Declarations += FString::Printf(TEXT("\n%s:\n"), *CurrentAccess);
         }
-        Declarations += FString::Printf(TEXT("    %s\\n"), *Function.Declaration);
-        OutFiles.SourceContent += FString::Printf(TEXT("\\n%s\\n{\\n    %s\\n}\\n"),
+        Declarations += FString::Printf(TEXT("    %s\n"), *Function.Declaration);
+        OutFiles.SourceContent += FString::Printf(TEXT("\n%s\n{\n    %s\n}\n"),
             *Function.DefinitionSignature.Replace(TEXT("%s"), *NewClassName), *Function.SuperCall);
     }
-    if (OutFiles.HeaderContent.ReplaceInline(TEXT("    GENERATED_BODY()\\n};"),
+    if (OutFiles.HeaderContent.ReplaceInline(TEXT("    GENERATED_BODY()\n};"),
         *(Declarations + TEXT("};"))) == 0)
     {
         OutFiles = FBPGeneratedActorFiles();
