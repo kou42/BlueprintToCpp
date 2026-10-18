@@ -54,6 +54,20 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("同時生成でUCLASSは一つ"),
         Files.HeaderContent.Find(TEXT("UCLASS()")) ==
         Files.HeaderContent.Find(TEXT("UCLASS()"), ESearchCase::CaseSensitive, ESearchDir::FromEnd));
+    TArray<FBPVerifiedOverrideFunction> Selected;
+    TestTrue(TEXT("複数の検証済み関数を解析"),
+        FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Tick,EndPlay,BeginPlay"), Selected, Diagnostics));
+    TestEqual(TEXT("選択された関数数"), Selected.Num(), 3);
+    TestTrue(TEXT("EndPlayを含む共通生成"),
+        FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
+            Info, TEXT("AReflectionGeneratedActor"), FString(), Selected, Files, Diagnostics));
+    TestTrue(TEXT("EndPlayの引数とSuper"),
+        Files.HeaderContent.Contains(TEXT("EndPlay(const EEndPlayReason::Type EndPlayReason)")) &&
+        Files.SourceContent.Contains(TEXT("Super::EndPlay(EndPlayReason);")));
+    TestFalse(TEXT("重複指定を拒否"),
+        FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Tick,Tick"), Selected, Diagnostics));
+    TestFalse(TEXT("未知の関数を拒否"),
+        FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Unknown"), Selected, Diagnostics));
     return true;
 }
 
