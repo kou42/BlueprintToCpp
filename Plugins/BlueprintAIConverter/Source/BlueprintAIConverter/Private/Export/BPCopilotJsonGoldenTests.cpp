@@ -20,6 +20,7 @@
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
 #include "K2Node_FunctionEntry.h"
+#include "K2Node_FunctionResult.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -523,6 +524,216 @@ bool FBPCopilotJsonVoidFunctionGoldenTest::RunTest(const FString& Parameters)
     const TSharedPtr<FJsonObject> ExportedFunction = FindObjectByStringField(
         Declarations->GetArrayField(TEXT("functions")), TEXT("name"), TEXT("RunGoldenFunction"));
     TestNotNull(TEXT("Exported Blueprint function declaration"), ExportedFunction.Get());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPCopilotJsonFunctionSignatureGoldenTest,
+    "BlueprintAIConverter.CopilotJson.CJ0.FunctionSignatureGolden",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPCopilotJsonFunctionSignatureGoldenTest::RunTest(const FString& Parameters)
+{
+    // CJ0-G03: Blueprint自作関数の入力・出力Pinを実際に作成してからコンパイルする。
+    // Reflection由来の署名とJSON内の宣言を照合し、推測した型や既定値を成功扱いしない。
+    const FName BlueprintName = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_CJ0_FunctionSignature"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        AActor::StaticClass(), GetTransientPackage(), BlueprintName, BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("Create CJ0-G03 Blueprint"), Blueprint) == false)
+    {
+        return false;
+    }
+    UEdGraph* Graph = FBlueprintEditorUtils::CreateNewGraph(
+        Blueprint, TEXT("CalculateGolden"), UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+    if (TestNotNull(TEXT("Create signature function graph"), Graph) == false)
+    {
+        return false;
+    }
+    FBlueprintEditorUtils::AddFunctionGraph<UFunction>(Blueprint, Graph, true, nullptr);
+    UK2Node_FunctionEntry* Entry = nullptr;
+    UK2Node_FunctionResult* Result = nullptr;
+    for (UEdGraphNode* Node : Graph->Nodes)
+    {
+        if (Entry == nullptr)
+        {
+            Entry = Cast<UK2Node_FunctionEntry>(Node);
+        }
+        if (Result == nullptr)
+        {
+            Result = Cast<UK2Node_FunctionResult>(Node);
+        }
+    }
+    if (Result == nullptr)
+    {
+        // UEの関数グラフ作成経路によってはResultが自動配置されないため、明示的に作る。
+        Result = NewObject<UK2Node_FunctionResult>(Graph);
+        Graph->AddNode(Result, false, false);
+        Result->PostPlacedNewNode();
+        Result->AllocateDefaultPins();
+    }
+    if (TestNotNull(TEXT("Function entry"), Entry) == false
+        || TestNotNull(TEXT("Function result"), Result) == false)
+    {
+        return false;
+    }
+
+    FEdGraphPinType IntType;
+    IntType.PinCategory = UEdGraphSchema_K2::PC_Int;
+    // Entryの出力は関数入力、Resultの入力は関数の戻り値を表す。
+    // 引数順序とReturnフラグを反射情報で検証するため、実Pinから宣言を構築する。
+    UEdGraphPin* Input = Entry->CreateUserDefinedPin(
+        TEXT("InputValue"), IntType, EGPD_Output);
+    UEdGraphPin* Return = Result->CreateUserDefinedPin(
+        TEXT("ReturnValue"), IntType, EGPD_Input);
+    if (TestNotNull(TEXT("Input parameter pin"), Input) == false
+        || TestNotNull(TEXT("Return parameter pin"), Return) == false)
+    {
+        return false;
+    }
+    // 未接続の入力PinはFunctionEntry由来の既定値抽出を検証する。
+    UEdGraphPin* DefaultInput = Entry->CreateUserDefinedPin(
+        TEXT("DefaultInput"), IntType, EGPD_Output);
+    if (TestNotNull(TEXT("Default input pin"), DefaultInput) == false)
+    {
+        return false;
+    }
+    DefaultInput->DefaultValue = TEXT("42");
+    // ReturnValueとは別に結果ノードへPinを追加し、out引数の宣言を検証する。
+    UEdGraphPin* OutValue = Result->CreateUserDefinedPin(
+        TEXT("OutValue"), IntType, EGPD_Input);
+    if (TestNotNull(TEXT("Out parameter pin"), OutValue) == false)
+    {
+        return false;
+    }
+    OutValue->DefaultValue = TEXT("7");
+    const FGuid InputId(0x81000001, 0x81000002, 0x81000003, 0x81000004);
+    const FGuid ReturnId(0x82000001, 0x82000002, 0x82000003, 0x82000004);
+    Input->PinId = InputId;
+    Return->PinId = ReturnId;
+    const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+    if (TestTrue(TEXT("Connect function exec to result"),
+        Schema->TryCreateConnection(
+            Entry->FindPinChecked(UEdGraphSchema_K2::PN_Then),
+            Result->FindPinChecked(UEdGraphSchema_K2::PN_Execute))) == false)
+    {
+        return false;
+    }
+    if (TestTrue(TEXT("Connect input to return"),
+        Schema->TryCreateConnection(Input, Return)) == false)
+    {
+        return false;
+    }
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (TestNotNull(TEXT("Compiled generated class"), Blueprint->GeneratedClass.Get()) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticIR SemanticIR;
+    FBPGraphIR GraphIR;
+    if (TestTrue(TEXT("Build function signature Graph IR"),
+        FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false)
+    {
+        return false;
+    }
+    SemanticIR.AssetPath = GraphIR.AssetPath;
+    SemanticIR.ParentClassPath = GraphIR.ParentClassPath;
+    FBPSemanticFunctionExtractor::Append(Blueprint, SemanticIR);
+    const FBPSemanticFunction* Declaration = SemanticIR.Functions.FindByPredicate(
+        [](const FBPSemanticFunction& Function)
+        {
+            return Function.Name == TEXT("CalculateGolden");
+        });
+    if (TestNotNull(TEXT("Extract signature declaration"), Declaration) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("Function parameter count including return and out"), Declaration->Parameters.Num(), 4);
+    if (Declaration->Parameters.Num() != 4)
+    {
+        return false;
+    }
+    const FBPSemanticParameter* InputParameter = Declaration->Parameters.FindByPredicate(
+        [](const FBPSemanticParameter& Param) { return Param.Name == TEXT("InputValue"); });
+    const FBPSemanticParameter* DefaultParameter = Declaration->Parameters.FindByPredicate(
+        [](const FBPSemanticParameter& Param) { return Param.Name == TEXT("DefaultInput"); });
+    const FBPSemanticParameter* OutParameter = Declaration->Parameters.FindByPredicate(
+        [](const FBPSemanticParameter& Param) { return Param.Name == TEXT("OutValue"); });
+    const FBPSemanticParameter* ReturnParameter = Declaration->Parameters.FindByPredicate(
+        [](const FBPSemanticParameter& Param) { return Param.bIsReturn; });
+    if (TestNotNull(TEXT("Input reflection parameter"), InputParameter) == false
+        || TestNotNull(TEXT("Return reflection parameter"), ReturnParameter) == false
+        || TestNotNull(TEXT("Default input reflection parameter"), DefaultParameter) == false
+        || TestNotNull(TEXT("Out reflection parameter"), OutParameter) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("Input parameter declaration order"), InputParameter->DeclarationIndex, 0);
+    TestEqual(TEXT("Input parameter type"), InputParameter->Type.Kind, EBPSemanticTypeKind::Int32);
+    TestFalse(TEXT("Input is not return"), InputParameter->bIsReturn);
+    TestEqual(TEXT("Return parameter type"), ReturnParameter->Type.Kind, EBPSemanticTypeKind::Int32);
+    TestTrue(TEXT("Return flag is preserved"), ReturnParameter->bIsReturn);
+    TestEqual(TEXT("Return type"), Declaration->ReturnType.Kind, EBPSemanticTypeKind::Int32);
+    TestEqual(TEXT("Default parameter type"), DefaultParameter->Type.Kind, EBPSemanticTypeKind::Int32);
+    TestEqual(TEXT("Default parameter declaration order"), DefaultParameter->DeclarationIndex, 1);
+    TestTrue(TEXT("Default value was extracted"), DefaultParameter->bHasDefaultValue);
+    TestEqual(TEXT("Default value from entry pin"), DefaultParameter->DefaultValue,
+        FString(TEXT("42")));
+    TestEqual(TEXT("Default value source"), DefaultParameter->DefaultValueSource,
+        FString(TEXT("function_entry_pin")));
+    TestEqual(TEXT("Default source node"), DefaultParameter->DefaultValueSourceNodeId, Entry->NodeGuid);
+    TestEqual(TEXT("Default source pin"), DefaultParameter->DefaultValueSourcePinId, DefaultInput->PinId);
+    TestTrue(TEXT("Out parameter flag"), OutParameter->bIsOut);
+    TestFalse(TEXT("Out parameter is not return"), OutParameter->bIsReturn);
+    TestEqual(TEXT("Out parameter type"), OutParameter->Type.Kind, EBPSemanticTypeKind::Int32);
+    // out引数の値は呼び出し先で決まるため、Result Pinのリテラルを
+    // 関数呼び出し時の既定値として扱わない。
+    TestFalse(TEXT("Out parameter has no call-site default"), OutParameter->bHasDefaultValue);
+
+    FString Path;
+    FString Error;
+    if (TestTrue(TEXT("Export signature Copilot JSON"),
+        FBPCopilotGraphJsonExporter::Export(
+            GraphIR, TEXT("5.7.4-cj0-test"), Path, Error, &SemanticIR)) == false)
+    {
+        AddError(Error);
+        return false;
+    }
+    FString Text;
+    const bool bLoaded = FFileHelper::LoadFileToString(Text, *Path);
+    IFileManager::Get().Delete(*Path);
+    if (TestTrue(TEXT("Read signature JSON"), bLoaded) == false)
+    {
+        return false;
+    }
+    const TSharedPtr<FJsonObject> Json = ParseJson(Text);
+    if (TestNotNull(TEXT("Parse signature JSON"), Json.Get()) == false)
+    {
+        return false;
+    }
+    const TSharedPtr<FJsonObject> ExportedGraph = FindObjectByStringField(
+        Json->GetArrayField(TEXT("graphs")), TEXT("path"), Graph->GetPathName());
+    if (TestNotNull(TEXT("Find exported function graph"), ExportedGraph.Get()) == false)
+    {
+        return false;
+    }
+    // Data接続のPin GUIDは実際のBlueprint由来であり、合成Fixtureではない。
+    const TArray<TSharedPtr<FJsonValue>>& Edges = ExportedGraph->GetArrayField(TEXT("data_edges"));
+    TestEqual(TEXT("One input-to-return data edge"), Edges.Num(), 1);
+    if (Edges.Num() == 1)
+    {
+        const TSharedPtr<FJsonObject> Edge = Edges[0]->AsObject();
+        TestEqual(TEXT("Data source pin GUID"), Edge->GetStringField(TEXT("source_pin_id")),
+            InputId.ToString(EGuidFormats::DigitsWithHyphens));
+        TestEqual(TEXT("Data target pin GUID"), Edge->GetStringField(TEXT("target_pin_id")),
+            ReturnId.ToString(EGuidFormats::DigitsWithHyphens));
+    }
+    const TSharedPtr<FJsonObject> Declarations = Json->GetObjectField(TEXT("semantic_declarations"));
+    const TSharedPtr<FJsonObject> ExportedFunction = FindObjectByStringField(
+        Declarations->GetArrayField(TEXT("functions")), TEXT("name"), TEXT("CalculateGolden"));
+    TestNotNull(TEXT("JSON retains function signature"), ExportedFunction.Get());
+    TestEqual(TEXT("Incomplete semantics remain partial"), Json->GetStringField(TEXT("semantic_status")),
+        FString(TEXT("partial")));
     return true;
 }
 
