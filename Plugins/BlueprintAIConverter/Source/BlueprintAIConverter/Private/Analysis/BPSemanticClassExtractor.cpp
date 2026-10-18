@@ -79,12 +79,44 @@ bool FBPSemanticClassExtractor::Extract(const UClass* Class, FBPSemanticClassInf
             static_cast<uint32>(Function->FunctionFlags));
         // 戻り値や引数を持つ関数の署名を関数名だけから推測しない。
         OutInfo.DeclaredFunctions.Add(MoveTemp(Member));
+
+        FBPSemanticReflectedFunction Signature;
+        Signature.Name = Function->GetName();
+        Signature.ReflectionPath = Function->GetPathName();
+        Signature.Flags = FString::Printf(TEXT("0x%x"), static_cast<uint32>(Function->FunctionFlags));
+        // CPF_Parmを持つFPropertyだけが引数・戻り値。ローカルプロパティを混入させない。
+        for (TFieldIterator<FProperty> ParamIt(Function); ParamIt; ++ParamIt)
+        {
+            const FProperty* Param = *ParamIt;
+            if (Param == nullptr || Param->HasAnyPropertyFlags(CPF_Parm) == false)
+            {
+                continue;
+            }
+            if (Param->HasAnyPropertyFlags(CPF_ReturnParm))
+            {
+                Signature.ReturnCppType = Param->GetCPPType();
+                continue;
+            }
+            FBPSemanticReflectedParameter Parameter;
+            Parameter.Name = Param->GetName();
+            Parameter.CppType = Param->GetCPPType();
+            Parameter.bIsOut = Param->HasAnyPropertyFlags(CPF_OutParm);
+            Parameter.bIsReference = Param->HasAnyPropertyFlags(CPF_ReferenceParm);
+            Parameter.bIsConst = Param->HasAnyPropertyFlags(CPF_ConstParm);
+            Signature.Parameters.Add(MoveTemp(Parameter));
+        }
+        OutInfo.DeclaredFunctionSignatures.Add(MoveTemp(Signature));
     }
     OutInfo.DeclaredProperties.Sort([](const FBPSemanticClassMember& A, const FBPSemanticClassMember& B)
     {
         return A.Name < B.Name;
     });
     OutInfo.DeclaredFunctions.Sort([](const FBPSemanticClassMember& A, const FBPSemanticClassMember& B)
+    {
+        return A.Name < B.Name;
+    });
+    OutInfo.DeclaredFunctionSignatures.Sort([](const FBPSemanticReflectedFunction& A,
+        const FBPSemanticReflectedFunction& B)
     {
         return A.Name < B.Name;
     });
