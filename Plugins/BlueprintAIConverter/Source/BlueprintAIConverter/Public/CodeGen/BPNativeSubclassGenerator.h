@@ -12,4 +12,9 @@ public:
     static bool Generate(const FBPSemanticClassInfo& Info, const FString& NewClassName,
         const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles,
         TArray<FString>& OutDiagnostics);
+
+    // AActorの既知の仮想関数BeginPlayだけを明示的に追加する安全な限定経路。
+    static bool GenerateWithBeginPlayOverride(const FBPSemanticClassInfo& Info,
+        const FString& NewClassName, const FString& ModuleApiMacro,
+        FBPGeneratedActorFiles& OutFiles, TArray<FString>& OutDiagnostics);
 };
