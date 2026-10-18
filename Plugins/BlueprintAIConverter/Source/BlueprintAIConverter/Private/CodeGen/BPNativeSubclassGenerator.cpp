@@ -3,6 +3,7 @@
 
 #include "BPParentClassResolver.h"
 #include "GameFramework/Actor.h"
+#include "Components/ActorComponent.h"
 #include "UObject/Class.h"
 #include "UObject/UObjectIterator.h"
 
@@ -164,10 +165,20 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
         return true;
     }
     UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
-    if (ParentClass == nullptr || ParentClass->IsChildOf(AActor::StaticClass()) == false)
+    if (ParentClass == nullptr)
     {
         OutFiles = FBPGeneratedActorFiles();
-        OutDiagnostics.Add(TEXT("Verified Actor overrides require an AActor-derived native class"));
+        OutDiagnostics.Add(TEXT("Native parent class is unavailable"));
+        return false;
+    }
+    const bool bActor = ParentClass->IsChildOf(AActor::StaticClass());
+    const bool bActorComponent = ParentClass->IsChildOf(UActorComponent::StaticClass());
+    // ActorComponentのBeginPlayはActorと同じ検証済み署名を持つ。
+    // Tick/EndPlayはComponent側で署名が異なるため、Actor用定義を流用しない。
+    if (bActor == false && bActorComponent == false)
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Add(TEXT("Verified lifecycle overrides require an Actor or ActorComponent parent"));
         return false;
     }
     FString Declarations = TEXT("    GENERATED_BODY()\n");
@@ -185,6 +196,14 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
         {
             OutFiles = FBPGeneratedActorFiles();
             OutDiagnostics.Add(FString::Printf(TEXT("Unverified or duplicate override: %s"), *Function.Name));
+            return false;
+        }
+        if (bActorComponent && Function.Name != TEXT("BeginPlay"))
+        {
+            OutFiles = FBPGeneratedActorFiles();
+            OutDiagnostics.Add(FString::Printf(
+                TEXT("ActorComponent override %s has a different native signature; only BeginPlay is verified"),
+                *Function.Name));
             return false;
         }
         Seen.Add(Function.Name);
