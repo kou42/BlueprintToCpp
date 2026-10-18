@@ -1,7 +1,19 @@
 # BlueprintToCpp 開発ロードマップ
 
 対象: Unreal Engine 5.7.4 / BlueprintAIConverter / PythonServer  
-更新日: 2026-10-18（既存の検証記録とCJトラックの進捗を照合。新たなUE実機テストは未実施）
+更新日: 2026-10-19（既存の検証記録とCJトラックの進捗を照合。新たなUE実機テストは未実施）
+
+## 2026-10-19: 関数生成の汎用化（着手）
+
+- [x] Native派生クラスのBeginPlay/Tick専用生成処理を、検証済み関数情報の配列を受け取る共通Emitterに集約する。
+- [x] コンソールのカンマ区切り選択を共通パーサーへ統合し、EndPlayを選択候補に追加する。
+- [x] 既存API互換ラッパーと、複数選択・未知名・重複のAutomationテストを追加する。
+- [ ] UE 5.7.4でAutomation Testおよび生成コードの隔離UHT/UBTを実行する（未実施）。
+- [ ] 既存Semantic Function IRと共通Emitterを接続し、実BlueprintのFunctionGraphとイベントを同一の関数生成経路に統合する。
+- [ ] 親C++関数のvirtual属性・アクセス指定子・Super呼び出し規則を検証可能な情報源から解決する。UFunctionのみから推測しない。
+- [ ] Actor以外のComponent/Widget等への適用は、親クラス固有の検証を実装してから進める。
+
+現段階の共通Emitterは**検証済みAActor overrideに限定**する。任意のC++関数を安全に生成できる段階ではない。
 
 ## 最終目標
 
