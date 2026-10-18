@@ -1,6 +1,7 @@
 #include "BPNativeSubclassGenerator.h"
 
 #include "BPParentClassResolver.h"
+#include "GameFramework/Actor.h"
 #include "UObject/Class.h"
 #include "UObject/UObjectIterator.h"
 
@@ -80,5 +81,46 @@ bool FBPNativeSubclassGenerator::Generate(const FBPSemanticClassInfo& Info,
         TEXT("UCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n};\n"),
         *Parent.HeaderPath, *BaseName, *ApiPrefix, *NewClassName, *Parent.CppClassName);
     OutFiles.SourceContent = FString::Printf(TEXT("#include \"%s.h\"\n"), *BaseName);
+    return true;
+}
+
+bool FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(
+    const FBPSemanticClassInfo& Info, const FString& NewClassName,
+    const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles,
+    TArray<FString>& OutDiagnostics)
+{
+    if (Generate(Info, NewClassName, ModuleApiMacro, OutFiles, OutDiagnostics) == false)
+    {
+        return false;
+    }
+
+    // AActor::BeginPlayは既知のvirtual void BeginPlay()であり、
+    // UFunctionのフラグからvirtualを推測する汎用経路とは区別する。
+    UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
+    if (ParentClass == nullptr || ParentClass->IsChildOf(AActor::StaticClass()) == false)
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Add(TEXT("BeginPlay override requires a loaded AActor-derived native class"));
+        return false;
+    }
+
+    // 直接の親クラスがfinalのときは派生クラスそのものを作成できない。
+    if (ParentClass->HasAnyClassFlags(CLASS_Final))
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Add(TEXT("Cannot subclass a final native class"));
+        return false;
+    }
+
+    const FString Declaration = TEXT("    virtual void BeginPlay() override;\n");
+    if (OutFiles.HeaderContent.ReplaceInline(TEXT("    GENERATED_BODY()\n};"),
+        *(FString(TEXT("    GENERATED_BODY()\n\nprotected:\n")) + Declaration + TEXT("};"))) == 0)
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Add(TEXT("Generated header structure was not recognized"));
+        return false;
+    }
+    OutFiles.SourceContent += FString::Printf(
+        TEXT("\nvoid %s::BeginPlay()\n{\n    Super::BeginPlay();\n}\n"), *NewClassName);
     return true;
 }
