@@ -216,10 +216,29 @@ struct FBPSemanticGraphTrace
     TArray<FBPIRLink> DataEdges;
 };
 
+// Blueprint生成クラスとネイティブUCLASSを共通形式で識別する。
+// 未解析の情報は空文字のまま保持し、推測でC++宣言を生成しない。
+enum class EBPSemanticClassOrigin : uint8
+{
+    Unknown,
+    Blueprint,
+    Native
+};
+
+struct FBPSemanticClassInfo
+{
+    EBPSemanticClassOrigin Origin = EBPSemanticClassOrigin::Unknown;
+    FString ClassPath;
+    FString ClassName;
+    FString NativeParentClassPath;
+    TArray<FString> InterfacePaths;
+};
+
 struct FBPSemanticIR
 {
     FString AssetPath;
     FString ParentClassPath;
+    FBPSemanticClassInfo ClassInfo;
     TArray<FBPSemanticFunction> Functions;
     TArray<FBPSemanticVariable> Variables;
     TArray<FBPSemanticGraphTrace> GraphTraces;
