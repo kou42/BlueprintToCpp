@@ -1,0 +1,203 @@
+#if WITH_DEV_AUTOMATION_TESTS
+
+#include "Misc/AutomationTest.h"
+
+#include "BPGraphIR.h"
+#include "BPSemanticFunctionExtractor.h"
+#include "BPSemanticIR.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraphSchema_K2.h"
+#include "Engine/Blueprint.h"
+#include "GameFramework/Actor.h"
+#include "HAL/FileManager.h"
+#include "K2Node_FunctionEntry.h"
+#include "K2Node_FunctionResult.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
+#include "Misc/PackageName.h"
+#include "Misc/Paths.h"
+#include "UObject/SavePackage.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPGeneratedUserFunctionAssetTest,
+    "BlueprintAIConverter.GeneratedAssets.UserFunction",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPGeneratedUserFunctionAssetTest::RunTest(const FString& Parameters)
+{
+    const FString AssetName = TEXT("BP_Test_UserFunction");
+    const FString PackagePath = TEXT("/Game/BlueprintToCppTests/") + AssetName;
+    UPackage* Package = CreatePackage(*PackagePath);
+    if (TestNotNull(TEXT("保存先パッケージ"), Package) == false)
+    {
+        return false;
+    }
+    // 既存BPを再利用し、ユーザー定義関数を重複作成しない。
+    UBlueprint* Blueprint = LoadObject<UBlueprint>(
+        nullptr, *(PackagePath + TEXT(".") + AssetName));
+    if (Blueprint == nullptr)
+    {
+        Blueprint = FKismetEditorUtilities::CreateBlueprint(
+            AActor::StaticClass(), Package, FName(*AssetName),
+            BPTYPE_Normal, UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass());
+    }
+    if (TestNotNull(TEXT("Blueprint"), Blueprint) == false)
+    {
+        return false;
+    }
+
+    const FName FunctionName(TEXT("ComputeValue"));
+    UEdGraph* FunctionGraph = nullptr;
+    for (UEdGraph* Existing : Blueprint->FunctionGraphs)
+    {
+        if (Existing != nullptr && Existing->GetFName() == FunctionName)
+        {
+            FunctionGraph = Existing;
+            break;
+        }
+    }
+    if (FunctionGraph == nullptr)
+    {
+        FunctionGraph = FBlueprintEditorUtils::CreateNewGraph(
+            Blueprint, FunctionName, UEdGraph::StaticClass(),
+            UEdGraphSchema_K2::StaticClass());
+        FBlueprintEditorUtils::AddFunctionGraph(Blueprint, FunctionGraph, true, nullptr);
+    }
+    if (TestNotNull(TEXT("ユーザー定義関数Graph"), FunctionGraph) == false)
+    {
+        return false;
+    }
+
+    UK2Node_FunctionEntry* Entry = nullptr;
+    UK2Node_FunctionResult* Result = nullptr;
+    for (UEdGraphNode* Node : FunctionGraph->Nodes)
+    {
+        if (Entry == nullptr)
+        {
+            Entry = Cast<UK2Node_FunctionEntry>(Node);
+        }
+        if (Result == nullptr)
+        {
+            Result = Cast<UK2Node_FunctionResult>(Node);
+        }
+    }
+    if (TestNotNull(TEXT("Function Entry"), Entry) == false)
+    {
+        return false;
+    }
+    if (Result == nullptr)
+    {
+        Result = NewObject<UK2Node_FunctionResult>(FunctionGraph);
+        FunctionGraph->AddNode(Result, false, false);
+        Result->CreateNewGuid();
+        Result->PostPlacedNewNode();
+        Result->FunctionReference.SetSelfMember(FunctionName);
+        Result->AllocateDefaultPins();
+    }
+
+    FEdGraphPinType IntegerType;
+    IntegerType.PinCategory = UEdGraphSchema_K2::PC_Int;
+    // ユーザー定義PinはFunction Entryが入力引数、Resultが戻り値を定義する。
+    if (Entry->FindPin(TEXT("InputValue")) == nullptr)
+    {
+        Entry->CreateUserDefinedPin(TEXT("InputValue"), IntegerType, EGPD_Output);
+    }
+    if (Result->FindPin(TEXT("ReturnValue")) == nullptr)
+    {
+        Result->CreateUserDefinedPin(TEXT("ReturnValue"), IntegerType, EGPD_Input);
+    }
+    const UEdGraphSchema_K2* Schema = Cast<UEdGraphSchema_K2>(FunctionGraph->GetSchema());
+    if (TestNotNull(TEXT("K2 Schema"), Schema) == false)
+    {
+        return false;
+    }
+    UEdGraphPin* EntryThen = Entry->FindPin(UEdGraphSchema_K2::PN_Then);
+    UEdGraphPin* ResultExec = Result->FindPin(UEdGraphSchema_K2::PN_Execute);
+    UEdGraphPin* Input = Entry->FindPin(TEXT("InputValue"));
+    UEdGraphPin* Output = Result->FindPin(TEXT("ReturnValue"));
+    if (TestNotNull(TEXT("Entry Then"), EntryThen) == false ||
+        TestNotNull(TEXT("Result Exec"), ResultExec) == false ||
+        TestNotNull(TEXT("InputValue"), Input) == false ||
+        TestNotNull(TEXT("ReturnValue"), Output) == false)
+    {
+        return false;
+    }
+    if (EntryThen->LinkedTo.Contains(ResultExec) == false)
+    {
+        if (TestTrue(TEXT("Entry -> Result"),
+            Schema->TryCreateConnection(EntryThen, ResultExec)) == false)
+        {
+            return false;
+        }
+    }
+    if (Input->LinkedTo.Contains(Output) == false)
+    {
+        if (TestTrue(TEXT("入力値を戻り値へ接続"),
+            Schema->TryCreateConnection(Input, Output)) == false)
+        {
+            return false;
+        }
+    }
+
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (TestTrue(TEXT("関数BPコンパイルエラーなし"),
+        Blueprint->Status != BS_Error) == false ||
+        TestNotNull(TEXT("生成クラス"), Blueprint->GeneratedClass.Get()) == false)
+    {
+        return false;
+    }
+    const UFunction* Reflected = Blueprint->GeneratedClass->FindFunctionByName(FunctionName);
+    if (TestNotNull(TEXT("生成クラスにComputeValueが存在"), Reflected) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticIR Semantic;
+    FBPSemanticFunctionExtractor::Append(Blueprint, Semantic);
+    const FBPSemanticFunction* Function = Semantic.Functions.FindByPredicate(
+        [FunctionName](const FBPSemanticFunction& Item)
+        {
+            return Item.Name == FunctionName;
+        });
+    if (TestNotNull(TEXT("Semantic IRにユーザー関数が存在"), Function) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("関数引数数"), Function->Parameters.Num(), 1);
+    TestEqual(TEXT("関数引数名"), Function->Parameters[0].Name, FName(TEXT("InputValue")));
+
+    FBPGraphIR GraphIR;
+    if (TestTrue(TEXT("関数Graph IR生成"),
+        FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false)
+    {
+        return false;
+    }
+    const FBPIRGraph* IRFunction = GraphIR.Graphs.FindByPredicate(
+        [](const FBPIRGraph& Item)
+        {
+            return Item.Kind == TEXT("function") && Item.Name == TEXT("ComputeValue");
+        });
+    if (TestNotNull(TEXT("関数Graphを抽出"), IRFunction) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("Entry/Resultノード数"), IRFunction->Nodes.Num(), 2);
+    TestEqual(TEXT("関数Exec接続数"), IRFunction->ExecEdges.Num(), 1);
+    TestEqual(TEXT("引数から戻り値への接続数"), IRFunction->DataEdges.Num(), 1);
+
+    Blueprint->MarkPackageDirty();
+    const FString Filename = FPackageName::LongPackageNameToFilename(
+        PackagePath, FPackageName::GetAssetPackageExtension());
+    IFileManager::Get().MakeDirectory(*FPaths::GetPath(Filename), true);
+    FSavePackageArgs Args;
+    Args.TopLevelFlags = RF_Public | RF_Standalone;
+    if (TestTrue(TEXT("ユーザー定義関数BP保存"),
+        UPackage::SavePackage(Package, Blueprint, *Filename, Args)) == false)
+    {
+        return false;
+    }
+    AddInfo(FString::Printf(TEXT("GENERATED_BLUEPRINT=%s"), *Filename));
+    return true;
+}
+
+#endif
