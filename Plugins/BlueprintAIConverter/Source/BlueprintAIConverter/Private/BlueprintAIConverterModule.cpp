@@ -19,11 +19,61 @@
 #include "Misc/App.h"
 #include "Misc/Paths.h"
 #include "HAL/FileManager.h"
+#include "HAL/IConsoleManager.h"
+#include "UObject/UObjectGlobals.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogBlueprintAIConverter, Log, All);
 
 namespace
 {
+// Content BrowserのアセットではないネイティブUCLASSをパスから指定してJSONに保存する。
+// BlueprintグラフのLoweringとは独立した宣言情報のエクスポート経路とする。
+void ExportNativeClassSemanticJson(const TArray<FString>& Args)
+{
+    if (Args.Num() != 1 || Args[0].StartsWith(TEXT("/Script/")) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error,
+            TEXT("Usage: BlueprintAIConverter.ExportNativeClass /Script/Module.ClassName"));
+        return;
+    }
+
+    const FString ClassPath = Args[0];
+    UClass* Class = FindObject<UClass>(nullptr, *ClassPath);
+    if (Class == nullptr)
+    {
+        Class = LoadObject<UClass>(nullptr, *ClassPath);
+    }
+    if (Class == nullptr || Class->HasAnyClassFlags(CLASS_Native) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error, TEXT("Native UCLASS not found: %s"), *ClassPath);
+        return;
+    }
+
+    FBPSemanticIR IR;
+    IR.AssetPath = ClassPath;
+    IR.ParentClassPath = GetPathNameSafe(Class->GetSuperClass());
+    if (FBPSemanticClassExtractor::Extract(Class, IR.ClassInfo) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error, TEXT("Class reflection failed: %s"), *ClassPath);
+        return;
+    }
+    FString OutputPath;
+    FString Error;
+    if (FBPSemanticJsonExporter::Export(
+        IR, FEngineVersion::Current().ToString(), OutputPath, Error) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error, TEXT("Native UCLASS export failed: %s"), *Error);
+        return;
+    }
+    // このJSONは宣言メンバーのみであり、ネイティブ関数の実装本体は含まない。
+    UE_LOG(LogBlueprintAIConverter, Display, TEXT("Native UCLASS semantic JSON: %s"), *OutputPath);
+}
+
+FAutoConsoleCommandWithArgs ExportNativeClassCommand(
+    TEXT("BlueprintAIConverter.ExportNativeClass"),
+    TEXT("Export native UCLASS declarations: /Script/Module.ClassName"),
+    FConsoleCommandWithArgsDelegate::CreateStatic(&ExportNativeClassSemanticJson));
+
 FString JoinSemanticDiagnostics(const FBPSemanticIR& IR)
 {
     TArray<FString> Messages;
