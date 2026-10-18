@@ -252,6 +252,12 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
         Entry->SetStringField(TEXT("reflection_path"), Function.ReflectionPath);
         Entry->SetStringField(TEXT("flags"), Function.Flags);
         Entry->SetStringField(TEXT("return_cpp_type"), Function.ReturnCppType);
+        Entry->SetBoolField(TEXT("is_native"), Function.bIsNative);
+        Entry->SetBoolField(TEXT("is_static"), Function.bIsStatic);
+        Entry->SetBoolField(TEXT("is_const"), Function.bIsConst);
+        Entry->SetBoolField(TEXT("is_blueprint_event"), Function.bIsBlueprintEvent);
+        Entry->SetBoolField(TEXT("is_net"), Function.bIsNet);
+        Entry->SetBoolField(TEXT("is_final"), Function.bIsFinal);
         TArray<TSharedPtr<FJsonValue>> Parameters;
         for (const FBPSemanticReflectedParameter& Parameter : Function.Parameters)
         {
