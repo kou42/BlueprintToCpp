@@ -1,6 +1,6 @@
 # Semantic JSON v2 設計仕様（J0）
 
-状態: **設計案 / 未実装**  
+状態: **J0当初の設計記録（現在は一部実装済み）**。本文中の「現行」「未実装」「J1受け入れ条件」は設計当時の記述であり、現在の実装状況を示すものではありません。最新の監査は [CJ0_JSON_AUDIT.md](CJ0_JSON_AUDIT.md)、実機往復検証は [J2-5-editor-roundtrip.md](J2-5-editor-roundtrip.md)、関数メタデータの追加契約は [CJ1_FUNCTION_METADATA_CONTRACT.md](CJ1_FUNCTION_METADATA_CONTRACT.md) を参照してください。  
 対象: Unreal Engine 5.7.4 / BlueprintAIConverter / PythonServer
 
 ## 目的と非目標
