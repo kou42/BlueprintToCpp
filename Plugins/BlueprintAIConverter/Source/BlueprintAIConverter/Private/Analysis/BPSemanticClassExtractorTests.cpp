@@ -18,6 +18,16 @@ bool FBPSemanticClassExtractorTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("クラスパス"), Info.ClassPath, FString(TEXT("/Script/Engine.Actor")));
     TestEqual(TEXT("クラス名"), Info.ClassName, FString(TEXT("Actor")));
     TestTrue(TEXT("親クラスの情報"), Info.NativeParentClassPath.IsEmpty() == false);
+    TestTrue(TEXT("宣言プロパティの型情報が取得できる"),
+        Info.DeclaredProperties.ContainsByPredicate([](const FBPSemanticClassMember& Member)
+        {
+            return Member.Name.IsEmpty() == false && Member.CppType.IsEmpty() == false;
+        }));
+    TestTrue(TEXT("宣言関数のパスが取得できる"),
+        Info.DeclaredFunctions.ContainsByPredicate([](const FBPSemanticClassMember& Member)
+        {
+            return Member.Name.IsEmpty() == false && Member.ReflectionPath.IsEmpty() == false;
+        }));
     return true;
 }
 
