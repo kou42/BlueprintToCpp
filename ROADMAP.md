@@ -9,11 +9,12 @@
 - [x] コンソールのカンマ区切り選択を共通パーサーへ統合し、EndPlayを選択候補に追加する。
 - [x] 既存API互換ラッパーと、複数選択・未知名・重複のAutomationテストを追加する。
 - [ ] UE 5.7.4でAutomation Testおよび生成コードの隔離UHT/UBTを実行する（未実施）。
-- [ ] 既存Semantic Function IRと共通Emitterを接続し、実BlueprintのFunctionGraphとイベントを同一の関数生成経路に統合する。
+- [x] Semantic関数とNative overrideの宣言・定義・Prologueを共通 `FBPGeneratedFunctionShape` に正規化する（関数形状の共有まで）。
+- [ ] 共通Function Shapeを受け取る出力処理をさらに統合し、実BlueprintのFunctionGraphとイベントを同一の関数生成経路に接続する。
 - [ ] 親C++関数のvirtual属性・アクセス指定子・Super呼び出し規則を検証可能な情報源から解決する。UFunctionのみから推測しない。
 - [ ] Actor以外のComponent/Widget等への適用は、親クラス固有の検証を実装してから進める。
 
-現段階の共通Emitterは**検証済みAActor overrideに限定**する。任意のC++関数を安全に生成できる段階ではない。
+現段階のNative側共通Emitterは**検証済みAActor overrideに限定**する。Semantic側は既存の文IR生成を維持する。任意のC++関数を安全に生成できる段階ではない。
 
 ## 最終目標
 
