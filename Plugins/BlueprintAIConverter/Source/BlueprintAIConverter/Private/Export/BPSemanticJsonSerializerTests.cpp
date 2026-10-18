@@ -211,6 +211,18 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("無効GUIDはnull"),
         Expression->GetField<EJson::Null>(TEXT("source_pin_id"))->IsNull());
 
+    const TSharedPtr<FJsonObject> ClassInfo = FBPSemanticJsonSerializer::ToJson(IR, TEXT("5.7.4"))
+        ->GetObjectField(TEXT("class_info"));
+    TestEqual(TEXT("Blueprintクラスの出自"), ClassInfo->GetStringField(TEXT("origin")),
+        FString(TEXT("blueprint")));
+    TestEqual(TEXT("クラスパス"), ClassInfo->GetStringField(TEXT("class_path")),
+        FString(TEXT("/Game/BP_Test.BP_Test_C")));
+    TestEqual(TEXT("実装インターフェース数"), ClassInfo->GetArrayField(TEXT("interface_paths")).Num(), 1);
+    IR.ClassInfo.Origin = EBPSemanticClassOrigin::Native;
+    TestEqual(TEXT("ネイティブUCLASSの出自"),
+        FBPSemanticJsonSerializer::ToJson(IR, TEXT("5.7.4"))->GetObjectField(TEXT("class_info"))
+            ->GetStringField(TEXT("origin")), FString(TEXT("native")));
+
     FBPSemanticDiagnostic Diagnostic;
     Diagnostic.Message = TEXT("Unsupported node");
     IR.Diagnostics.Add(Diagnostic);
