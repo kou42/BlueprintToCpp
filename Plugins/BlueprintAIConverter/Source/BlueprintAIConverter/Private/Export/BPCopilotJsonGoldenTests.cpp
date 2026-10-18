@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "BPGraphIR.h"
+#include "BPCopilotGraphJsonExporter.h"
 #include "BPSemanticGraphTraceExtractor.h"
 #include "BPSemanticJsonSerializer.h"
 #include "BPSemanticLowering.h"
@@ -13,6 +14,8 @@
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "GameFramework/Actor.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
 #include "Kismet/KismetSystemLibrary.h"
@@ -189,6 +192,94 @@ bool FBPCopilotJsonMinimalNativeCallGoldenTest::RunTest(const FString& Parameter
         TestEqual(TEXT("Graph IR native owner"), IRPrint->FunctionOwnerPath,
             UKismetSystemLibrary::StaticClass()->GetPathName());
     }
+
+    // CJ0-G01: 実際のEditor BlueprintからCopilot Graph JSON v1をファイル出力し、
+    // Graph IRだけでなく保存結果でも元Node/Pin GUIDとExec接続が保持されることを確認する。
+    FString CopilotPath;
+    FString CopilotError;
+    const bool bCopilotExported = FBPCopilotGraphJsonExporter::Export(
+        GraphIR, TEXT("5.7.4-cj0-test"), CopilotPath, CopilotError);
+    TestTrue(TEXT("Export Copilot Graph JSON from transient Blueprint"), bCopilotExported);
+    if (bCopilotExported == false)
+    {
+        AddError(CopilotError);
+        return false;
+    }
+
+    FString CopilotText;
+    const bool bCopilotLoaded = FFileHelper::LoadFileToString(CopilotText, *CopilotPath);
+    // Goldenテストの保存結果は読み込み後に削除し、Savedに不要なファイルを残さない。
+    IFileManager::Get().Delete(*CopilotPath);
+    TestTrue(TEXT("Read exported Copilot Graph JSON"), bCopilotLoaded);
+    if (bCopilotLoaded == false)
+    {
+        return false;
+    }
+    const TSharedPtr<FJsonObject> Copilot = ParseJson(CopilotText);
+    TestNotNull(TEXT("Parse exported Copilot Graph JSON"), Copilot.Get());
+    if (Copilot == nullptr)
+    {
+        return false;
+    }
+    TestEqual(TEXT("Copilot schema version"), Copilot->GetIntegerField(TEXT("schema_version")), 1);
+    TestEqual(TEXT("Copilot format"), Copilot->GetStringField(TEXT("format")),
+        FString(TEXT("blueprint_copilot_graph")));
+    TestEqual(TEXT("Copilot source asset"), Copilot->GetStringField(TEXT("asset_path")),
+        Blueprint->GetPathName());
+    TestEqual(TEXT("Copilot completeness is not overstated"),
+        Copilot->GetStringField(TEXT("semantic_status")), FString(TEXT("partial")));
+    const TSharedPtr<FJsonObject> CopilotGraph = FindObjectByStringField(
+        Copilot->GetArrayField(TEXT("graphs")), TEXT("path"), EventGraph->GetPathName());
+    TestNotNull(TEXT("Copilot contains source event graph"), CopilotGraph.Get());
+    if (CopilotGraph == nullptr)
+    {
+        return false;
+    }
+    const TSharedPtr<FJsonObject> CopilotPrint = FindObjectByStringField(
+        CopilotGraph->GetArrayField(TEXT("nodes")), TEXT("id"),
+        PrintStringId.ToString(EGuidFormats::DigitsWithHyphens));
+    TestNotNull(TEXT("Copilot contains original PrintString GUID"), CopilotPrint.Get());
+    if (CopilotPrint == nullptr)
+    {
+        return false;
+    }
+    TestEqual(TEXT("Copilot native function path"),
+        CopilotPrint->GetStringField(TEXT("function_path")), GetPathNameSafe(PrintFunction));
+    TestEqual(TEXT("Copilot native function owner"),
+        CopilotPrint->GetStringField(TEXT("function_owner_path")),
+        UKismetSystemLibrary::StaticClass()->GetPathName());
+    TestTrue(TEXT("Copilot native function resolved"),
+        CopilotPrint->GetBoolField(TEXT("function_resolved")));
+    const TSharedPtr<FJsonObject> CopilotStringPin = FindObjectByStringField(
+        CopilotPrint->GetArrayField(TEXT("pins")), TEXT("id"),
+        StringPinId.ToString(EGuidFormats::DigitsWithHyphens));
+    TestNotNull(TEXT("Copilot preserves source string pin GUID"), CopilotStringPin.Get());
+    if (CopilotStringPin.IsValid())
+    {
+        TestEqual(TEXT("Copilot preserves unconnected literal"),
+            CopilotStringPin->GetStringField(TEXT("default_value")), FString(TEXT("CJ0 golden")));
+    }
+    const TArray<TSharedPtr<FJsonValue>>& CopilotExecEdges =
+        CopilotGraph->GetArrayField(TEXT("exec_edges"));
+    TestEqual(TEXT("Copilot exec edge count"), CopilotExecEdges.Num(), 1);
+    if (CopilotExecEdges.Num() == 1)
+    {
+        const TSharedPtr<FJsonObject> Edge = CopilotExecEdges[0]->AsObject();
+        TestEqual(TEXT("Copilot exec source node"),
+            Edge->GetStringField(TEXT("source_node_id")),
+            BeginPlayId.ToString(EGuidFormats::DigitsWithHyphens));
+        TestEqual(TEXT("Copilot exec source pin"),
+            Edge->GetStringField(TEXT("source_pin_id")),
+            ThenPinId.ToString(EGuidFormats::DigitsWithHyphens));
+        TestEqual(TEXT("Copilot exec target node"),
+            Edge->GetStringField(TEXT("target_node_id")),
+            PrintStringId.ToString(EGuidFormats::DigitsWithHyphens));
+        TestEqual(TEXT("Copilot exec target pin"),
+            Edge->GetStringField(TEXT("target_pin_id")),
+            ExecutePinId.ToString(EGuidFormats::DigitsWithHyphens));
+    }
+    TestEqual(TEXT("Copilot has no data edge for literal input"),
+        CopilotGraph->GetArrayField(TEXT("data_edges")).Num(), 0);
 
     FBPSemanticIR SemanticIR;
     TestTrue(TEXT("Lower supported native call"),
