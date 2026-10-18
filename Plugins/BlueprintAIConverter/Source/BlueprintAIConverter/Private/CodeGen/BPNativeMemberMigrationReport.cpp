@@ -30,6 +30,35 @@ bool FBPNativeMemberMigrationReport::Build(
             TEXT("[INHERITED / BODY UNAVAILABLE] function %s -> %s\n"),
             *Function.Name, *Function.ReturnCppType);
     }
+    // UFunctionのフラグだけではC++ virtualや正確なoverride宣言は復元できない。
+    // static/final/RPCを明示し、残りも必ず元ヘッダーで確認する。
+    OutReport += TEXT("\nOverride candidate assessment (manual header verification required):\n");
+    for (const FBPSemanticReflectedFunction& Function : Info.DeclaredFunctionSignatures)
+    {
+        FString Reason;
+        if (Function.bIsStatic)
+        {
+            Reason = TEXT("static function");
+        }
+        else if (Function.bIsFinal)
+        {
+            Reason = TEXT("final function");
+        }
+        else if (Function.bIsNet)
+        {
+            Reason = TEXT("RPC requires declaration and implementation review");
+        }
+        else if (Function.bIsBlueprintEvent)
+        {
+            Reason = TEXT("Blueprint event: verify _Implementation signature in original header");
+        }
+        else
+        {
+            Reason = TEXT("C++ virtual status unavailable from reflection");
+        }
+        OutReport += FString::Printf(TEXT("[MANUAL REVIEW] %s: %s\n"),
+            *Function.Name, *Reason);
+    }
     OutReport += TEXT("To customize behavior, implement an explicit override after checking the original C++ header.\n");
     OutReport += TEXT("Native source bodies and default member initializers cannot be reconstructed from reflection.\n");
     return true;
