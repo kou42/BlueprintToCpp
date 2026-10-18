@@ -13,6 +13,7 @@
 #include "BPGraphIR.h"
 #include "BPSemanticLowering.h"
 #include "BPSemanticCodeGenerator.h"
+#include "BPReflectedClassPreview.h"
 #include "BPGeneratedCodePreview.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "Misc/MessageDialog.h"
@@ -68,6 +69,49 @@ void ExportNativeClassSemanticJson(const TArray<FString>& Args)
     // このJSONは宣言メンバーのみであり、ネイティブ関数の実装本体は含まない。
     UE_LOG(LogBlueprintAIConverter, Display, TEXT("Native UCLASS semantic JSON: %s"), *OutputPath);
 }
+
+// ネイティブクラスのリフレクション宣言をクリップボードへコピーする。
+// 既存UCLASSの再定義につながるソースファイルは生成しない。
+void CopyNativeClassCppPreview(const TArray<FString>& Args)
+{
+    if (Args.Num() != 1 || Args[0].StartsWith(TEXT("/Script/")) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error,
+            TEXT("Usage: BlueprintAIConverter.CopyNativeClassCppPreview /Script/Module.ClassName"));
+        return;
+    }
+    UClass* Class = FindObject<UClass>(nullptr, *Args[0]);
+    if (Class == nullptr)
+    {
+        Class = LoadObject<UClass>(nullptr, *Args[0]);
+    }
+    if (Class == nullptr || Class->HasAnyClassFlags(CLASS_Native) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error, TEXT("Native UCLASS not found: %s"), *Args[0]);
+        return;
+    }
+    FBPSemanticClassInfo Info;
+    if (FBPSemanticClassExtractor::Extract(Class, Info) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error, TEXT("Class reflection failed: %s"), *Args[0]);
+        return;
+    }
+    FString Preview;
+    FString Error;
+    if (FBPReflectedClassPreview::Generate(Info, Preview, Error) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error, TEXT("C++ preview failed: %s"), *Error);
+        return;
+    }
+    FPlatformApplicationMisc::ClipboardCopy(*Preview);
+    UE_LOG(LogBlueprintAIConverter, Display,
+        TEXT("Native UCLASS reference preview copied (not compilable): %s"), *Args[0]);
+}
+
+FAutoConsoleCommandWithArgs CopyNativeClassCppPreviewCommand(
+    TEXT("BlueprintAIConverter.CopyNativeClassCppPreview"),
+    TEXT("Copy native UCLASS reflection reference to clipboard (not compilable)"),
+    FConsoleCommandWithArgsDelegate::CreateStatic(&CopyNativeClassCppPreview));
 
 FAutoConsoleCommandWithArgs ExportNativeClassCommand(
     TEXT("BlueprintAIConverter.ExportNativeClass"),
