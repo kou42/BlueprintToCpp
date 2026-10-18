@@ -10,7 +10,8 @@
 - [x] 既存API互換ラッパーと、複数選択・未知名・重複のAutomationテストを追加する。
 - [ ] UE 5.7.4でAutomation Testおよび生成コードの隔離UHT/UBTを実行する（未実施）。
 - [x] Semantic関数とNative overrideの宣言・定義・Prologueを共通 `FBPGeneratedFunctionShape` に正規化する（関数形状の共有まで）。
-- [ ] 共通Function Shapeを受け取る出力処理をさらに統合し、実BlueprintのFunctionGraphとイベントを同一の関数生成経路に接続する。
+- [x] Function Shapeを受け取る共通定義Emitterを導入し、Native定義とSemanticのPrologue出力を共有する。
+- [ ] SemanticのStatement本体を含む全定義出力を共通Emitterへ移し、実BlueprintのFunctionGraphとイベントの生成経路を統合する。
 - [ ] 親C++関数のvirtual属性・アクセス指定子・Super呼び出し規則を検証可能な情報源から解決する。UFunctionのみから推測しない。
 - [ ] Actor以外のComponent/Widget等への適用は、親クラス固有の検証を実装してから進める。
 
