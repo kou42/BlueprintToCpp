@@ -2,6 +2,7 @@
 #include "BPGeneratedFunctionShape.h"
 #include "BPSemanticClassExtractor.h"
 #include "GameFramework/Actor.h"
+#include "Components/ActorComponent.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -88,6 +89,27 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
             Files, Diagnostics));
     TestFalse(TEXT("未知の関数を拒否"),
         FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Unknown"), Selected, Diagnostics));
+    // ComponentはBeginPlayを共有するが、TickはTickComponentであり同じ署名ではない。
+    FBPSemanticClassInfo ComponentInfo;
+    if (TestTrue(TEXT("ActorComponentのリフレクション"),
+        FBPSemanticClassExtractor::Extract(UActorComponent::StaticClass(), ComponentInfo)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("ComponentのBeginPlay override生成"),
+        FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(
+            ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("Component継承"),
+        Files.HeaderContent.Contains(TEXT("public UActorComponent")));
+    TestTrue(TEXT("Component BeginPlay宣言"),
+        Files.HeaderContent.Contains(TEXT("virtual void BeginPlay() override;")));
+    TestTrue(TEXT("Component Super呼び出し"),
+        Files.SourceContent.Contains(TEXT("Super::BeginPlay();")));
+    TestFalse(TEXT("ActorのTick署名をComponentに誤適用しない"),
+        FBPNativeSubclassGenerator::GenerateWithTickOverride(
+            ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("拒否時は出力を残さない"), Files.HeaderContent.IsEmpty());
+
     return true;
 }
 
