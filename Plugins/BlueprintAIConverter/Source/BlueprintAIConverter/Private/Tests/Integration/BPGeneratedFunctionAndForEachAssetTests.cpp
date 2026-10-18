@@ -6,6 +6,8 @@
 #include "BPGraphIR.h"
 #include "BPSemanticCodeGenerator.h"
 #include "BPSemanticLowering.h"
+#include "BPSemanticCodeGenerator.h"
+#include "BPSemanticLowering.h"
 #include "Dom/JsonObject.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
@@ -262,6 +264,38 @@ bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
     if (Test.TestTrue(TEXT("Event Graph JSON存在"), bFoundGraph) == false)
     {
         return false;
+    }
+
+    if (bForEach == false)
+    {
+        // 実際のBP由来の関数呼び出しをLoweringからC++生成まで通す。
+        // ForEachは専用Lowering経路を使用するため、関数呼び出しとは検証を分離する。
+        FBPSemanticIR Semantic;
+        if (Test.TestTrue(TEXT("関数呼び出しLowering"),
+            FBPSemanticLowering::Lower(Blueprint, IR, Semantic)) == false)
+        {
+            for (const FBPSemanticDiagnostic& Diagnostic : Semantic.Diagnostics)
+            {
+                Test.AddError(Diagnostic.Message);
+            }
+            return false;
+        }
+        FBPGeneratedActorFiles Generated;
+        TArray<FString> Diagnostics;
+        if (Test.TestTrue(TEXT("関数呼び出しC++生成"),
+            FBPSemanticCodeGenerator::Generate(Semantic,
+                TEXT("AGeneratedFunctionCall"), FString(), Generated, Diagnostics)) == false)
+        {
+            for (const FString& Diagnostic : Diagnostics)
+            {
+                Test.AddError(Diagnostic);
+            }
+            return false;
+        }
+        Test.TestTrue(TEXT("PrintString呼び出しを保持"),
+            Generated.SourceContent.Contains(TEXT("UKismetSystemLibrary::PrintString")));
+        Test.TestTrue(TEXT("文字列引数を保持"),
+            Generated.SourceContent.Contains(TEXT("Function call fixture")));
     }
 
     // 既存のForEach Loweringは対応範囲が限定的なため、ここでは保存とGraph JSONの
