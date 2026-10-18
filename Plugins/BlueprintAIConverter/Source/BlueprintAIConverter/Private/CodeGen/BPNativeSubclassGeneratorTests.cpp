@@ -120,6 +120,19 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("両方のComponent lifecycleを含む"),
         Files.SourceContent.Contains(TEXT("Super::BeginPlay();")) &&
         Files.SourceContent.Contains(TEXT("Super::TickComponent(DeltaTime, TickType, ThisTickFunction);")));
+    // ActorComponentのEndPlayは同じ引数形でも、親クラスごとの検証済み定義で照合する。
+    TestTrue(TEXT("ComponentのEndPlayを生成"),
+        FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
+            ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(),
+            {FBPVerifiedOverrideFunction{TEXT("EndPlay"),
+                TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;"),
+                TEXT("void %s::EndPlay(const EEndPlayReason::Type EndPlayReason)"),
+                TEXT("Super::EndPlay(EndPlayReason);"), TEXT("protected")}},
+            Files, Diagnostics));
+    TestTrue(TEXT("Component EndPlayの宣言"),
+        Files.HeaderContent.Contains(TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;")));
+    TestTrue(TEXT("Component EndPlayのSuper呼び出し"),
+        Files.SourceContent.Contains(TEXT("Super::EndPlay(EndPlayReason);")));
     TestFalse(TEXT("Actor用Tick情報をComponentに流用しない"),
         FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
             ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(),
