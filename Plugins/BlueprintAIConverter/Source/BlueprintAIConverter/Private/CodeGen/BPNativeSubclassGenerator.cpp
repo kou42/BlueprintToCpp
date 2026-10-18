@@ -281,8 +281,18 @@ bool FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(
     const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles,
     TArray<FString>& OutDiagnostics)
 {
+    UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
+    const FBPVerifiedOverrideFunction* Function =
+        ResolveVerifiedOverride(ParentClass, TEXT("BeginPlay"));
+    if (Function == nullptr)
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Reset();
+        OutDiagnostics.Add(TEXT("No verified BeginPlay override for the parent class"));
+        return false;
+    }
     return GenerateWithVerifiedOverrides(Info, NewClassName, ModuleApiMacro,
-        {*FindActorOverride(TEXT("BeginPlay"))}, OutFiles, OutDiagnostics);
+        {*Function}, OutFiles, OutDiagnostics);
 }
 
 bool FBPNativeSubclassGenerator::GenerateWithTickOverride(
@@ -312,7 +322,17 @@ bool FBPNativeSubclassGenerator::GenerateWithLifecycleOverrides(
     TArray<FBPVerifiedOverrideFunction> Functions;
     if (bBeginPlay)
     {
-        Functions.Add(*FindActorOverride(TEXT("BeginPlay")));
+        UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
+        const FBPVerifiedOverrideFunction* Function =
+            ResolveVerifiedOverride(ParentClass, TEXT("BeginPlay"));
+        if (Function == nullptr)
+        {
+            OutFiles = FBPGeneratedActorFiles();
+            OutDiagnostics.Reset();
+            OutDiagnostics.Add(TEXT("No verified BeginPlay override for the parent class"));
+            return false;
+        }
+        Functions.Add(*Function);
     }
     if (bTick)
     {
