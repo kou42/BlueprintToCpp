@@ -220,25 +220,28 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
         OutDiagnostics.Add(TEXT("Native parent class is unavailable"));
         return false;
     }
-    const bool bActor = ParentClass->IsChildOf(AActor::StaticClass());
-    const bool bActorComponent = ParentClass->IsChildOf(UActorComponent::StaticClass());
-    // ActorComponentのBeginPlayはActorと同じ検証済み署名を持つ。
-    // ComponentのTickComponentとEndPlayは専用の検証済み定義を使う。
-    if (bActor == false && bActorComponent == false)
-    {
-        OutFiles = FBPGeneratedActorFiles();
-        OutDiagnostics.Add(TEXT("Verified lifecycle overrides require an Actor or ActorComponent parent"));
-        return false;
-    }
     FString Declarations = TEXT("    GENERATED_BODY()\n");
     FString CurrentAccess;
     TSet<FString> Seen;
     for (const FBPVerifiedOverrideFunction& Function : Functions)
     {
         // 外部入力のC++断片をそのまま挿入せず、検証済み定義と完全一致するものだけを許可する。
-        const FBPVerifiedOverrideFunction* Verified = bActorComponent &&
-            (Function.Name == TEXT("TickComponent") || Function.Name == TEXT("EndPlay"))
-            ? FindComponentOverride(Function.Name) : FindActorOverride(Function.Name);
+        // 実際のネイティブ関数名から登録済み定義を照合する。
+        const FBPVerifiedOverrideFunction* Verified = nullptr;
+        for (const FBPOverrideRegistration& Entry : GetOverrideRegistry())
+        {
+            if (ParentClass->IsChildOf(Entry.ParentType) &&
+                Entry.Function.Name == Function.Name)
+            {
+                const FBPVerifiedOverrideFunction* Candidate =
+                    ResolveVerifiedOverride(ParentClass, Entry.LifecycleName);
+                if (Candidate != nullptr && Candidate->Name == Function.Name)
+                {
+                    Verified = Candidate;
+                    break;
+                }
+            }
+        }
         if (Verified == nullptr || Seen.Contains(Function.Name) ||
             Verified->Declaration != Function.Declaration ||
             Verified->DefinitionSignature != Function.DefinitionSignature ||
@@ -247,13 +250,6 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
         {
             OutFiles = FBPGeneratedActorFiles();
             OutDiagnostics.Add(FString::Printf(TEXT("Unverified or duplicate override: %s"), *Function.Name));
-            return false;
-        }
-        if (bActorComponent && Function.Name != TEXT("BeginPlay") &&
-            Function.Name != TEXT("TickComponent") && Function.Name != TEXT("EndPlay"))
-        {
-            OutFiles = FBPGeneratedActorFiles();
-            OutDiagnostics.Add(TEXT("ActorComponent override requires a component-specific verified signature"));
             return false;
         }
         Seen.Add(Function.Name);
