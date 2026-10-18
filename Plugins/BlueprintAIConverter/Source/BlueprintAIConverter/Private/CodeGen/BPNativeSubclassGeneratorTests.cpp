@@ -66,6 +66,15 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
         Files.SourceContent.Contains(TEXT("Super::EndPlay(EndPlayReason);")));
     TestFalse(TEXT("重複指定を拒否"),
         FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Tick,Tick"), Selected, Diagnostics));
+    TestFalse(TEXT("空の項目を拒否"),
+        FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Tick,"), Selected, Diagnostics));
+    TestTrue(TEXT("空の項目の拒否で選択結果を消去"), Selected.IsEmpty());
+    TestFalse(TEXT("未検証の関数情報を拒否"),
+        FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
+            Info, TEXT("AReflectionGeneratedActor"), FString(),
+            {FBPVerifiedOverrideFunction{TEXT("Tick"), TEXT("virtual void Tick() override;"),
+                TEXT("void %s::Tick()"), TEXT("Super::Tick();"), TEXT("public")}},
+            Files, Diagnostics));
     TestFalse(TEXT("未知の関数を拒否"),
         FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Unknown"), Selected, Diagnostics));
     return true;
