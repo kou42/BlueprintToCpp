@@ -32,6 +32,15 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
         Files.HeaderContent.Contains(TEXT("virtual void BeginPlay() override;")));
     TestTrue(TEXT("Super呼び出し"),
         Files.SourceContent.Contains(TEXT("Super::BeginPlay();")));
+    TestTrue(TEXT("Tickの明示的override生成"),
+        FBPNativeSubclassGenerator::GenerateWithTickOverride(
+            Info, TEXT("AReflectionGeneratedActor"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("Tickの宣言"),
+        Files.HeaderContent.Contains(TEXT("virtual void Tick(float DeltaTime) override;")));
+    TestTrue(TEXT("TickのSuper呼び出し"),
+        Files.SourceContent.Contains(TEXT("Super::Tick(DeltaTime);")));
+    TestFalse(TEXT("Tick設定を勝手に変更しない"),
+        Files.SourceContent.Contains(TEXT("bCanEverTick")));
     return true;
 }
 
