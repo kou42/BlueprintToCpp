@@ -118,6 +118,13 @@ bool FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(const FString& Sele
     {
         return true;
     }
+    // ParseIntoArrayの空要素の扱いに依存せず、先頭・末尾・連続カンマを明示的に拒否する。
+    if (Selection.StartsWith(TEXT(",")) || Selection.EndsWith(TEXT(",")) ||
+        Selection.Contains(TEXT(",,")))
+    {
+        OutDiagnostics.Add(TEXT("Empty function selection item"));
+        return false;
+    }
     TArray<FString> Names;
     Selection.ParseIntoArray(Names, TEXT(","), false);
     TSet<FString> Seen;
