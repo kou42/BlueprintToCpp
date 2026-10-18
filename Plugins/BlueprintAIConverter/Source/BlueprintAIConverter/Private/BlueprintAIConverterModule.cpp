@@ -121,10 +121,10 @@ FAutoConsoleCommandWithArgs CopyNativeClassCppPreviewCommand(
 void CopyNativeSubclassCpp(const TArray<FString>& Args)
 {
     if ((Args.Num() != 2 && Args.Num() != 3) || Args[0].StartsWith(TEXT("/Script/")) == false ||
-        (Args.Num() == 3 && Args[2] != TEXT("BeginPlay")))
+        (Args.Num() == 3 && Args[2] != TEXT("BeginPlay") && Args[2] != TEXT("Tick")))
     {
         UE_LOG(LogBlueprintAIConverter, Error,
-            TEXT("Usage: BlueprintAIConverter.CopyNativeSubclassCpp /Script/Module.ClassName ANewClass [BeginPlay]"));
+            TEXT("Usage: BlueprintAIConverter.CopyNativeSubclassCpp /Script/Module.ClassName ANewClass [BeginPlay|Tick]"));
         return;
     }
     UClass* Class = FindObject<UClass>(nullptr, *Args[0]);
@@ -144,9 +144,22 @@ void CopyNativeSubclassCpp(const TArray<FString>& Args)
     }
     FBPGeneratedActorFiles Files;
     TArray<FString> Diagnostics;
-    const bool bGenerated = Args.Num() == 3
-        ? FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(Info, Args[1], FString(), Files, Diagnostics)
-        : FBPNativeSubclassGenerator::Generate(Info, Args[1], FString(), Files, Diagnostics);
+    bool bGenerated = false;
+    if (Args.Num() == 3 && Args[2] == TEXT("BeginPlay"))
+    {
+        bGenerated = FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(
+            Info, Args[1], FString(), Files, Diagnostics);
+    }
+    else if (Args.Num() == 3 && Args[2] == TEXT("Tick"))
+    {
+        bGenerated = FBPNativeSubclassGenerator::GenerateWithTickOverride(
+            Info, Args[1], FString(), Files, Diagnostics);
+    }
+    else
+    {
+        bGenerated = FBPNativeSubclassGenerator::Generate(
+            Info, Args[1], FString(), Files, Diagnostics);
+    }
     if (bGenerated == false)
     {
         UE_LOG(LogBlueprintAIConverter, Error, TEXT("Subclass generation failed: %s"),
