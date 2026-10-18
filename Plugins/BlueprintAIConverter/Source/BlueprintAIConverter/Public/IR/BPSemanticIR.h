@@ -250,6 +250,13 @@ struct FBPSemanticReflectedFunction
     FString ReflectionPath;
     FString Flags;
     FString ReturnCppType = TEXT("void");
+    // UFunction flags are not proof that the original C++ method is virtual.
+    bool bIsNative = false;
+    bool bIsStatic = false;
+    bool bIsConst = false;
+    bool bIsBlueprintEvent = false;
+    bool bIsNet = false;
+    bool bIsFinal = false;
     TArray<FBPSemanticReflectedParameter> Parameters;
 };
 
