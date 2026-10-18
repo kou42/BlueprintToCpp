@@ -32,9 +32,8 @@ public:
         const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles,
         TArray<FString>& OutDiagnostics);
 
-    // AActorの既知の仮想関数BeginPlayだけを明示的に追加する安全な限定経路。
-    // TickはAActorの既知のvirtual関数に限定する。元のTick設定は変更しない。
-    // 複数の既知ライフサイクル関数を一度の生成で安全に組み合わせる。
+    // 既存呼び出し元との互換API。BeginPlay/Tickの選択を検証済み関数の共通生成へ委譲する。
+    // 元のTick設定は変更せず、複数のoverrideは一つのUCLASS内へ出力する。
     static bool GenerateWithLifecycleOverrides(const FBPSemanticClassInfo& Info,
         const FString& NewClassName, const FString& ModuleApiMacro,
         bool bBeginPlay, bool bTick, FBPGeneratedActorFiles& OutFiles,
