@@ -3,6 +3,8 @@
 #include "BPSemanticClassExtractor.h"
 #include "GameFramework/Actor.h"
 #include "Components/ActorComponent.h"
+#include "Components/SceneComponent.h"
+#include "UObject/Object.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -141,6 +143,31 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
             Files, Diagnostics));
     TestTrue(TEXT("不正署名の拒否時は出力を残さない"), Files.HeaderContent.IsEmpty());
 
+    // 基底型への直接比較ではなく、継承階層をたどって署名を解決する。
+    FBPSemanticClassInfo SceneInfo;
+    if (TestTrue(TEXT("SceneComponentのリフレクション"),
+        FBPSemanticClassExtractor::Extract(USceneComponent::StaticClass(), SceneInfo)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("SceneComponentにもTickComponent署名を適用"),
+        FBPNativeSubclassGenerator::GenerateWithTickOverride(
+            SceneInfo, TEXT("UReflectionGeneratedScene"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("継承先をSceneComponentに維持"),
+        Files.HeaderContent.Contains(TEXT("public USceneComponent")));
+    TestTrue(TEXT("SceneComponentのTickComponentを生成"),
+        Files.SourceContent.Contains(TEXT("UReflectionGeneratedScene::TickComponent(")));
+
+    FBPSemanticClassInfo ObjectInfo;
+    if (TestTrue(TEXT("UObjectのリフレクション"),
+        FBPSemanticClassExtractor::Extract(UObject::StaticClass(), ObjectInfo)) == false)
+    {
+        return false;
+    }
+    TestFalse(TEXT("未登録の親クラスにはTickを生成しない"),
+        FBPNativeSubclassGenerator::GenerateWithTickOverride(
+            ObjectInfo, TEXT("UReflectionGeneratedObject"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("未登録時に出力を消去"), Files.HeaderContent.IsEmpty());
     return true;
 }
 
