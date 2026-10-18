@@ -2,10 +2,12 @@
 
 #include "Misc/AutomationTest.h"
 
+#include "BPCopilotGraphJsonExporter.h"
 #include "BPGraphIR.h"
 #include "BPSemanticFunctionExtractor.h"
 #include "BPSemanticIR.h"
 #include "EdGraph/EdGraph.h"
+#include "Dom/JsonObject.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "GameFramework/Actor.h"
@@ -14,10 +16,15 @@
 #include "K2Node_Event.h"
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_FunctionResult.h"
+#include "K2Node_VariableSet.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
+#include "Misc/EngineVersion.h"
+#include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "UObject/SavePackage.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPGeneratedUserFunctionAssetTest,
@@ -216,6 +223,65 @@ bool FBPGeneratedUserFunctionAssetTest::RunTest(const FString& Parameters)
             return false;
         }
     }
+    // 戻り値をメンバー変数に格納し、呼び出し結果が未使用にならない実BPを作る。
+    // 再実行時は既存変数・Setterを再利用して同じ接続を維持する。
+    const FName ResultVariable(TEXT("LastComputedValue"));
+    if (FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, ResultVariable) == INDEX_NONE)
+    {
+        FEdGraphPinType ResultType;
+        ResultType.PinCategory = UEdGraphSchema_K2::PC_Int;
+        if (TestTrue(TEXT("戻り値格納変数を追加"),
+            FBlueprintEditorUtils::AddMemberVariable(
+                Blueprint, ResultVariable, ResultType, TEXT("0"))) == false)
+        {
+            return false;
+        }
+    }
+    UK2Node_VariableSet* Setter = nullptr;
+    for (UEdGraphNode* Node : EventGraph->Nodes)
+    {
+        UK2Node_VariableSet* Candidate = Cast<UK2Node_VariableSet>(Node);
+        if (Candidate != nullptr &&
+            Candidate->VariableReference.GetMemberName() == ResultVariable)
+        {
+            Setter = Candidate;
+            break;
+        }
+    }
+    if (Setter == nullptr)
+    {
+        Setter = NewObject<UK2Node_VariableSet>(EventGraph);
+        EventGraph->AddNode(Setter, false, false);
+        Setter->CreateNewGuid();
+        Setter->PostPlacedNewNode();
+        Setter->VariableReference.SetSelfMember(ResultVariable);
+        Setter->AllocateDefaultPins();
+    }
+    UEdGraphPin* CallThen = Call->FindPin(UEdGraphSchema_K2::PN_Then);
+    UEdGraphPin* SetExec = Setter->FindPin(UEdGraphSchema_K2::PN_Execute);
+    UEdGraphPin* SetValue = Setter->FindPin(ResultVariable);
+    if (TestNotNull(TEXT("ComputeValue Then"), CallThen) == false ||
+        TestNotNull(TEXT("Set LastComputedValue Exec"), SetExec) == false ||
+        TestNotNull(TEXT("Set LastComputedValue入力"), SetValue) == false)
+    {
+        return false;
+    }
+    if (CallThen->LinkedTo.Contains(SetExec) == false)
+    {
+        if (TestTrue(TEXT("ComputeValue -> Setter"),
+            EventSchema->TryCreateConnection(CallThen, SetExec)) == false)
+        {
+            return false;
+        }
+    }
+    if (CallReturn->LinkedTo.Contains(SetValue) == false)
+    {
+        if (TestTrue(TEXT("ReturnValue -> LastComputedValue"),
+            EventSchema->TryCreateConnection(CallReturn, SetValue)) == false)
+        {
+            return false;
+        }
+    }
     // 引数は明示的な整数リテラルとして渡す。戻り値は型とPinの存在を
     // 検証し、後続の消費ノードを追加する段階でデータリンクも検証する。
     CallInput->DefaultValue = TEXT("42");
@@ -280,7 +346,8 @@ bool FBPGeneratedUserFunctionAssetTest::RunTest(const FString& Parameters)
             {
                 return Node.FunctionName == FunctionName;
             }));
-    TestEqual(TEXT("BeginPlayから関数へのExec接続数"), IREvent->ExecEdges.Num(), 1);
+    TestEqual(TEXT("BeginPlayから関数・SetterへのExec接続数"), IREvent->ExecEdges.Num(), 2);
+    TestEqual(TEXT("戻り値からSetterへのData接続数"), IREvent->DataEdges.Num(), 1);
 
 
     Blueprint->MarkPackageDirty();
