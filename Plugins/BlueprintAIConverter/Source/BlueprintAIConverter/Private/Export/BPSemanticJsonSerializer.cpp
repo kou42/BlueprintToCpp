@@ -205,6 +205,76 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
     Source->SetNumberField(TEXT("snapshot_schema_version"), 1);
     Root->SetObjectField(TEXT("source"), Source);
 
+    // クラスの出自を明示し、BlueprintとネイティブUCLASSを混同しない。
+    // 未解析のクラスはunknownとし、既存JSON利用者との互換性を維持する。
+    TSharedRef<FJsonObject> ClassJson = MakeShared<FJsonObject>();
+    FString ClassOrigin = TEXT("unknown");
+    if (IR.ClassInfo.Origin == EBPSemanticClassOrigin::Blueprint)
+    {
+        ClassOrigin = TEXT("blueprint");
+    }
+    else if (IR.ClassInfo.Origin == EBPSemanticClassOrigin::Native)
+    {
+        ClassOrigin = TEXT("native");
+    }
+    ClassJson->SetStringField(TEXT("origin"), ClassOrigin);
+    ClassJson->SetStringField(TEXT("class_path"), IR.ClassInfo.ClassPath);
+    ClassJson->SetStringField(TEXT("class_name"), IR.ClassInfo.ClassName);
+    ClassJson->SetStringField(TEXT("native_parent_class_path"), IR.ClassInfo.NativeParentClassPath);
+    TArray<TSharedPtr<FJsonValue>> Interfaces;
+    for (const FString& InterfacePath : IR.ClassInfo.InterfacePaths)
+    {
+        Interfaces.Add(MakeShared<FJsonValueString>(InterfacePath));
+    }
+    ClassJson->SetArrayField(TEXT("interface_paths"), Interfaces);
+    // 宣言メンバーのリフレクション情報を、既存の意味解析済みvariables/functionsと分離する。
+    auto MembersToJson = [](const TArray<FBPSemanticClassMember>& Members)
+    {
+        TArray<TSharedPtr<FJsonValue>> Result;
+        for (const FBPSemanticClassMember& Member : Members)
+        {
+            TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+            Entry->SetStringField(TEXT("name"), Member.Name);
+            Entry->SetStringField(TEXT("cpp_type"), Member.CppType);
+            Entry->SetStringField(TEXT("reflection_path"), Member.ReflectionPath);
+            Entry->SetStringField(TEXT("flags"), Member.Flags);
+            Result.Add(MakeShared<FJsonValueObject>(Entry));
+        }
+        return Result;
+    };
+    ClassJson->SetArrayField(TEXT("declared_properties"), MembersToJson(IR.ClassInfo.DeclaredProperties));
+    ClassJson->SetArrayField(TEXT("declared_functions"), MembersToJson(IR.ClassInfo.DeclaredFunctions));
+    TArray<TSharedPtr<FJsonValue>> Signatures;
+    for (const FBPSemanticReflectedFunction& Function : IR.ClassInfo.DeclaredFunctionSignatures)
+    {
+        TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+        Entry->SetStringField(TEXT("name"), Function.Name);
+        Entry->SetStringField(TEXT("reflection_path"), Function.ReflectionPath);
+        Entry->SetStringField(TEXT("flags"), Function.Flags);
+        Entry->SetStringField(TEXT("return_cpp_type"), Function.ReturnCppType);
+        Entry->SetBoolField(TEXT("is_native"), Function.bIsNative);
+        Entry->SetBoolField(TEXT("is_static"), Function.bIsStatic);
+        Entry->SetBoolField(TEXT("is_const"), Function.bIsConst);
+        Entry->SetBoolField(TEXT("is_blueprint_event"), Function.bIsBlueprintEvent);
+        Entry->SetBoolField(TEXT("is_net"), Function.bIsNet);
+        Entry->SetBoolField(TEXT("is_final"), Function.bIsFinal);
+        TArray<TSharedPtr<FJsonValue>> Parameters;
+        for (const FBPSemanticReflectedParameter& Parameter : Function.Parameters)
+        {
+            TSharedRef<FJsonObject> ParamJson = MakeShared<FJsonObject>();
+            ParamJson->SetStringField(TEXT("name"), Parameter.Name);
+            ParamJson->SetStringField(TEXT("cpp_type"), Parameter.CppType);
+            ParamJson->SetBoolField(TEXT("is_out"), Parameter.bIsOut);
+            ParamJson->SetBoolField(TEXT("is_reference"), Parameter.bIsReference);
+            ParamJson->SetBoolField(TEXT("is_const"), Parameter.bIsConst);
+            Parameters.Add(MakeShared<FJsonValueObject>(ParamJson));
+        }
+        Entry->SetArrayField(TEXT("parameters"), Parameters);
+        Signatures.Add(MakeShared<FJsonValueObject>(Entry));
+    }
+    ClassJson->SetArrayField(TEXT("declared_function_signatures"), Signatures);
+    Root->SetObjectField(TEXT("class_info"), ClassJson);
+
     // 現行IRは解析対象全体の網羅性を証明できない。成功時もpartialとし、AIによる過信を防ぐ。
     Root->SetStringField(TEXT("semantic_status"), IR.HasErrors() ? TEXT("unsupported") : TEXT("partial"));
 

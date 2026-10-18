@@ -216,10 +216,67 @@ struct FBPSemanticGraphTrace
     TArray<FBPIRLink> DataEdges;
 };
 
+// Blueprint生成クラスとネイティブUCLASSを共通形式で識別する。
+// 未解析の情報は空文字のまま保持し、推測でC++宣言を生成しない。
+enum class EBPSemanticClassOrigin : uint8
+{
+    Unknown,
+    Blueprint,
+    Native
+};
+
+// UClass自身が宣言したメンバーだけを記録する。関数本体や既定値は含めない。
+struct FBPSemanticClassMember
+{
+    FString Name;
+    FString CppType;
+    FString ReflectionPath;
+    FString Flags;
+};
+
+// UFunctionの宣言署名。C++の関数本体を復元できるという意味ではない。
+struct FBPSemanticReflectedParameter
+{
+    FString Name;
+    FString CppType;
+    bool bIsOut = false;
+    bool bIsReference = false;
+    bool bIsConst = false;
+};
+
+struct FBPSemanticReflectedFunction
+{
+    FString Name;
+    FString ReflectionPath;
+    FString Flags;
+    FString ReturnCppType = TEXT("void");
+    // UFunction flags are not proof that the original C++ method is virtual.
+    bool bIsNative = false;
+    bool bIsStatic = false;
+    bool bIsConst = false;
+    bool bIsBlueprintEvent = false;
+    bool bIsNet = false;
+    bool bIsFinal = false;
+    TArray<FBPSemanticReflectedParameter> Parameters;
+};
+
+struct FBPSemanticClassInfo
+{
+    EBPSemanticClassOrigin Origin = EBPSemanticClassOrigin::Unknown;
+    FString ClassPath;
+    FString ClassName;
+    FString NativeParentClassPath;
+    TArray<FString> InterfacePaths;
+    TArray<FBPSemanticClassMember> DeclaredProperties;
+    TArray<FBPSemanticClassMember> DeclaredFunctions;
+    TArray<FBPSemanticReflectedFunction> DeclaredFunctionSignatures;
+};
+
 struct FBPSemanticIR
 {
     FString AssetPath;
     FString ParentClassPath;
+    FBPSemanticClassInfo ClassInfo;
     TArray<FBPSemanticFunction> Functions;
     TArray<FBPSemanticVariable> Variables;
     TArray<FBPSemanticGraphTrace> GraphTraces;
