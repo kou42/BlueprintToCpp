@@ -2,7 +2,7 @@
 
 #include "BPParentClassResolver.h"
 #include "UObject/Class.h"
-#include "UObject/UObjectGlobals.h"
+#include "UObject/UObjectIterator.h"
 
 namespace
 {
@@ -61,10 +61,13 @@ bool FBPNativeSubclassGenerator::Generate(const FBPSemanticClassInfo& Info,
     }
 
     // 既にロードされた同名クラスへの衝突を避ける。
-    if (FindObject<UClass>(ANY_PACKAGE, *NewClassName) != nullptr)
+    for (TObjectIterator<UClass> It; It; ++It)
     {
-        OutDiagnostics.Add(TEXT("A loaded UCLASS already uses the requested class name"));
-        return false;
+        if (It->GetPrefixCPP() + It->GetName() == NewClassName)
+        {
+            OutDiagnostics.Add(TEXT("A loaded UCLASS already uses the requested class name"));
+            return false;
+        }
     }
 
     const FString BaseName = NewClassName.Mid(Parent.GeneratedClassPrefix.Len());
