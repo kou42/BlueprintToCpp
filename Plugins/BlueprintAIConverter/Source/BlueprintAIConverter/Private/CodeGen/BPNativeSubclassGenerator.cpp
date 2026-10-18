@@ -134,6 +134,11 @@ bool FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(const FString& Sele
         Seen.Add(Name);
         OutFunctions.Add(*Function);
     }
+    if (Names.IsEmpty())
+    {
+        OutDiagnostics.Add(TEXT("Empty function selection"));
+        return false;
+    }
     return true;
 }
 
@@ -182,7 +187,7 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
         }
         Declarations += FString::Printf(TEXT("    %s\\n"), *Function.Declaration);
         OutFiles.SourceContent += FString::Printf(TEXT("\\n%s\\n{\\n    %s\\n}\\n"),
-            *FString::Printf(*Function.DefinitionSignature, *NewClassName), *Function.SuperCall);
+            *Function.DefinitionSignature.Replace(TEXT("%s"), *NewClassName), *Function.SuperCall);
     }
     if (OutFiles.HeaderContent.ReplaceInline(TEXT("    GENERATED_BODY()\\n};"),
         *(Declarations + TEXT("};"))) == 0)
