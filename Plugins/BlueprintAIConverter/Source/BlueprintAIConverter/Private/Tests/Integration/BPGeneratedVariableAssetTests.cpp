@@ -13,6 +13,7 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/EngineVersion.h"
+#include "HAL/FileManager.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "UObject/SavePackage.h"
@@ -31,7 +32,13 @@ bool FBPGeneratedVariableAssetTest::RunTest(const FString& Parameters)
         return false;
     }
 
-    UBlueprint* Blueprint = FindObject<UBlueprint>(Package, TEXT("BP_Test_Variables"));
+    // 既存アセットをロードしてから再利用し、Editor再起動後も重複生成を防ぐ。
+    UBlueprint* Blueprint = LoadObject<UBlueprint>(
+        nullptr, TEXT("/Game/BlueprintToCppTests/BP_Test_Variables.BP_Test_Variables"));
+    if (Blueprint == nullptr)
+    {
+        Blueprint = FindObject<UBlueprint>(Package, TEXT("BP_Test_Variables"));
+    }
     if (Blueprint == nullptr)
     {
         Blueprint = FKismetEditorUtilities::CreateBlueprint(
@@ -80,6 +87,11 @@ bool FBPGeneratedVariableAssetTest::RunTest(const FString& Parameters)
     }
 
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (TestTrue(TEXT("Blueprintコンパイルエラーなし"),
+        Blueprint->Status != BS_Error) == false)
+    {
+        return false;
+    }
     if (TestNotNull(TEXT("生成クラス"), Blueprint->GeneratedClass.Get()) == false)
     {
         return false;
@@ -114,6 +126,7 @@ bool FBPGeneratedVariableAssetTest::RunTest(const FString& Parameters)
     Blueprint->MarkPackageDirty();
     const FString Filename = FPackageName::LongPackageNameToFilename(
         PackagePath, FPackageName::GetAssetPackageExtension());
+    IFileManager::Get().MakeDirectory(*FPaths::GetPath(Filename), true);
     FSavePackageArgs SaveArgs;
     SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
     SaveArgs.SaveFlags = SAVE_None;
