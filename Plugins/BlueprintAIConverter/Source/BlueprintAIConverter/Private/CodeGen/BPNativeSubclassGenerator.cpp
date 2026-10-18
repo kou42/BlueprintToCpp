@@ -199,8 +199,7 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
         Shape.Definition = Function.DefinitionSignature.Replace(TEXT("%s"), *NewClassName);
         Shape.Prologue = FString::Printf(TEXT("    %s\n"), *Function.SuperCall);
         Declarations += Shape.Declaration;
-        OutFiles.SourceContent += FString::Printf(TEXT("\n%s\n{\n%s}\n"),
-            *Shape.Definition, *Shape.Prologue);
+        OutFiles.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(Shape, FString());
     }
     if (OutFiles.HeaderContent.ReplaceInline(TEXT("    GENERATED_BODY()\n};"),
         *(Declarations + TEXT("};"))) == 0)
