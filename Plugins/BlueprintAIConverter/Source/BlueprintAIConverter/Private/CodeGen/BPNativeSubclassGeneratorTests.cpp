@@ -1,4 +1,5 @@
 #include "BPNativeSubclassGenerator.h"
+#include "BPGeneratedFunctionShape.h"
 #include "BPSemanticClassExtractor.h"
 #include "GameFramework/Actor.h"
 #include "Misc/AutomationTest.h"
@@ -54,6 +55,39 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("同時生成でUCLASSは一つ"),
         Files.HeaderContent.Find(TEXT("UCLASS()")) ==
         Files.HeaderContent.Find(TEXT("UCLASS()"), ESearchCase::CaseSensitive, ESearchDir::FromEnd));
+    // Semantic/Native共通Emitterが署名・Super呼び出し・本体の順序を保持する。
+    FBPGeneratedFunctionShape Shape;
+    Shape.Declaration = TEXT("public:\\n    void Test();\\n");
+    Shape.Definition = TEXT("void AExample::Test()");
+    Shape.Prologue = TEXT("    Super::BeginPlay();\\n");
+    const FString Rendered = FBPFunctionDefinitionEmitter::RenderDefinition(
+        Shape, TEXT("    DoWork();\\n"));
+    TestTrue(TEXT("共通Emitterは定義と本体を保持"),
+        Rendered.Contains(TEXT("void AExample::Test()\\n{\\n")) &&
+        Rendered.Contains(TEXT("Super::BeginPlay();\\n    DoWork();")));
+    TArray<FBPVerifiedOverrideFunction> Selected;
+    TestTrue(TEXT("複数の検証済み関数を解析"),
+        FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Tick,EndPlay,BeginPlay"), Selected, Diagnostics));
+    TestEqual(TEXT("選択された関数数"), Selected.Num(), 3);
+    TestTrue(TEXT("EndPlayを含む共通生成"),
+        FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
+            Info, TEXT("AReflectionGeneratedActor"), FString(), Selected, Files, Diagnostics));
+    TestTrue(TEXT("EndPlayの引数とSuper"),
+        Files.HeaderContent.Contains(TEXT("EndPlay(const EEndPlayReason::Type EndPlayReason)")) &&
+        Files.SourceContent.Contains(TEXT("Super::EndPlay(EndPlayReason);")));
+    TestFalse(TEXT("重複指定を拒否"),
+        FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Tick,Tick"), Selected, Diagnostics));
+    TestFalse(TEXT("空の項目を拒否"),
+        FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Tick,"), Selected, Diagnostics));
+    TestTrue(TEXT("空の項目の拒否で選択結果を消去"), Selected.IsEmpty());
+    TestFalse(TEXT("未検証の関数情報を拒否"),
+        FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
+            Info, TEXT("AReflectionGeneratedActor"), FString(),
+            {FBPVerifiedOverrideFunction{TEXT("Tick"), TEXT("virtual void Tick() override;"),
+                TEXT("void %s::Tick()"), TEXT("Super::Tick();"), TEXT("public")}},
+            Files, Diagnostics));
+    TestFalse(TEXT("未知の関数を拒否"),
+        FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Unknown"), Selected, Diagnostics));
     return true;
 }
 

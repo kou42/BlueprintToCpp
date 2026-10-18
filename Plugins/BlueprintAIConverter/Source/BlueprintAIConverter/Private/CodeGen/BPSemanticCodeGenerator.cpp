@@ -1,4 +1,5 @@
 #include "BPSemanticCodeGenerator.h"
+#include "BPGeneratedFunctionShape.h"
 #include "BPNumericArithmeticResolver.h"
 #include "BPNumericComparisonResolver.h"
 #include "BPParentClassResolver.h"
@@ -127,18 +128,11 @@ bool EmitFunctionType(const FBPSemanticType& Type, FString& OutType,
     return true;
 }
 
-struct FGeneratedFunctionShape
-{
-    FString Declaration;
-    FString Definition;
-    FString Prologue;
-};
-
 bool BuildFunctionShape(const FBPSemanticFunction& Function,
     const FBPResolvedParentClass& ParentClass, const FString& ClassName,
-    FGeneratedFunctionShape& OutShape, TArray<FString>& Diagnostics)
+    FBPGeneratedFunctionShape& OutShape, TArray<FString>& Diagnostics)
 {
-    OutShape = FGeneratedFunctionShape();
+    OutShape = FBPGeneratedFunctionShape();
     const FString FunctionName = Function.Name.ToString();
     if (IsIdentifier(FunctionName) == false)
     {
@@ -1277,7 +1271,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         OutDiagnostics.Add(TEXT("Semantic MVP requires one non-empty function block"));
         return false;
     }
-    FGeneratedFunctionShape FunctionShape;
+    FBPGeneratedFunctionShape FunctionShape;
     if (BuildFunctionShape(Function, ParentClass, ClassName,
         FunctionShape, OutDiagnostics) == false)
     {
@@ -1445,15 +1439,16 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
                 *Statement.LoopElementVariable.ToString(),
                 *Array.VariableName.ToString(), *Statement.LoopIndexVariable.ToString())
             : FString();
+        const FString Body = FString::Printf(
+            TEXT("%s    for (int32 %s = 0; %s < %s.Num(); ++%s)\n    {\n%s%s    }\n%s"),
+            *LeadingCode, *Statement.LoopIndexVariable.ToString(),
+            *Statement.LoopIndexVariable.ToString(), *Array.VariableName.ToString(),
+            *Statement.LoopIndexVariable.ToString(), *ElementDeclaration, *BodyCode, *CompletedCode);
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n%s%s%s\n%s\n{\n%s%s    for (int32 %s = 0; %s < %s.Num(); ++%s)\n    {\n%s%s    }\n%s}\n"),
-            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
-            *FunctionShape.Definition,
-            *FunctionShape.Prologue, *LeadingCode,
-            *Statement.LoopIndexVariable.ToString(), *Statement.LoopIndexVariable.ToString(),
-            *Array.VariableName.ToString(), *Statement.LoopIndexVariable.ToString(),
-            *ElementDeclaration, *BodyCode, *CompletedCode);
-        OutFiles = MoveTemp(Files);
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n%s%s%s"),
+            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
+        Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
+    OutFiles = MoveTemp(Files);
         return true;
     }
     if (Statement.Kind == EBPSemanticStatementKind::ForLoop)
@@ -1528,14 +1523,15 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
-        Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s\n%s\n{\n%s%s    for (int32 %s = %d; %s <= %d; ++%s)\n    {\n%s    }\n%s}\n"),
-            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
-            *FunctionShape.Definition,
-            *FunctionShape.Prologue, *LeadingCode,
-            *Statement.LoopIndexVariable.ToString(), FirstIndex,
+        const FString Body = FString::Printf(
+            TEXT("%s    for (int32 %s = %d; %s <= %d; ++%s)\n    {\n%s    }\n%s"),
+            *LeadingCode, *Statement.LoopIndexVariable.ToString(), FirstIndex,
             *Statement.LoopIndexVariable.ToString(), LastIndex,
             *Statement.LoopIndexVariable.ToString(), *BodyCode, *CompletedCode);
+        Files.SourceContent = FString::Printf(
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s"),
+            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
+        Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
         OutFiles = MoveTemp(Files);
         return true;
     }
@@ -1598,11 +1594,13 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
-        Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s\n%s\n{\n%s%s    if (%s)\n    {\n%s    }\n    else\n    {\n%s    }\n}\n"),
-            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
-            *FunctionShape.Definition, *FunctionShape.Prologue,
+        const FString Body = FString::Printf(
+            TEXT("%s    if (%s)\n    {\n%s    }\n    else\n    {\n%s    }\n"),
             *LeadingCode, *Condition, *ThenCode, *ElseCode);
+        Files.SourceContent = FString::Printf(
+            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s"),
+            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
+        Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
         OutFiles = MoveTemp(Files);
         return true;
     }
@@ -1642,11 +1640,12 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
+        // ActorLocation文の生成は既存Emitterに委ね、関数定義の外枠だけを共有する。
+        const FString Body = LeadingCode + ActorLocationStatement;
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Engine/HitResult.h\"\n%s%s%s\n%s\n{\n%s%s%s}\n"),
-            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
-            *FunctionShape.Definition, *FunctionShape.Prologue, *LeadingCode,
-            *ActorLocationStatement);
+            TEXT("#include \"%s.h\"\n#include \"Engine/HitResult.h\"\n%s%s%s"),
+            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
+        Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
         OutFiles = MoveTemp(Files);
         return true;
     }
@@ -1730,14 +1729,18 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
         *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName, *ParentClass.CppClassName,
         *VariableDeclarations, *ConstructorDeclaration, *FunctionShape.Declaration);
-    Files.SourceContent = FString::Printf(
-        TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s\n%s\n{\n%s%s    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n}\n"),
-        *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition,
-        *FunctionShape.Definition, *FunctionShape.Prologue, *LeadingCode,
+    // PrintStringの引数検証と文字列エスケープは従来どおり行い、定義出力だけ共通化する。
+    const FString PrintStatement = FString::Printf(
+        TEXT("    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n"),
         *EscapedText, *Screen, *Log,
         *FloatLiteral(LinearColor.R), *FloatLiteral(LinearColor.G),
         *FloatLiteral(LinearColor.B), *FloatLiteral(LinearColor.A),
         *FloatLiteral(Duration), *EscapedKey);
-    OutFiles = MoveTemp(Files);
+    const FString Body = LeadingCode + PrintStatement;
+    Files.SourceContent = FString::Printf(
+        TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s"),
+        *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
+    Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
+        OutFiles = MoveTemp(Files);
     return true;
 }
