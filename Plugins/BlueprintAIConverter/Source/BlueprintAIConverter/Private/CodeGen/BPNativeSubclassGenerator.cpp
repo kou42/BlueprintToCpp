@@ -61,6 +61,14 @@ bool FBPNativeSubclassGenerator::Generate(const FBPSemanticClassInfo& Info,
         return false;
     }
 
+    // finalクラスからは派生できないため、通常経路でも拒否する。
+    UClass* NativeParent = FindObject<UClass>(nullptr, *Info.ClassPath);
+    if (NativeParent == nullptr || NativeParent->HasAnyClassFlags(CLASS_Final))
+    {
+        OutDiagnostics.Add(TEXT("Native parent is unavailable or final"));
+        return false;
+    }
+
     // 既にロードされた同名クラスへの衝突を避ける。
     for (TObjectIterator<UClass> It; It; ++It)
     {
