@@ -202,6 +202,8 @@ bool FBPGeneratedBranchAssetTest::RunTest(const FString& Parameters)
     // Graph IRとの一致だけでなく、上で固定した4ノードという独立した期待値を使用する。
     const TSharedPtr<FJsonObject> JsonEventGraph = Graphs[0]->AsObject();
     TestEqual(TEXT("JSONノード数"), JsonEventGraph->GetArrayField(TEXT("nodes")).Num(), 4);
+    TestEqual(TEXT("JSON実行接続数"), JsonEventGraph->GetArrayField(TEXT("exec_edges")).Num(), 3);
+    TestEqual(TEXT("JSONデータ接続数"), JsonEventGraph->GetArrayField(TEXT("data_edges")).Num(), 0);
 
     FBPSemanticIR Semantic;
     if (TestTrue(TEXT("BranchをLowering"), FBPSemanticLowering::Lower(
