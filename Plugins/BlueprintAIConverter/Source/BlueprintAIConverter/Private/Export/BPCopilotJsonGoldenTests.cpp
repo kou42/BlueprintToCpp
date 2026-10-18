@@ -20,7 +20,6 @@
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
 #include "K2Node_FunctionEntry.h"
-#include "K2Node_FunctionResult.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -377,16 +376,11 @@ bool FBPCopilotJsonVoidFunctionGoldenTest::RunTest(const FString& Parameters)
     FBlueprintEditorUtils::AddFunctionGraph<UFunction>(Blueprint, FunctionGraph, true, nullptr);
 
     UK2Node_FunctionEntry* Entry = nullptr;
-    UK2Node_FunctionResult* Result = nullptr;
     for (UEdGraphNode* Node : FunctionGraph->Nodes)
     {
         if (Entry == nullptr)
         {
             Entry = Cast<UK2Node_FunctionEntry>(Node);
-        }
-        if (Result == nullptr)
-        {
-            Result = Cast<UK2Node_FunctionResult>(Node);
         }
     }
     if (TestNotNull(TEXT("Find function entry"), Entry) == false)
