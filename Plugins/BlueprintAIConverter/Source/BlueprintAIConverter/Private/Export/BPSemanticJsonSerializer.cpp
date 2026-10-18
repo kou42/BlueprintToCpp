@@ -205,6 +205,30 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
     Source->SetNumberField(TEXT("snapshot_schema_version"), 1);
     Root->SetObjectField(TEXT("source"), Source);
 
+    // クラスの出自を明示し、BlueprintとネイティブUCLASSを混同しない。
+    // 未解析のクラスはunknownとし、既存JSON利用者との互換性を維持する。
+    TSharedRef<FJsonObject> ClassJson = MakeShared<FJsonObject>();
+    FString ClassOrigin = TEXT("unknown");
+    if (IR.ClassInfo.Origin == EBPSemanticClassOrigin::Blueprint)
+    {
+        ClassOrigin = TEXT("blueprint");
+    }
+    else if (IR.ClassInfo.Origin == EBPSemanticClassOrigin::Native)
+    {
+        ClassOrigin = TEXT("native");
+    }
+    ClassJson->SetStringField(TEXT("origin"), ClassOrigin);
+    ClassJson->SetStringField(TEXT("class_path"), IR.ClassInfo.ClassPath);
+    ClassJson->SetStringField(TEXT("class_name"), IR.ClassInfo.ClassName);
+    ClassJson->SetStringField(TEXT("native_parent_class_path"), IR.ClassInfo.NativeParentClassPath);
+    TArray<TSharedPtr<FJsonValue>> Interfaces;
+    for (const FString& InterfacePath : IR.ClassInfo.InterfacePaths)
+    {
+        Interfaces.Add(MakeShared<FJsonValueString>(InterfacePath));
+    }
+    ClassJson->SetArrayField(TEXT("interface_paths"), Interfaces);
+    Root->SetObjectField(TEXT("class_info"), ClassJson);
+
     // 現行IRは解析対象全体の網羅性を証明できない。成功時もpartialとし、AIによる過信を防ぐ。
     Root->SetStringField(TEXT("semantic_status"), IR.HasErrors() ? TEXT("unsupported") : TEXT("partial"));
 
