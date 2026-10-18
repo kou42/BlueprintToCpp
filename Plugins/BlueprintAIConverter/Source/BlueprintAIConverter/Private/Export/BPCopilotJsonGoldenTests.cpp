@@ -590,6 +590,22 @@ bool FBPCopilotJsonFunctionSignatureGoldenTest::RunTest(const FString& Parameter
     {
         return false;
     }
+    // 未接続の入力PinはFunctionEntry由来の既定値抽出を検証する。
+    UEdGraphPin* DefaultInput = Entry->CreateUserDefinedPin(
+        TEXT("DefaultInput"), IntType, EGPD_Output);
+    if (TestNotNull(TEXT("Default input pin"), DefaultInput) == false)
+    {
+        return false;
+    }
+    DefaultInput->DefaultValue = TEXT("42");
+    // ReturnValueとは別に結果ノードへPinを追加し、out引数の宣言を検証する。
+    UEdGraphPin* OutValue = Result->CreateUserDefinedPin(
+        TEXT("OutValue"), IntType, EGPD_Input);
+    if (TestNotNull(TEXT("Out parameter pin"), OutValue) == false)
+    {
+        return false;
+    }
+    OutValue->DefaultValue = TEXT("7");
     const FGuid InputId(0x81000001, 0x81000002, 0x81000003, 0x81000004);
     const FGuid ReturnId(0x82000001, 0x82000002, 0x82000003, 0x82000004);
     Input->PinId = InputId;
@@ -632,17 +648,23 @@ bool FBPCopilotJsonFunctionSignatureGoldenTest::RunTest(const FString& Parameter
     {
         return false;
     }
-    TestEqual(TEXT("Function parameter count including return"), Declaration->Parameters.Num(), 2);
-    if (Declaration->Parameters.Num() != 2)
+    TestEqual(TEXT("Function parameter count including return and out"), Declaration->Parameters.Num(), 4);
+    if (Declaration->Parameters.Num() != 4)
     {
         return false;
     }
     const FBPSemanticParameter* InputParameter = Declaration->Parameters.FindByPredicate(
         [](const FBPSemanticParameter& Param) { return Param.Name == TEXT("InputValue"); });
+    const FBPSemanticParameter* DefaultParameter = Declaration->Parameters.FindByPredicate(
+        [](const FBPSemanticParameter& Param) { return Param.Name == TEXT("DefaultInput"); });
+    const FBPSemanticParameter* OutParameter = Declaration->Parameters.FindByPredicate(
+        [](const FBPSemanticParameter& Param) { return Param.Name == TEXT("OutValue"); });
     const FBPSemanticParameter* ReturnParameter = Declaration->Parameters.FindByPredicate(
         [](const FBPSemanticParameter& Param) { return Param.bIsReturn; });
     if (TestNotNull(TEXT("Input reflection parameter"), InputParameter) == false
-        || TestNotNull(TEXT("Return reflection parameter"), ReturnParameter) == false)
+        || TestNotNull(TEXT("Return reflection parameter"), ReturnParameter) == false
+        || TestNotNull(TEXT("Default input reflection parameter"), DefaultParameter) == false
+        || TestNotNull(TEXT("Out reflection parameter"), OutParameter) == false)
     {
         return false;
     }
@@ -652,7 +674,21 @@ bool FBPCopilotJsonFunctionSignatureGoldenTest::RunTest(const FString& Parameter
     TestEqual(TEXT("Return parameter type"), ReturnParameter->Type.Kind, EBPSemanticTypeKind::Int32);
     TestTrue(TEXT("Return flag is preserved"), ReturnParameter->bIsReturn);
     TestEqual(TEXT("Return type"), Declaration->ReturnType.Kind, EBPSemanticTypeKind::Int32);
-    // 既定値の有無はUEがPinに設定した実値から判断する。ここでは未指定と断定しない。
+    TestEqual(TEXT("Default parameter type"), DefaultParameter->Type.Kind, EBPSemanticTypeKind::Int32);
+    TestEqual(TEXT("Default parameter declaration order"), DefaultParameter->DeclarationIndex, 1);
+    TestTrue(TEXT("Default value was extracted"), DefaultParameter->bHasDefaultValue);
+    TestEqual(TEXT("Default value from entry pin"), DefaultParameter->DefaultValue,
+        FString(TEXT("42")));
+    TestEqual(TEXT("Default value source"), DefaultParameter->DefaultValueSource,
+        FString(TEXT("function_entry_pin")));
+    TestEqual(TEXT("Default source node"), DefaultParameter->DefaultValueSourceNodeId, Entry->NodeGuid);
+    TestEqual(TEXT("Default source pin"), DefaultParameter->DefaultValueSourcePinId, DefaultInput->PinId);
+    TestTrue(TEXT("Out parameter flag"), OutParameter->bIsOut);
+    TestFalse(TEXT("Out parameter is not return"), OutParameter->bIsReturn);
+    TestEqual(TEXT("Out parameter type"), OutParameter->Type.Kind, EBPSemanticTypeKind::Int32);
+    // out引数の値は呼び出し先で決まるため、Result Pinのリテラルを
+    // 関数呼び出し時の既定値として扱わない。
+    TestFalse(TEXT("Out parameter has no call-site default"), OutParameter->bHasDefaultValue);
 
     FString Path;
     FString Error;
