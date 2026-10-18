@@ -111,6 +111,22 @@ const FBPVerifiedOverrideFunction* FindActorOverride(const FString& Name)
 }
 }
 
+namespace
+{
+// ActorComponent専用のTick署名をActorのTickと混同しない。
+const FBPVerifiedOverrideFunction* FindComponentTickOverride()
+{
+    static const FBPVerifiedOverrideFunction Tick = {
+        TEXT("TickComponent"),
+        TEXT("virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;"),
+        TEXT("void %s::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)"),
+        TEXT("Super::TickComponent(DeltaTime, TickType, ThisTickFunction);"),
+        TEXT("public")
+    };
+    return &Tick;
+}
+}
+
 bool FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(const FString& Selection,
     TArray<FBPVerifiedOverrideFunction>& OutFunctions, TArray<FString>& OutDiagnostics)
 {
