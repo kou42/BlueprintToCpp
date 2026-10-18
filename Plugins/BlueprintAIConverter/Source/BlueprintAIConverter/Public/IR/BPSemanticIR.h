@@ -225,6 +225,15 @@ enum class EBPSemanticClassOrigin : uint8
     Native
 };
 
+// UClass自身が宣言したメンバーだけを記録する。関数本体や既定値は含めない。
+struct FBPSemanticClassMember
+{
+    FString Name;
+    FString CppType;
+    FString ReflectionPath;
+    FString Flags;
+};
+
 struct FBPSemanticClassInfo
 {
     EBPSemanticClassOrigin Origin = EBPSemanticClassOrigin::Unknown;
@@ -232,6 +241,8 @@ struct FBPSemanticClassInfo
     FString ClassName;
     FString NativeParentClassPath;
     TArray<FString> InterfacePaths;
+    TArray<FBPSemanticClassMember> DeclaredProperties;
+    TArray<FBPSemanticClassMember> DeclaredFunctions;
 };
 
 struct FBPSemanticIR
