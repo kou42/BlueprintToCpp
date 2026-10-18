@@ -1,0 +1,81 @@
+#include "BPNativeSubclassGenerator.h"
+
+#include "BPParentClassResolver.h"
+#include "UObject/Class.h"
+#include "UObject/UObjectGlobals.h"
+
+namespace
+{
+bool IsIdentifier(const FString& Name)
+{
+    if (Name.IsEmpty())
+    {
+        return false;
+    }
+    for (int32 Index = 0; Index < Name.Len(); ++Index)
+    {
+        const TCHAR Ch = Name[Index];
+        if ((Index == 0 && FChar::IsAlpha(Ch) == false && Ch != TEXT('_')) ||
+            (FChar::IsAlnum(Ch) == false && Ch != TEXT('_')))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+}
+
+bool FBPNativeSubclassGenerator::Generate(const FBPSemanticClassInfo& Info,
+    const FString& NewClassName, const FString& ModuleApiMacro,
+    FBPGeneratedActorFiles& OutFiles, TArray<FString>& OutDiagnostics)
+{
+    OutFiles = FBPGeneratedActorFiles();
+    OutDiagnostics.Reset();
+    if (Info.Origin != EBPSemanticClassOrigin::Native ||
+        Info.ClassPath.StartsWith(TEXT("/Script/")) == false)
+    {
+        OutDiagnostics.Add(TEXT("Only reflected native UCLASS sources are supported"));
+        return false;
+    }
+    if (ModuleApiMacro.IsEmpty() == false &&
+        (IsIdentifier(ModuleApiMacro) == false || ModuleApiMacro.EndsWith(TEXT("_API")) == false))
+    {
+        OutDiagnostics.Add(TEXT("Invalid module API macro"));
+        return false;
+    }
+
+    // 元クラスの直接の派生型として生成する。宣言メンバーをコピーすると、
+    // 同名メンバーの隠蔽・重複定義や未検証のUFUNCTION署名が発生するため行わない。
+    FBPResolvedParentClass Parent;
+    if (FBPParentClassResolver::ResolveParent(Info.ClassPath, Parent, OutDiagnostics) == false)
+    {
+        return false;
+    }
+    if (IsIdentifier(NewClassName) == false ||
+        NewClassName.StartsWith(Parent.GeneratedClassPrefix) == false ||
+        NewClassName.Len() <= Parent.GeneratedClassPrefix.Len() ||
+        NewClassName == Parent.CppClassName)
+    {
+        OutDiagnostics.Add(TEXT("New class name must be distinct and use the parent C++ prefix"));
+        return false;
+    }
+
+    // 既にロードされた同名クラスへの衝突を避ける。
+    if (FindObject<UClass>(ANY_PACKAGE, *NewClassName) != nullptr)
+    {
+        OutDiagnostics.Add(TEXT("A loaded UCLASS already uses the requested class name"));
+        return false;
+    }
+
+    const FString BaseName = NewClassName.Mid(Parent.GeneratedClassPrefix.Len());
+    const FString ApiPrefix = ModuleApiMacro.IsEmpty() ? FString() : ModuleApiMacro + TEXT(" ");
+    OutFiles.HeaderFileName = BaseName + TEXT(".h");
+    OutFiles.SourceFileName = BaseName + TEXT(".cpp");
+    OutFiles.HeaderContent = FString::Printf(
+        TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\n")
+        TEXT("// The original native class implementation is inherited, not reconstructed.\n")
+        TEXT("UCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n};\n"),
+        *Parent.HeaderPath, *BaseName, *ApiPrefix, *NewClassName, *Parent.CppClassName);
+    OutFiles.SourceContent = FString::Printf(TEXT("#include \"%s.h\"\n"), *BaseName);
+    return true;
+}
