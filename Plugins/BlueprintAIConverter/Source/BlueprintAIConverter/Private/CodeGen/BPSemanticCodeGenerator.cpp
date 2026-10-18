@@ -1,4 +1,5 @@
 #include "BPSemanticCodeGenerator.h"
+#include "BPGeneratedFunctionShape.h"
 #include "BPNumericArithmeticResolver.h"
 #include "BPNumericComparisonResolver.h"
 #include "BPParentClassResolver.h"
@@ -127,18 +128,11 @@ bool EmitFunctionType(const FBPSemanticType& Type, FString& OutType,
     return true;
 }
 
-struct FGeneratedFunctionShape
-{
-    FString Declaration;
-    FString Definition;
-    FString Prologue;
-};
-
 bool BuildFunctionShape(const FBPSemanticFunction& Function,
     const FBPResolvedParentClass& ParentClass, const FString& ClassName,
-    FGeneratedFunctionShape& OutShape, TArray<FString>& Diagnostics)
+    FBPGeneratedFunctionShape& OutShape, TArray<FString>& Diagnostics)
 {
-    OutShape = FGeneratedFunctionShape();
+    OutShape = FBPGeneratedFunctionShape();
     const FString FunctionName = Function.Name.ToString();
     if (IsIdentifier(FunctionName) == false)
     {
@@ -1277,7 +1271,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         OutDiagnostics.Add(TEXT("Semantic MVP requires one non-empty function block"));
         return false;
     }
-    FGeneratedFunctionShape FunctionShape;
+    FBPGeneratedFunctionShape FunctionShape;
     if (BuildFunctionShape(Function, ParentClass, ClassName,
         FunctionShape, OutDiagnostics) == false)
     {
