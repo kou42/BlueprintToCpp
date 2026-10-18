@@ -5,6 +5,7 @@
 #include "BPGraphIR.h"
 #include "BPCopilotGraphJsonExporter.h"
 #include "BPSemanticGraphTraceExtractor.h"
+#include "BPSemanticFunctionExtractor.h"
 #include "BPSemanticJsonSerializer.h"
 #include "BPSemanticLowering.h"
 #include "BPSnapshotExporter.h"
@@ -18,6 +19,7 @@
 #include "Misc/FileHelper.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
+#include "K2Node_FunctionEntry.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -344,6 +346,183 @@ bool FBPCopilotJsonMinimalNativeCallGoldenTest::RunTest(const FString& Parameter
         UnsupportedJson->GetArrayField(TEXT("diagnostics"))[0]->AsObject()
             ->GetStringField(TEXT("node_id")),
         PrintStringId.ToString(EGuidFormats::DigitsWithHyphens));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPCopilotJsonVoidFunctionGoldenTest,
+    "BlueprintAIConverter.CopilotJson.CJ0.VoidFunctionGolden",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPCopilotJsonVoidFunctionGoldenTest::RunTest(const FString& Parameters)
+{
+    // CJ0-G02: Blueprintの自作関数をEditor APIで作り、反射署名と生グラフを別々に検証する。
+    // 関数本体のC++変換成功をこのGoldenテストだけで保証したことにはしない。
+    const FName BlueprintName = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_CJ0_VoidFunction"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        AActor::StaticClass(), GetTransientPackage(), BlueprintName, BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("Create CJ0-G02 Blueprint"), Blueprint) == false)
+    {
+        return false;
+    }
+
+    UEdGraph* FunctionGraph = FBlueprintEditorUtils::CreateNewGraph(
+        Blueprint, TEXT("RunGoldenFunction"), UEdGraph::StaticClass(),
+        UEdGraphSchema_K2::StaticClass());
+    if (TestNotNull(TEXT("Create CJ0-G02 function graph"), FunctionGraph) == false)
+    {
+        return false;
+    }
+    FBlueprintEditorUtils::AddFunctionGraph<UFunction>(Blueprint, FunctionGraph, true, nullptr);
+
+    UK2Node_FunctionEntry* Entry = nullptr;
+    for (UEdGraphNode* Node : FunctionGraph->Nodes)
+    {
+        if (Entry == nullptr)
+        {
+            Entry = Cast<UK2Node_FunctionEntry>(Node);
+        }
+    }
+    if (TestNotNull(TEXT("Find function entry"), Entry) == false)
+    {
+        return false;
+    }
+
+    // 固定GUIDを付けることで、Export後に元Blueprintの識別子と一致することを確認できる。
+    const FGuid EntryId(0x71000001, 0x71000002, 0x71000003, 0x71000004);
+    const FGuid PrintId(0x72000001, 0x72000002, 0x72000003, 0x72000004);
+    const FGuid EntryThenId(0x73000001, 0x73000002, 0x73000003, 0x73000004);
+    const FGuid PrintExecuteId(0x74000001, 0x74000002, 0x74000003, 0x74000004);
+    Entry->NodeGuid = EntryId;
+
+    UFunction* PrintFunction = UKismetSystemLibrary::StaticClass()->FindFunctionByName(
+        GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, PrintString));
+    if (TestNotNull(TEXT("Resolve PrintString"), PrintFunction) == false)
+    {
+        return false;
+    }
+    UK2Node_CallFunction* Print = AddGoldenNode<UK2Node_CallFunction>(FunctionGraph, PrintId);
+    Print->SetFromFunction(PrintFunction);
+    Print->AllocateDefaultPins();
+    UEdGraphPin* EntryThen = Entry->FindPin(UEdGraphSchema_K2::PN_Then);
+    UEdGraphPin* PrintExecute = Print->FindPin(UEdGraphSchema_K2::PN_Execute);
+    UEdGraphPin* PrintText = Print->FindPin(TEXT("InString"));
+    if (TestNotNull(TEXT("Function entry exec pin"), EntryThen) == false
+        || TestNotNull(TEXT("PrintString exec pin"), PrintExecute) == false
+        || TestNotNull(TEXT("PrintString text pin"), PrintText) == false)
+    {
+        return false;
+    }
+    EntryThen->PinId = EntryThenId;
+    PrintExecute->PinId = PrintExecuteId;
+    PrintText->DefaultValue = TEXT("CJ0 G02 function");
+    const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+    if (TestTrue(TEXT("Connect function entry to PrintString"),
+        Schema->TryCreateConnection(EntryThen, PrintExecute)) == false)
+    {
+        return false;
+    }
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (TestNotNull(TEXT("Compile Blueprint generated class"), Blueprint->GeneratedClass.Get()) == false)
+    {
+        return false;
+    }
+    const UFunction* Function = Blueprint->GeneratedClass->FindFunctionByName(TEXT("RunGoldenFunction"));
+    if (TestNotNull(TEXT("Reflect declared Blueprint function"), Function) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("Function is declared on generated class"),
+        Function->GetOuterUClass(), Blueprint->GeneratedClass.Get());
+    TestEqual(TEXT("Function has no input or return parameters"), Function->NumParms, 0);
+
+    FBPGraphIR GraphIR;
+    if (TestTrue(TEXT("Build CJ0-G02 Graph IR"), FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false)
+    {
+        return false;
+    }
+    const FBPIRGraph* IRGraph = GraphIR.Graphs.FindByPredicate(
+        [FunctionGraph](const FBPIRGraph& Graph) { return Graph.Path == FunctionGraph->GetPathName(); });
+    if (TestNotNull(TEXT("Find CJ0-G02 function graph IR"), IRGraph) == false)
+    {
+        return false;
+    }
+    const FBPIRNode* IREntry = IRGraph->Nodes.FindByPredicate(
+        [EntryId](const FBPIRNode& Node) { return Node.Id == EntryId; });
+    TestNotNull(TEXT("Function entry retains node GUID"), IREntry);
+    TestEqual(TEXT("Function graph exec edge count"), IRGraph->ExecEdges.Num(), 1);
+
+    FBPSemanticIR SemanticIR;
+    SemanticIR.AssetPath = GraphIR.AssetPath;
+    SemanticIR.ParentClassPath = GraphIR.ParentClassPath;
+    FBPSemanticFunctionExtractor::Append(Blueprint, SemanticIR);
+    const FBPSemanticFunction* Declaration = SemanticIR.Functions.FindByPredicate(
+        [](const FBPSemanticFunction& Candidate)
+        {
+            return Candidate.Name == TEXT("RunGoldenFunction");
+        });
+    if (TestNotNull(TEXT("Extract Blueprint function declaration"), Declaration) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("Function signature from reflection"), Declaration->SignatureSource,
+        FString(TEXT("generated_class_reflection")));
+    TestEqual(TEXT("Function owner path"), Declaration->OwnerClassPath,
+        Blueprint->GeneratedClass->GetPathName());
+    TestEqual(TEXT("Function has no declared arguments"), Declaration->Parameters.Num(), 0);
+    TestEqual(TEXT("Function returns void"), Declaration->ReturnType.Kind,
+        EBPSemanticTypeKind::Void);
+
+    FString ExportPath;
+    FString ExportError;
+    if (TestTrue(TEXT("Export CJ0-G02 Copilot Graph JSON"),
+        FBPCopilotGraphJsonExporter::Export(
+            GraphIR, TEXT("5.7.4-cj0-test"), ExportPath, ExportError, &SemanticIR)) == false)
+    {
+        AddError(ExportError);
+        return false;
+    }
+    FString JsonText;
+    const bool bLoaded = FFileHelper::LoadFileToString(JsonText, *ExportPath);
+    // Golden用の一時JSONは残さず、保存と再読込だけを検証する。
+    IFileManager::Get().Delete(*ExportPath);
+    if (TestTrue(TEXT("Read CJ0-G02 JSON"), bLoaded) == false)
+    {
+        return false;
+    }
+    const TSharedPtr<FJsonObject> Json = ParseJson(JsonText);
+    if (TestNotNull(TEXT("Parse CJ0-G02 JSON"), Json.Get()) == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("CJ0-G02 remains partial"), Json->GetStringField(TEXT("semantic_status")),
+        FString(TEXT("partial")));
+    const TSharedPtr<FJsonObject> ExportedGraph = FindObjectByStringField(
+        Json->GetArrayField(TEXT("graphs")), TEXT("path"), FunctionGraph->GetPathName());
+    if (TestNotNull(TEXT("Exported function graph"), ExportedGraph.Get()) == false)
+    {
+        return false;
+    }
+    const TSharedPtr<FJsonObject> ExportedEntry = FindObjectByStringField(
+        ExportedGraph->GetArrayField(TEXT("nodes")), TEXT("id"),
+        EntryId.ToString(EGuidFormats::DigitsWithHyphens));
+    TestNotNull(TEXT("Exported function entry GUID"), ExportedEntry.Get());
+    const TArray<TSharedPtr<FJsonValue>>& Edges = ExportedGraph->GetArrayField(TEXT("exec_edges"));
+    TestEqual(TEXT("Exported function exec edge count"), Edges.Num(), 1);
+    if (Edges.Num() == 1)
+    {
+        const TSharedPtr<FJsonObject> Edge = Edges[0]->AsObject();
+        TestEqual(TEXT("Function entry exec pin GUID"), Edge->GetStringField(TEXT("source_pin_id")),
+            EntryThenId.ToString(EGuidFormats::DigitsWithHyphens));
+        TestEqual(TEXT("Function call exec pin GUID"), Edge->GetStringField(TEXT("target_pin_id")),
+            PrintExecuteId.ToString(EGuidFormats::DigitsWithHyphens));
+        TestEqual(TEXT("Function call node GUID"), Edge->GetStringField(TEXT("target_node_id")),
+            PrintId.ToString(EGuidFormats::DigitsWithHyphens));
+    }
+    const TSharedPtr<FJsonObject> Declarations = Json->GetObjectField(TEXT("semantic_declarations"));
+    const TSharedPtr<FJsonObject> ExportedFunction = FindObjectByStringField(
+        Declarations->GetArrayField(TEXT("functions")), TEXT("name"), TEXT("RunGoldenFunction"));
+    TestNotNull(TEXT("Exported Blueprint function declaration"), ExportedFunction.Get());
     return true;
 }
 
