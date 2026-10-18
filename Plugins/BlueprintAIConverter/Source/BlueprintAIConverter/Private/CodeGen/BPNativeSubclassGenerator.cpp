@@ -261,8 +261,12 @@ bool FBPNativeSubclassGenerator::GenerateWithTickOverride(
     const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles,
     TArray<FString>& OutDiagnostics)
 {
+    UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
+    const bool bComponent = ParentClass != nullptr &&
+        ParentClass->IsChildOf(UActorComponent::StaticClass());
     return GenerateWithVerifiedOverrides(Info, NewClassName, ModuleApiMacro,
-        {*FindActorOverride(TEXT("Tick"))}, OutFiles, OutDiagnostics);
+        {*(bComponent ? FindComponentTickOverride() : FindActorOverride(TEXT("Tick")))},
+        OutFiles, OutDiagnostics);
 }
 
 bool FBPNativeSubclassGenerator::GenerateWithLifecycleOverrides(
