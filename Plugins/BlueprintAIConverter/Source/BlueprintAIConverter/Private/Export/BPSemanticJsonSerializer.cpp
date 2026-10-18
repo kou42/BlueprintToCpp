@@ -244,6 +244,29 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
     };
     ClassJson->SetArrayField(TEXT("declared_properties"), MembersToJson(IR.ClassInfo.DeclaredProperties));
     ClassJson->SetArrayField(TEXT("declared_functions"), MembersToJson(IR.ClassInfo.DeclaredFunctions));
+    TArray<TSharedPtr<FJsonValue>> Signatures;
+    for (const FBPSemanticReflectedFunction& Function : IR.ClassInfo.DeclaredFunctionSignatures)
+    {
+        TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+        Entry->SetStringField(TEXT("name"), Function.Name);
+        Entry->SetStringField(TEXT("reflection_path"), Function.ReflectionPath);
+        Entry->SetStringField(TEXT("flags"), Function.Flags);
+        Entry->SetStringField(TEXT("return_cpp_type"), Function.ReturnCppType);
+        TArray<TSharedPtr<FJsonValue>> Parameters;
+        for (const FBPSemanticReflectedParameter& Parameter : Function.Parameters)
+        {
+            TSharedRef<FJsonObject> ParamJson = MakeShared<FJsonObject>();
+            ParamJson->SetStringField(TEXT("name"), Parameter.Name);
+            ParamJson->SetStringField(TEXT("cpp_type"), Parameter.CppType);
+            ParamJson->SetBoolField(TEXT("is_out"), Parameter.bIsOut);
+            ParamJson->SetBoolField(TEXT("is_reference"), Parameter.bIsReference);
+            ParamJson->SetBoolField(TEXT("is_const"), Parameter.bIsConst);
+            Parameters.Add(MakeShared<FJsonValueObject>(ParamJson));
+        }
+        Entry->SetArrayField(TEXT("parameters"), Parameters);
+        Signatures.Add(MakeShared<FJsonValueObject>(Entry));
+    }
+    ClassJson->SetArrayField(TEXT("declared_function_signatures"), Signatures);
     Root->SetObjectField(TEXT("class_info"), ClassJson);
 
     // 現行IRは解析対象全体の網羅性を証明できない。成功時もpartialとし、AIによる過信を防ぐ。
