@@ -15,6 +15,7 @@
 #include "BPSemanticCodeGenerator.h"
 #include "BPReflectedClassPreview.h"
 #include "BPNativeSubclassGenerator.h"
+#include "BPNativeClassDependencyReport.h"
 #include "BPGeneratedCodePreview.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "Misc/MessageDialog.h"
@@ -151,8 +152,51 @@ void CopyNativeSubclassCpp(const TArray<FString>& Args)
         *Files.HeaderFileName, *Files.HeaderContent,
         *Files.SourceFileName, *Files.SourceContent);
     FPlatformApplicationMisc::ClipboardCopy(*Preview);
+    // コマンドに生成先モジュールがないため依存を確定できない。
+    // 専用コマンドでBuild.csの確認事項を明示的に取得する。
+    UE_LOG(LogBlueprintAIConverter, Warning,
+        TEXT("Check target Build.cs dependencies with BlueprintAIConverter.NativeClassDependencies"));
     UE_LOG(LogBlueprintAIConverter, Display, TEXT("Native subclass C++ copied: %s"), *Args[1]);
 }
+
+// 生成先モジュールを明示して、Build.csに必要な確認事項を表示する。
+void ShowNativeClassDependencies(const TArray<FString>& Args)
+{
+    if (Args.Num() != 2 || Args[0].StartsWith(TEXT("/Script/")) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error,
+            TEXT("Usage: BlueprintAIConverter.NativeClassDependencies /Script/Module.ClassName TargetModule"));
+        return;
+    }
+    UClass* Class = FindObject<UClass>(nullptr, *Args[0]);
+    if (Class == nullptr)
+    {
+        Class = LoadObject<UClass>(nullptr, *Args[0]);
+    }
+    if (Class == nullptr || Class->HasAnyClassFlags(CLASS_Native) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error, TEXT("Native UCLASS not found: %s"), *Args[0]);
+        return;
+    }
+    FBPSemanticClassInfo Info;
+    if (FBPSemanticClassExtractor::Extract(Class, Info) == false)
+    {
+        return;
+    }
+    FString Report;
+    FString Error;
+    if (FBPNativeClassDependencyReport::Build(Info, Args[1], Report, Error) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error, TEXT("Dependency report failed: %s"), *Error);
+        return;
+    }
+    UE_LOG(LogBlueprintAIConverter, Display, TEXT("%s"), *Report);
+}
+
+FAutoConsoleCommandWithArgs NativeClassDependenciesCommand(
+    TEXT("BlueprintAIConverter.NativeClassDependencies"),
+    TEXT("Show target Build.cs dependency checklist: /Script/Module.ClassName TargetModule"),
+    FConsoleCommandWithArgsDelegate::CreateStatic(&ShowNativeClassDependencies));
 
 FAutoConsoleCommandWithArgs CopyNativeSubclassCppCommand(
     TEXT("BlueprintAIConverter.CopyNativeSubclassCpp"),
