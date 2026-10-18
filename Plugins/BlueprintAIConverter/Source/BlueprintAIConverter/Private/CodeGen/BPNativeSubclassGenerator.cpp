@@ -3,6 +3,7 @@
 
 #include "BPParentClassResolver.h"
 #include "GameFramework/Actor.h"
+#include "Components/ActorComponent.h"
 #include "UObject/Class.h"
 #include "UObject/UObjectIterator.h"
 
@@ -95,18 +96,67 @@ bool FBPNativeSubclassGenerator::Generate(const FBPSemanticClassInfo& Info,
 
 namespace
 {
-// 反射だけではC++のvirtual宣言が分からないため、既知のAActor署名のみを検証済み入力とする。
+// ライフサイクル名とネイティブ関数署名を親クラスの型階層で解決する。
+// Reflectionだけではvirtual宣言を保証できないため、登録済み署名に限定する。
+struct FBPOverrideRegistration
+{
+    UClass* ParentType;
+    FString LifecycleName;
+    FBPVerifiedOverrideFunction Function;
+};
+
+const TArray<FBPOverrideRegistration>& GetOverrideRegistry()
+{
+    static const TArray<FBPOverrideRegistration> Registry = {
+        {AActor::StaticClass(), TEXT("BeginPlay"),
+            {TEXT("BeginPlay"), TEXT("virtual void BeginPlay() override;"), TEXT("void %s::BeginPlay()"), TEXT("Super::BeginPlay();"), TEXT("protected")}},
+        {AActor::StaticClass(), TEXT("Tick"),
+            {TEXT("Tick"), TEXT("virtual void Tick(float DeltaTime) override;"), TEXT("void %s::Tick(float DeltaTime)"), TEXT("Super::Tick(DeltaTime);"), TEXT("public")}},
+        {AActor::StaticClass(), TEXT("EndPlay"),
+            {TEXT("EndPlay"), TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;"), TEXT("void %s::EndPlay(const EEndPlayReason::Type EndPlayReason)"), TEXT("Super::EndPlay(EndPlayReason);"), TEXT("protected")}},
+        {UActorComponent::StaticClass(), TEXT("BeginPlay"),
+            {TEXT("BeginPlay"), TEXT("virtual void BeginPlay() override;"), TEXT("void %s::BeginPlay()"), TEXT("Super::BeginPlay();"), TEXT("protected")}},
+        {UActorComponent::StaticClass(), TEXT("Tick"),
+            {TEXT("TickComponent"), TEXT("virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;"),
+                TEXT("void %s::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)"),
+                TEXT("Super::TickComponent(DeltaTime, TickType, ThisTickFunction);"), TEXT("public")}},
+        {UActorComponent::StaticClass(), TEXT("EndPlay"),
+            {TEXT("EndPlay"), TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;"),
+                TEXT("void %s::EndPlay(const EEndPlayReason::Type EndPlayReason)"),
+                TEXT("Super::EndPlay(EndPlayReason);"), TEXT("protected")}}
+    };
+    return Registry;
+}
+
+const FBPVerifiedOverrideFunction* ResolveVerifiedOverride(
+    const UClass* ParentClass, const FString& LifecycleName)
+{
+    if (ParentClass == nullptr)
+    {
+        return nullptr;
+    }
+    // より近い登録祖先を優先することで、将来の派生型固有署名にも対応できる。
+    const FBPVerifiedOverrideFunction* Best = nullptr;
+    UClass* BestType = nullptr;
+    for (const FBPOverrideRegistration& Entry : GetOverrideRegistry())
+    {
+        if (Entry.LifecycleName != LifecycleName ||
+            ParentClass->IsChildOf(Entry.ParentType) == false)
+        {
+            continue;
+        }
+        if (BestType == nullptr || Entry.ParentType->IsChildOf(BestType))
+        {
+            Best = &Entry.Function;
+            BestType = Entry.ParentType;
+        }
+    }
+    return Best;
+}
+
 const FBPVerifiedOverrideFunction* FindActorOverride(const FString& Name)
 {
-    static const TArray<FBPVerifiedOverrideFunction> Known = {
-        {TEXT("BeginPlay"), TEXT("virtual void BeginPlay() override;"), TEXT("void %s::BeginPlay()"), TEXT("Super::BeginPlay();"), TEXT("protected")},
-        {TEXT("Tick"), TEXT("virtual void Tick(float DeltaTime) override;"), TEXT("void %s::Tick(float DeltaTime)"), TEXT("Super::Tick(DeltaTime);"), TEXT("public")},
-        {TEXT("EndPlay"), TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;"), TEXT("void %s::EndPlay(const EEndPlayReason::Type EndPlayReason)"), TEXT("Super::EndPlay(EndPlayReason);"), TEXT("protected")}
-    };
-    return Known.FindByPredicate([&Name](const FBPVerifiedOverrideFunction& Item)
-    {
-        return Item.Name == Name;
-    });
+    return ResolveVerifiedOverride(AActor::StaticClass(), Name);
 }
 }
 
@@ -164,10 +214,10 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
         return true;
     }
     UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
-    if (ParentClass == nullptr || ParentClass->IsChildOf(AActor::StaticClass()) == false)
+    if (ParentClass == nullptr)
     {
         OutFiles = FBPGeneratedActorFiles();
-        OutDiagnostics.Add(TEXT("Verified Actor overrides require an AActor-derived native class"));
+        OutDiagnostics.Add(TEXT("Native parent class is unavailable"));
         return false;
     }
     FString Declarations = TEXT("    GENERATED_BODY()\n");
@@ -176,7 +226,22 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
     for (const FBPVerifiedOverrideFunction& Function : Functions)
     {
         // 外部入力のC++断片をそのまま挿入せず、検証済み定義と完全一致するものだけを許可する。
-        const FBPVerifiedOverrideFunction* Verified = FindActorOverride(Function.Name);
+        // 実際のネイティブ関数名から登録済み定義を照合する。
+        const FBPVerifiedOverrideFunction* Verified = nullptr;
+        for (const FBPOverrideRegistration& Entry : GetOverrideRegistry())
+        {
+            if (ParentClass->IsChildOf(Entry.ParentType) &&
+                Entry.Function.Name == Function.Name)
+            {
+                const FBPVerifiedOverrideFunction* Candidate =
+                    ResolveVerifiedOverride(ParentClass, Entry.LifecycleName);
+                if (Candidate != nullptr && Candidate->Name == Function.Name)
+                {
+                    Verified = Candidate;
+                    break;
+                }
+            }
+        }
         if (Verified == nullptr || Seen.Contains(Function.Name) ||
             Verified->Declaration != Function.Declaration ||
             Verified->DefinitionSignature != Function.DefinitionSignature ||
@@ -216,8 +281,18 @@ bool FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(
     const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles,
     TArray<FString>& OutDiagnostics)
 {
+    UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
+    const FBPVerifiedOverrideFunction* Function =
+        ResolveVerifiedOverride(ParentClass, TEXT("BeginPlay"));
+    if (Function == nullptr)
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Reset();
+        OutDiagnostics.Add(TEXT("No verified BeginPlay override for the parent class"));
+        return false;
+    }
     return GenerateWithVerifiedOverrides(Info, NewClassName, ModuleApiMacro,
-        {*FindActorOverride(TEXT("BeginPlay"))}, OutFiles, OutDiagnostics);
+        {*Function}, OutFiles, OutDiagnostics);
 }
 
 bool FBPNativeSubclassGenerator::GenerateWithTickOverride(
@@ -225,8 +300,18 @@ bool FBPNativeSubclassGenerator::GenerateWithTickOverride(
     const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles,
     TArray<FString>& OutDiagnostics)
 {
+    UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
+    const FBPVerifiedOverrideFunction* Function =
+        ResolveVerifiedOverride(ParentClass, TEXT("Tick"));
+    if (Function == nullptr)
+    {
+        OutFiles = FBPGeneratedActorFiles();
+        OutDiagnostics.Reset();
+        OutDiagnostics.Add(TEXT("No verified Tick override for the parent class"));
+        return false;
+    }
     return GenerateWithVerifiedOverrides(Info, NewClassName, ModuleApiMacro,
-        {*FindActorOverride(TEXT("Tick"))}, OutFiles, OutDiagnostics);
+        {*Function}, OutFiles, OutDiagnostics);
 }
 
 bool FBPNativeSubclassGenerator::GenerateWithLifecycleOverrides(
@@ -237,11 +322,31 @@ bool FBPNativeSubclassGenerator::GenerateWithLifecycleOverrides(
     TArray<FBPVerifiedOverrideFunction> Functions;
     if (bBeginPlay)
     {
-        Functions.Add(*FindActorOverride(TEXT("BeginPlay")));
+        UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
+        const FBPVerifiedOverrideFunction* Function =
+            ResolveVerifiedOverride(ParentClass, TEXT("BeginPlay"));
+        if (Function == nullptr)
+        {
+            OutFiles = FBPGeneratedActorFiles();
+            OutDiagnostics.Reset();
+            OutDiagnostics.Add(TEXT("No verified BeginPlay override for the parent class"));
+            return false;
+        }
+        Functions.Add(*Function);
     }
     if (bTick)
     {
-        Functions.Add(*FindActorOverride(TEXT("Tick")));
+        UClass* ParentClass = FindObject<UClass>(nullptr, *Info.ClassPath);
+        const FBPVerifiedOverrideFunction* Function =
+            ResolveVerifiedOverride(ParentClass, TEXT("Tick"));
+        if (Function == nullptr)
+        {
+            OutFiles = FBPGeneratedActorFiles();
+            OutDiagnostics.Reset();
+            OutDiagnostics.Add(TEXT("No verified Tick override for the parent class"));
+            return false;
+        }
+        Functions.Add(*Function);
     }
     return GenerateWithVerifiedOverrides(Info, NewClassName, ModuleApiMacro,
         Functions, OutFiles, OutDiagnostics);

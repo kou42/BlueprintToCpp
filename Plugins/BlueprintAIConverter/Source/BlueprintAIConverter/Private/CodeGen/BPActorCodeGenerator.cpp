@@ -62,11 +62,6 @@ bool FBPActorCodeGenerator::Generate(const FBPGraphIR& IR, const FString& ClassN
     OutFiles = FBPGeneratedActorFiles();
     OutDiagnostics.Reset();
 
-    if (ClassName.StartsWith(TEXT("A")) == false || IsIdentifier(ClassName) == false || ClassName.Len() < 2)
-    {
-        OutDiagnostics.Add(TEXT("Actor class name must be a valid A-prefixed C++ identifier"));
-        return false;
-    }
     if (ModuleApiMacro.IsEmpty() == false &&
         (IsIdentifier(ModuleApiMacro) == false || ModuleApiMacro.EndsWith(TEXT("_API")) == false))
     {
@@ -74,9 +69,25 @@ bool FBPActorCodeGenerator::Generate(const FBPGraphIR& IR, const FString& ClassN
         return false;
     }
     FBPResolvedParentClass ParentClass;
-    if (FBPParentClassResolver::ResolveActorParent(
+    if (FBPParentClassResolver::ResolveParent(
         IR.ParentClassPath, ParentClass, OutDiagnostics) == false)
     {
+        return false;
+    }
+
+    // BeginPlayを持つ親クラスに限り、このMVPのイベント変換を許可する。
+    // UObjectなどにはBeginPlayが存在しないため、無効なoverrideを生成しない。
+    if (ParentClass.bSupportsBeginPlay == false)
+    {
+        OutDiagnostics.Add(TEXT("Parent class does not support BeginPlay; this MVP requires ReceiveBeginPlay"));
+        return false;
+    }
+    // UEのクラス接頭辞は親クラスの種類に合わせる（Actor=A、Component=Uなど）。
+    const FString& Prefix = ParentClass.GeneratedClassPrefix;
+    if (ClassName.StartsWith(Prefix) == false || ClassName.Len() <= Prefix.Len() ||
+        IsIdentifier(ClassName) == false)
+    {
+        OutDiagnostics.Add(FString::Printf(TEXT("Class name must use the parent prefix %s and be a valid C++ identifier"), *Prefix));
         return false;
     }
 
@@ -139,7 +150,7 @@ bool FBPActorCodeGenerator::Generate(const FBPGraphIR& IR, const FString& ClassN
     }
 
     // ファイル名とUHT generated header名を一致させる。
-    const FString BaseName = ClassName.Mid(1);
+    const FString BaseName = ClassName.Mid(ParentClass.GeneratedClassPrefix.Len());
     OutFiles.HeaderFileName = BaseName + TEXT(".h");
     OutFiles.SourceFileName = BaseName + TEXT(".cpp");
 

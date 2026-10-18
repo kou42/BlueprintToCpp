@@ -2,6 +2,9 @@
 #include "BPGeneratedFunctionShape.h"
 #include "BPSemanticClassExtractor.h"
 #include "GameFramework/Actor.h"
+#include "Components/ActorComponent.h"
+#include "Components/SceneComponent.h"
+#include "UObject/Object.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -88,6 +91,83 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
             Files, Diagnostics));
     TestFalse(TEXT("未知の関数を拒否"),
         FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(TEXT("Unknown"), Selected, Diagnostics));
+    // ComponentはBeginPlayを共有するが、TickはTickComponentであり同じ署名ではない。
+    FBPSemanticClassInfo ComponentInfo;
+    if (TestTrue(TEXT("ActorComponentのリフレクション"),
+        FBPSemanticClassExtractor::Extract(UActorComponent::StaticClass(), ComponentInfo)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("ComponentのBeginPlay override生成"),
+        FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(
+            ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("Component継承"),
+        Files.HeaderContent.Contains(TEXT("public UActorComponent")));
+    TestTrue(TEXT("Component BeginPlay宣言"),
+        Files.HeaderContent.Contains(TEXT("virtual void BeginPlay() override;")));
+    TestTrue(TEXT("Component Super呼び出し"),
+        Files.SourceContent.Contains(TEXT("Super::BeginPlay();")));
+    TestTrue(TEXT("Component固有Tickを生成"),
+        FBPNativeSubclassGenerator::GenerateWithTickOverride(
+            ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("TickComponent宣言を生成"),
+        Files.HeaderContent.Contains(TEXT("virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;")));
+    TestTrue(TEXT("TickComponentのSuper呼び出し"),
+        Files.SourceContent.Contains(TEXT("Super::TickComponent(DeltaTime, TickType, ThisTickFunction);")));
+    TestFalse(TEXT("Actor用Tick宣言を混入させない"),
+        Files.HeaderContent.Contains(TEXT("virtual void Tick(float DeltaTime) override;")));
+    TestTrue(TEXT("ComponentのBeginPlayとTickを同時生成"),
+        FBPNativeSubclassGenerator::GenerateWithLifecycleOverrides(
+            ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(), true, true, Files, Diagnostics));
+    TestTrue(TEXT("両方のComponent lifecycleを含む"),
+        Files.SourceContent.Contains(TEXT("Super::BeginPlay();")) &&
+        Files.SourceContent.Contains(TEXT("Super::TickComponent(DeltaTime, TickType, ThisTickFunction);")));
+    // ActorComponentのEndPlayは同じ引数形でも、親クラスごとの検証済み定義で照合する。
+    TestTrue(TEXT("ComponentのEndPlayを生成"),
+        FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
+            ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(),
+            {FBPVerifiedOverrideFunction{TEXT("EndPlay"),
+                TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;"),
+                TEXT("void %s::EndPlay(const EEndPlayReason::Type EndPlayReason)"),
+                TEXT("Super::EndPlay(EndPlayReason);"), TEXT("protected")}},
+            Files, Diagnostics));
+    TestTrue(TEXT("Component EndPlayの宣言"),
+        Files.HeaderContent.Contains(TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;")));
+    TestTrue(TEXT("Component EndPlayのSuper呼び出し"),
+        Files.SourceContent.Contains(TEXT("Super::EndPlay(EndPlayReason);")));
+    TestFalse(TEXT("Actor用Tick情報をComponentに流用しない"),
+        FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
+            ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(),
+            {FBPVerifiedOverrideFunction{TEXT("Tick"), TEXT("virtual void Tick(float DeltaTime) override;"),
+                TEXT("void %s::Tick(float DeltaTime)"), TEXT("Super::Tick(DeltaTime);"), TEXT("public")}},
+            Files, Diagnostics));
+    TestTrue(TEXT("不正署名の拒否時は出力を残さない"), Files.HeaderContent.IsEmpty());
+
+    // 基底型への直接比較ではなく、継承階層をたどって署名を解決する。
+    FBPSemanticClassInfo SceneInfo;
+    if (TestTrue(TEXT("SceneComponentのリフレクション"),
+        FBPSemanticClassExtractor::Extract(USceneComponent::StaticClass(), SceneInfo)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("SceneComponentにもTickComponent署名を適用"),
+        FBPNativeSubclassGenerator::GenerateWithTickOverride(
+            SceneInfo, TEXT("UReflectionGeneratedScene"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("継承先をSceneComponentに維持"),
+        Files.HeaderContent.Contains(TEXT("public USceneComponent")));
+    TestTrue(TEXT("SceneComponentのTickComponentを生成"),
+        Files.SourceContent.Contains(TEXT("UReflectionGeneratedScene::TickComponent(")));
+
+    FBPSemanticClassInfo ObjectInfo;
+    if (TestTrue(TEXT("UObjectのリフレクション"),
+        FBPSemanticClassExtractor::Extract(UObject::StaticClass(), ObjectInfo)) == false)
+    {
+        return false;
+    }
+    TestFalse(TEXT("未登録の親クラスにはTickを生成しない"),
+        FBPNativeSubclassGenerator::GenerateWithTickOverride(
+            ObjectInfo, TEXT("UReflectionGeneratedObject"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("未登録時に出力を消去"), Files.HeaderContent.IsEmpty());
     return true;
 }
 

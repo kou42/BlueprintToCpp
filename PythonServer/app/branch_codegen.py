@@ -6,13 +6,13 @@ from .ir_builder import build_ir
 from .code_generator import _print_string, _is_class, GenerationError
 from .node_registry import ConversionContext, UnsupportedNodeError
 from .typed_ir import lower_single_branch
+from .parent_class import resolve_parent
 
 
 def generate_branch_cpp(snapshot: Snapshot, class_name: str) -> dict:
-    if not re.fullmatch(r"A[A-Za-z_][A-Za-z_0-9]*", class_name):
-        raise GenerationError("invalid A-prefixed class name")
-    if snapshot.parent_class != "/Script/Engine.Actor" or snapshot.variables:
-        raise UnsupportedNodeError("Branch MVP requires direct Actor parent and no variables")
+    parent = resolve_parent(snapshot.parent_class, class_name)
+    if snapshot.variables:
+        raise UnsupportedNodeError("Branch MVP does not support variables")
     ir = build_ir(snapshot)
     if len(ir["graphs"]) != 1 or ir["graphs"][0]["kind"] != "event":
         raise UnsupportedNodeError("Branch MVP requires one EventGraph")
@@ -46,11 +46,11 @@ def generate_branch_cpp(snapshot: Snapshot, class_name: str) -> dict:
         raise UnsupportedNodeError("data links not supported in Branch MVP")
     def statements(ids: tuple[str, ...]) -> str:
         return "\n".join(_print_string(ConversionContext(nodes[nid], graph)) for nid in ids)
-    base = class_name[1:]
+    base = class_name[len(parent.prefix):]
     header = (f'#pragma once\n#include "CoreMinimal.h"\n'
-              f'#include "GameFramework/Actor.h"\n'
+              f'#include "{parent.header}"\n'
               f'#include "{base}.generated.h"\n\n'
-              f'UCLASS()\nclass {class_name} : public AActor\n{{\n'
+              f'UCLASS()\nclass {class_name} : public {parent.cpp_name}\n{{\n'
               f'    GENERATED_BODY()\npublic:\n'
               f'    virtual void BeginPlay() override;\n}};\n')
     body = (f'#include "{base}.h"\n'

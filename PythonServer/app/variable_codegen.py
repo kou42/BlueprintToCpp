@@ -8,6 +8,7 @@ from .schemas import Snapshot
 from .ir_builder import build_ir
 from .node_registry import UnsupportedNodeError
 from .code_generator import GenerationError, _cpp_string
+from .parent_class import resolve_parent
 
 TYPES = {"bool": "bool", "int": "int32", "int64": "int64", "float": "float"}
 GET = "/Script/BlueprintGraph.K2Node_VariableGet"
@@ -64,10 +65,7 @@ def _pin(node: dict, name: str, direction: str) -> dict:
 
 
 def generate_variable_cpp(snapshot: Snapshot, class_name: str) -> dict:
-    if not re.fullmatch(r"A[A-Za-z_][A-Za-z_0-9]*", class_name):
-        raise GenerationError("invalid Actor class name")
-    if snapshot.parent_class != "/Script/Engine.Actor":
-        raise UnsupportedNodeError("direct Actor parent required")
+    parent = resolve_parent(snapshot.parent_class, class_name)
     ir = build_ir(snapshot)
     if len(ir["graphs"]) != 1 or ir["graphs"][0]["kind"] != "event":
         raise UnsupportedNodeError("one EventGraph required")
@@ -131,11 +129,11 @@ def generate_variable_cpp(snapshot: Snapshot, class_name: str) -> dict:
             default = "false" if cpp_type == "bool" else "0"
         declarations.append(f"    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=\"Converted\")\n"
                             f"    {cpp_type} {name} = {_literal(default, var['type']['category'])};")
-    base = class_name[1:]
+    base = class_name[len(parent.prefix):]
     header = (f'#pragma once\n#include "CoreMinimal.h"\n'
-              f'#include "GameFramework/Actor.h"\n'
+              f'#include "{parent.header}"\n'
               f'#include "{base}.generated.h"\n\n'
-              f'UCLASS()\nclass {class_name} : public AActor\n{{\n'
+              f'UCLASS()\nclass {class_name} : public {parent.cpp_name}\n{{\n'
               f'    GENERATED_BODY()\npublic:\n'
               f'    virtual void BeginPlay() override;\n'
               + "\n".join(declarations) + "\n};\n")

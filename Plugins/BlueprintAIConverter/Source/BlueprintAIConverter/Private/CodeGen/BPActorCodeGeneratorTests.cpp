@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "BPActorCodeGenerator.h"
 #include "GameFramework/Pawn.h"
+#include "Components/ActorComponent.h"
 
 namespace
 {
@@ -89,8 +90,22 @@ bool FBPActorCodeGeneratorRejectTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Pawn inheritance generated"),
         Files.HeaderContent.Contains(TEXT("class AGeneratedPawn : public APawn")));
 
+    // Actor以外でもBeginPlayを持つComponentは同じMVP生成経路を利用できる。
+    IR.ParentClassPath = UActorComponent::StaticClass()->GetPathName();
+    TestTrue(TEXT("Component parent generated"), FBPActorCodeGenerator::Generate(
+        IR, TEXT("UGeneratedComponent"), TEXT(""), Files, Diagnostics));
+    TestTrue(TEXT("Component inheritance generated"),
+        Files.HeaderContent.Contains(TEXT("class UGeneratedComponent : public UActorComponent")));
+    TestTrue(TEXT("Component header generated"),
+        Files.HeaderContent.Contains(TEXT("GeneratedComponent.generated.h")));
+    TestTrue(TEXT("Component BeginPlay generated"),
+        Files.SourceContent.Contains(TEXT("UGeneratedComponent::BeginPlay()")));
+
+    TestFalse(TEXT("Wrong prefix rejected"), FBPActorCodeGenerator::Generate(
+        IR, TEXT("AGeneratedComponent"), TEXT(""), Files, Diagnostics));
+
     IR.ParentClassPath = UObject::StaticClass()->GetPathName();
-    TestFalse(TEXT("Non-Actor parent rejected"), FBPActorCodeGenerator::Generate(
+    TestFalse(TEXT("Parent without BeginPlay rejected"), FBPActorCodeGenerator::Generate(
         IR, TEXT("AGeneratedActor"), TEXT(""), Files, Diagnostics));
     return true;
 }

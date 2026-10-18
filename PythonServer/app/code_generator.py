@@ -12,6 +12,7 @@ import re
 from .schemas import Snapshot, SnapshotError
 from .ir_builder import build_ir
 from .node_registry import ConversionContext, NodeConverterRegistry, UnsupportedNodeError
+from .parent_class import resolve_parent
 
 
 class GenerationError(ValueError):
@@ -102,10 +103,7 @@ def _is_class(node: dict, name: str) -> bool:
 
 
 def generate_cpp(snapshot: Snapshot, class_name: str = "AGeneratedBlueprintActor") -> dict:
-    if not re.fullmatch(r"A[A-Za-z_][A-Za-z_0-9]*", class_name):
-        raise GenerationError("class_name must be a valid A-prefixed C++ identifier")
-    if snapshot.parent_class != "/Script/Engine.Actor":
-        raise UnsupportedNodeError("MVP supports only Blueprints derived directly from Actor")
+    parent = resolve_parent(snapshot.parent_class, class_name)
     if snapshot.variables:
         raise UnsupportedNodeError("MVP does not yet generate Blueprint member variables")
     ir = build_ir(snapshot)
@@ -174,11 +172,11 @@ def generate_cpp(snapshot: Snapshot, class_name: str = "AGeneratedBlueprintActor
         current = next_id
     if set(nodes) != visited:
         raise UnsupportedNodeError("unvisited nodes: disconnected or pure nodes unsupported")
-    base = class_name[1:]
+    base = class_name[len(parent.prefix):]
     header = (f'#pragma once\n\n#include "CoreMinimal.h"\n'
-              f'#include "GameFramework/Actor.h"\n'
+              f'#include "{parent.header}"\n'
               f'#include "{base}.generated.h"\n\n'
-              f'UCLASS()\nclass {class_name} : public AActor\n{{\n'
+              f'UCLASS()\nclass {class_name} : public {parent.cpp_name}\n{{\n'
               f'    GENERATED_BODY()\npublic:\n'
               f'    virtual void BeginPlay() override;\n}};\n')
     body = (f'#include "{base}.h"\n'
