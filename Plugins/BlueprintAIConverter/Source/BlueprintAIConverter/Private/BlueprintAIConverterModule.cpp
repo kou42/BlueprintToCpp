@@ -120,11 +120,10 @@ FAutoConsoleCommandWithArgs CopyNativeClassCppPreviewCommand(
 // コードをディスクへ書き込まず、開発者が生成先モジュールで確認してから使用する。
 void CopyNativeSubclassCpp(const TArray<FString>& Args)
 {
-    if ((Args.Num() != 2 && Args.Num() != 3) || Args[0].StartsWith(TEXT("/Script/")) == false ||
-        (Args.Num() == 3 && Args[2] != TEXT("BeginPlay") && Args[2] != TEXT("Tick") && Args[2] != TEXT("BeginPlay,Tick") && Args[2] != TEXT("Tick,BeginPlay")))
+    if ((Args.Num() != 2 && Args.Num() != 3) || Args[0].StartsWith(TEXT("/Script/")) == false)
     {
         UE_LOG(LogBlueprintAIConverter, Error,
-            TEXT("Usage: BlueprintAIConverter.CopyNativeSubclassCpp /Script/Module.ClassName ANewClass [BeginPlay|Tick|BeginPlay,Tick]"));
+            TEXT("Usage: BlueprintAIConverter.CopyNativeSubclassCpp /Script/Module.ClassName ANewClass [BeginPlay,Tick,EndPlay]"));
         return;
     }
     UClass* Class = FindObject<UClass>(nullptr, *Args[0]);
@@ -144,28 +143,16 @@ void CopyNativeSubclassCpp(const TArray<FString>& Args)
     }
     FBPGeneratedActorFiles Files;
     TArray<FString> Diagnostics;
-    bool bGenerated = false;
-    if (Args.Num() == 3 && Args[2] == TEXT("BeginPlay"))
+    TArray<FBPVerifiedOverrideFunction> SelectedFunctions;
+    if (Args.Num() == 3 &&
+        FBPNativeSubclassGenerator::ParseVerifiedActorOverrides(Args[2], SelectedFunctions, Diagnostics) == false)
     {
-        bGenerated = FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(
-            Info, Args[1], FString(), Files, Diagnostics);
+        UE_LOG(LogBlueprintAIConverter, Error, TEXT("Invalid function selection: %s"),
+            *FString::Join(Diagnostics, TEXT("; ")));
+        return;
     }
-    else if (Args.Num() == 3 &&
-        (Args[2] == TEXT("BeginPlay,Tick") || Args[2] == TEXT("Tick,BeginPlay")))
-    {
-        bGenerated = FBPNativeSubclassGenerator::GenerateWithLifecycleOverrides(
-            Info, Args[1], FString(), true, true, Files, Diagnostics);
-    }
-    else if (Args.Num() == 3 && Args[2] == TEXT("Tick"))
-    {
-        bGenerated = FBPNativeSubclassGenerator::GenerateWithTickOverride(
-            Info, Args[1], FString(), Files, Diagnostics);
-    }
-    else
-    {
-        bGenerated = FBPNativeSubclassGenerator::Generate(
-            Info, Args[1], FString(), Files, Diagnostics);
-    }
+    const bool bGenerated = FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
+        Info, Args[1], FString(), SelectedFunctions, Files, Diagnostics);
     if (bGenerated == false)
     {
         UE_LOG(LogBlueprintAIConverter, Error, TEXT("Subclass generation failed: %s"),
