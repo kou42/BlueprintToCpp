@@ -96,49 +96,67 @@ bool FBPNativeSubclassGenerator::Generate(const FBPSemanticClassInfo& Info,
 
 namespace
 {
-// 反射だけではC++のvirtual宣言が分からないため、既知のAActor署名のみを検証済み入力とする。
-const FBPVerifiedOverrideFunction* FindActorOverride(const FString& Name)
+// ライフサイクル名とネイティブ関数署名を親クラスの型階層で解決する。
+// Reflectionだけではvirtual宣言を保証できないため、登録済み署名に限定する。
+struct FBPOverrideRegistration
 {
-    static const TArray<FBPVerifiedOverrideFunction> Known = {
-        {TEXT("BeginPlay"), TEXT("virtual void BeginPlay() override;"), TEXT("void %s::BeginPlay()"), TEXT("Super::BeginPlay();"), TEXT("protected")},
-        {TEXT("Tick"), TEXT("virtual void Tick(float DeltaTime) override;"), TEXT("void %s::Tick(float DeltaTime)"), TEXT("Super::Tick(DeltaTime);"), TEXT("public")},
-        {TEXT("EndPlay"), TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;"), TEXT("void %s::EndPlay(const EEndPlayReason::Type EndPlayReason)"), TEXT("Super::EndPlay(EndPlayReason);"), TEXT("protected")}
+    UClass* ParentType;
+    FString LifecycleName;
+    FBPVerifiedOverrideFunction Function;
+};
+
+const TArray<FBPOverrideRegistration>& GetOverrideRegistry()
+{
+    static const TArray<FBPOverrideRegistration> Registry = {
+        {AActor::StaticClass(), TEXT("BeginPlay"),
+            {TEXT("BeginPlay"), TEXT("virtual void BeginPlay() override;"), TEXT("void %s::BeginPlay()"), TEXT("Super::BeginPlay();"), TEXT("protected")}},
+        {AActor::StaticClass(), TEXT("Tick"),
+            {TEXT("Tick"), TEXT("virtual void Tick(float DeltaTime) override;"), TEXT("void %s::Tick(float DeltaTime)"), TEXT("Super::Tick(DeltaTime);"), TEXT("public")}},
+        {AActor::StaticClass(), TEXT("EndPlay"),
+            {TEXT("EndPlay"), TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;"), TEXT("void %s::EndPlay(const EEndPlayReason::Type EndPlayReason)"), TEXT("Super::EndPlay(EndPlayReason);"), TEXT("protected")}},
+        {UActorComponent::StaticClass(), TEXT("BeginPlay"),
+            {TEXT("BeginPlay"), TEXT("virtual void BeginPlay() override;"), TEXT("void %s::BeginPlay()"), TEXT("Super::BeginPlay();"), TEXT("protected")}},
+        {UActorComponent::StaticClass(), TEXT("Tick"),
+            {TEXT("TickComponent"), TEXT("virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;"),
+                TEXT("void %s::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)"),
+                TEXT("Super::TickComponent(DeltaTime, TickType, ThisTickFunction);"), TEXT("public")}},
+        {UActorComponent::StaticClass(), TEXT("EndPlay"),
+            {TEXT("EndPlay"), TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;"),
+                TEXT("void %s::EndPlay(const EEndPlayReason::Type EndPlayReason)"),
+                TEXT("Super::EndPlay(EndPlayReason);"), TEXT("protected")}}
     };
-    return Known.FindByPredicate([&Name](const FBPVerifiedOverrideFunction& Item)
-    {
-        return Item.Name == Name;
-    });
-}
+    return Registry;
 }
 
-namespace
+const FBPVerifiedOverrideFunction* ResolveVerifiedOverride(
+    const UClass* ParentClass, const FString& LifecycleName)
 {
-// ActorComponent専用のTick署名をActorのTickと混同しない。
-const FBPVerifiedOverrideFunction* FindComponentOverride(const FString& Name)
+    if (ParentClass == nullptr)
+    {
+        return nullptr;
+    }
+    // より近い登録祖先を優先することで、将来の派生型固有署名にも対応できる。
+    const FBPVerifiedOverrideFunction* Best = nullptr;
+    UClass* BestType = nullptr;
+    for (const FBPOverrideRegistration& Entry : GetOverrideRegistry())
+    {
+        if (Entry.LifecycleName != LifecycleName ||
+            ParentClass->IsChildOf(Entry.ParentType) == false)
+        {
+            continue;
+        }
+        if (BestType == nullptr || Entry.ParentType->IsChildOf(BestType))
+        {
+            Best = &Entry.Function;
+            BestType = Entry.ParentType;
+        }
+    }
+    return Best;
+}
+
+const FBPVerifiedOverrideFunction* FindActorOverride(const FString& Name)
 {
-    static const FBPVerifiedOverrideFunction Tick = {
-        TEXT("TickComponent"),
-        TEXT("virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;"),
-        TEXT("void %s::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)"),
-        TEXT("Super::TickComponent(DeltaTime, TickType, ThisTickFunction);"),
-        TEXT("public")
-    };
-    static const FBPVerifiedOverrideFunction EndPlay = {
-        TEXT("EndPlay"),
-        TEXT("virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;"),
-        TEXT("void %s::EndPlay(const EEndPlayReason::Type EndPlayReason)"),
-        TEXT("Super::EndPlay(EndPlayReason);"),
-        TEXT("protected")
-    };
-    if (Name == TEXT("TickComponent"))
-    {
-        return &Tick;
-    }
-    if (Name == TEXT("EndPlay"))
-    {
-        return &EndPlay;
-    }
-    return nullptr;
+    return ResolveVerifiedOverride(AActor::StaticClass(), Name);
 }
 }
 
