@@ -14,6 +14,11 @@ public:
         TArray<FString>& OutDiagnostics);
 
     // AActorの既知の仮想関数BeginPlayだけを明示的に追加する安全な限定経路。
+    // TickはAActorの既知のvirtual関数に限定する。元のTick設定は変更しない。
+    static bool GenerateWithTickOverride(const FBPSemanticClassInfo& Info,
+        const FString& NewClassName, const FString& ModuleApiMacro,
+        FBPGeneratedActorFiles& OutFiles, TArray<FString>& OutDiagnostics);
+
     static bool GenerateWithBeginPlayOverride(const FBPSemanticClassInfo& Info,
         const FString& NewClassName, const FString& ModuleApiMacro,
         FBPGeneratedActorFiles& OutFiles, TArray<FString>& OutDiagnostics);
