@@ -203,7 +203,9 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
     for (const FBPVerifiedOverrideFunction& Function : Functions)
     {
         // 外部入力のC++断片をそのまま挿入せず、検証済み定義と完全一致するものだけを許可する。
-        const FBPVerifiedOverrideFunction* Verified = FindActorOverride(Function.Name);
+        const FBPVerifiedOverrideFunction* Verified = bActorComponent &&
+            Function.Name == TEXT("TickComponent")
+            ? FindComponentTickOverride() : FindActorOverride(Function.Name);
         if (Verified == nullptr || Seen.Contains(Function.Name) ||
             Verified->Declaration != Function.Declaration ||
             Verified->DefinitionSignature != Function.DefinitionSignature ||
@@ -214,12 +216,11 @@ bool FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
             OutDiagnostics.Add(FString::Printf(TEXT("Unverified or duplicate override: %s"), *Function.Name));
             return false;
         }
-        if (bActorComponent && Function.Name != TEXT("BeginPlay"))
+        if (bActorComponent && Function.Name != TEXT("BeginPlay") &&
+            Function.Name != TEXT("TickComponent"))
         {
             OutFiles = FBPGeneratedActorFiles();
-            OutDiagnostics.Add(FString::Printf(
-                TEXT("ActorComponent override %s has a different native signature; only BeginPlay is verified"),
-                *Function.Name));
+            OutDiagnostics.Add(TEXT("ActorComponent override requires a component-specific verified signature"));
             return false;
         }
         Seen.Add(Function.Name);
