@@ -14,6 +14,7 @@
 #include "BPSemanticLowering.h"
 #include "BPSemanticCodeGenerator.h"
 #include "BPReflectedClassPreview.h"
+#include "BPNativeSubclassGenerator.h"
 #include "BPGeneratedCodePreview.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "Misc/MessageDialog.h"
@@ -112,6 +113,51 @@ FAutoConsoleCommandWithArgs CopyNativeClassCppPreviewCommand(
     TEXT("BlueprintAIConverter.CopyNativeClassCppPreview"),
     TEXT("Copy native UCLASS reflection reference to clipboard (not compilable)"),
     FConsoleCommandWithArgsDelegate::CreateStatic(&CopyNativeClassCppPreview));
+
+// 既存ネイティブクラスを継承する新規UCLASSの最小ソースをクリップボードへ出力する。
+// コードをディスクへ書き込まず、開発者が生成先モジュールで確認してから使用する。
+void CopyNativeSubclassCpp(const TArray<FString>& Args)
+{
+    if (Args.Num() != 2 || Args[0].StartsWith(TEXT("/Script/")) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error,
+            TEXT("Usage: BlueprintAIConverter.CopyNativeSubclassCpp /Script/Module.ClassName ANewClass"));
+        return;
+    }
+    UClass* Class = FindObject<UClass>(nullptr, *Args[0]);
+    if (Class == nullptr)
+    {
+        Class = LoadObject<UClass>(nullptr, *Args[0]);
+    }
+    if (Class == nullptr || Class->HasAnyClassFlags(CLASS_Native) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error, TEXT("Native UCLASS not found: %s"), *Args[0]);
+        return;
+    }
+    FBPSemanticClassInfo Info;
+    if (FBPSemanticClassExtractor::Extract(Class, Info) == false)
+    {
+        return;
+    }
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (FBPNativeSubclassGenerator::Generate(Info, Args[1], FString(), Files, Diagnostics) == false)
+    {
+        UE_LOG(LogBlueprintAIConverter, Error, TEXT("Subclass generation failed: %s"),
+            *FString::Join(Diagnostics, TEXT("; ")));
+        return;
+    }
+    const FString Preview = FString::Printf(TEXT("// %s\n%s\n// %s\n%s"),
+        *Files.HeaderFileName, *Files.HeaderContent,
+        *Files.SourceFileName, *Files.SourceContent);
+    FPlatformApplicationMisc::ClipboardCopy(*Preview);
+    UE_LOG(LogBlueprintAIConverter, Display, TEXT("Native subclass C++ copied: %s"), *Args[1]);
+}
+
+FAutoConsoleCommandWithArgs CopyNativeSubclassCppCommand(
+    TEXT("BlueprintAIConverter.CopyNativeSubclassCpp"),
+    TEXT("Copy minimal native UCLASS subclass header/source: /Script/Module.ClassName ANewClass"),
+    FConsoleCommandWithArgsDelegate::CreateStatic(&CopyNativeSubclassCpp));
 
 FAutoConsoleCommandWithArgs ExportNativeClassCommand(
     TEXT("BlueprintAIConverter.ExportNativeClass"),
