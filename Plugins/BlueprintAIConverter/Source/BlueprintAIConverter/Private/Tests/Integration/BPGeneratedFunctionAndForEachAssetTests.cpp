@@ -340,40 +340,49 @@ bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
         return false;
     }
 
-    if (bForEach == false)
+    // ForEachは既存のLower(Blueprint, IR)が限定形状を判定する。
+    // 対応済みの配列GetterとPrintStringだけで構成し、実BPからの縦断変換を確認する。
+    FBPSemanticIR Semantic;
+    if (Test.TestTrue(TEXT("実BPからSemantic Lowering"),
+        FBPSemanticLowering::Lower(Blueprint, IR, Semantic)) == false)
     {
-        // 実際のBP由来の関数呼び出しをLoweringからC++生成まで通す。
-        // ForEachは専用Lowering経路を使用するため、関数呼び出しとは検証を分離する。
-        FBPSemanticIR Semantic;
-        if (Test.TestTrue(TEXT("関数呼び出しLowering"),
-            FBPSemanticLowering::Lower(Blueprint, IR, Semantic)) == false)
+        for (const FBPSemanticDiagnostic& Diagnostic : Semantic.Diagnostics)
         {
-            for (const FBPSemanticDiagnostic& Diagnostic : Semantic.Diagnostics)
-            {
-                Test.AddError(Diagnostic.Message);
-            }
-            return false;
+            Test.AddError(Diagnostic.Message);
         }
-        FBPGeneratedActorFiles Generated;
-        TArray<FString> Diagnostics;
-        if (Test.TestTrue(TEXT("関数呼び出しC++生成"),
-            FBPSemanticCodeGenerator::Generate(Semantic,
-                TEXT("AGeneratedFunctionCall"), FString(), Generated, Diagnostics)) == false)
+        return false;
+    }
+    FBPGeneratedActorFiles Generated;
+    TArray<FString> Diagnostics;
+    if (Test.TestTrue(TEXT("実BPからC++生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            bForEach ? TEXT("AGeneratedForEach") : TEXT("AGeneratedFunctionCall"),
+            FString(), Generated, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
         {
-            for (const FString& Diagnostic : Diagnostics)
-            {
-                Test.AddError(Diagnostic);
-            }
-            return false;
+            Test.AddError(Diagnostic);
         }
+        return false;
+    }
+    if (bForEach)
+    {
+        Test.TestTrue(TEXT("ForEach配列反復をC++へ生成"),
+            Generated.SourceContent.Contains(TEXT("Numbers.Num()")));
+        Test.TestTrue(TEXT("ForEach本体をC++へ生成"),
+            Generated.SourceContent.Contains(TEXT("ForEach body")));
+        Test.TestTrue(TEXT("ForEach完了処理をC++へ生成"),
+            Generated.SourceContent.Contains(TEXT("ForEach completed")));
+    }
+    else
+    {
         Test.TestTrue(TEXT("PrintString呼び出しを保持"),
             Generated.SourceContent.Contains(TEXT("UKismetSystemLibrary::PrintString")));
         Test.TestTrue(TEXT("文字列引数を保持"),
             Generated.SourceContent.Contains(TEXT("Function call fixture")));
     }
 
-    // 既存のForEach Loweringは対応範囲が限定的なため、ここでは保存とGraph JSONの
-    // 厳密検証を保証し、Semantic/C++の網羅は独立した変換テストに委ねる。
     Blueprint->MarkPackageDirty();
     const FString Filename = FPackageName::LongPackageNameToFilename(
         PackagePath, FPackageName::GetAssetPackageExtension());
