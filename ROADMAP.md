@@ -1,7 +1,7 @@
 # BlueprintToCpp 開発ロードマップ
 
 対象: Unreal Engine 5.7.4 / BlueprintAIConverter / PythonServer  
-更新日: 2026-10-15（C4-4変数参照・C4-5四則演算の縦断検証を反映）
+更新日: 2026-10-18（既存の検証記録とCJトラックの進捗を照合。新たなUE実機テストは未実施）
 
 ## 最終目標
 
@@ -115,23 +115,30 @@ C++ Generator（宣言・式・文・関数・クラス）
 
 **従来の実装順（長期計画）:** J0 → J1 → A1 → A2 / H1 → E1は履歴として維持する。直近はC1→C2→C3→C4→C5を優先し、V3を各段階で実施する。JSON/AI系はC++縦断変換に必要な保守を除いて保留する。
 
-## 現状（2026-10-14時点）
+## 現状（主に2026-10-14〜15時点のDirect変換記録）
 
 | 領域 | 状況 | 補足 |
 | --- | --- | --- |
 | Blueprintの直接解析とGraph IR | **限定的に実装済み** | ノード・ピン・Exec/Dataエッジを収集。汎用型解決は未実装 |
 | C++生成MVP | **限定的に実装済み** | ActorのBeginPlay → PrintStringを対象とする専用Analyzer |
-| PrintStringのオプション | **実装済み・UE実機未検証** | TextColorのRGBA解析、Duration、Key、画面/ログ設定 |
+| PrintStringのオプション | **実装済み・実Blueprint縦断テストで一部確認済み** | TextColorのRGBA解析、Duration、Key、画面/ログ設定。`docs/C1-parent-class-resolution.md` に2026-10-14の実Blueprintテスト・隔離UHT/UBT記録あり。元Blueprintとの実行時一致は未確認 |
 | 標準グラフ・イベントの判定 | **限定的に実装済み** | 空Construction Script、未接続Event Tickの一部を許容 |
 | Editorプレビュー・保存 | **実装済み・実機での全面検証は未完** | Convert to C++ (Preview)、プロジェクトSourceへの保存経路 |
-| Snapshot JSON / PythonServer | **既存v1を維持・JSON/AI機能を段階追加** | Semantic JSON v2の設計・Serializer・Validator・Editorコピー/保存、Mock/OpenAI Provider、生成結果ValidatorをPR #43〜#48で実装。実機・実API未検証 |
+| Snapshot JSON / PythonServer | **既存v1を維持・JSON/AI機能を段階追加** | Semantic JSON v2の設計・Serializer・Validator・Editorコピー/保存、Mock/OpenAI Provider、生成結果ValidatorをPR #43〜#48で実装。UE Editor往復のAutomation記録は `docs/J2-5-editor-roundtrip.md` にあり、外部AIの実API疎通は未確認 |
 | Semantic IR / PrintString変換 | **最小縦断実装済み・Automation/UHT/UBT確認済み** | 型付きIR、Lowering、C++ Generator、比較テストを追加。実Generator出力の隔離UHT/UBTまで確認。実行時の意味一致と汎用UFunction変換は未完了 |
 | Phase 2 UFunction呼び出し基盤 | **限定縦断実装済み・Automation/UHT/UBT確認済み** | 反射署名・ピン検証に加え、実BlueprintのBeginPlay→K2_SetActorLocationとK2_GetActorLocation.ReturnValue→NewLocationを通常Semantic経路へ統合。FHitResult出力領域を生成し、改ざん型を拒否する。一般関数、複数Consumer、接続済み戻り値は未対応 |
 | Blueprintメンバー変数・初期値 | **限定実装済み・Automation/UHT/UBT確認済み** | 基本型はCDOから型安全に生成。その他の値型はExportText/ImportTextの往復一致を条件に、FVector、FRotator、FTransform、FLinearColor、TArray/TSet/TMap、ネイティブEnumを実Blueprintで汎用復元。未検証型は日本語コメント付き宣言へフォールバックするが、UPROPERTYメタデータ、Object参照、ユーザー定義型等は未対応 |
 | Phase 4 制御フロー | **bool Branch・数値比較・変数参照・四則演算の限定縦断を実装済み・Automation/UHT/UBT確認済み** | 実BlueprintのBeginPlay→Branch→両枝PrintStringに加え、Kismet Math Libraryの`int32` / `double`比較6演算と四則演算を反射署名で検証。メンバー変数Getとネストした算術式をConditionへ統合し、除算はUE固有のゼロ除算動作を保持する。不正な所有クラス・型・接続、複数Consumer、循環依存を拒否。暗黙変換、代入、複数文、ネストBranch、Sequence、Loop、Returnは未対応 |
 | Actor以外のBlueprint | **未対応** | 直接Actor親のMVP制限あり。Component、UObject、Widget、Anim等は段階的に拡張 |
 | Semantic IR Editor統合 | **限定実装・Automation確認済み** | 旧経路Shadow比較と独立したSemantic Previewメニューを追加。実Blueprintからの対応ノード拡張は継続 |
-| UE 5.7での生成C++ビルド・動作一致 | **隔離ビルドを複数ケースで確認** | Automation Test 55/55件、ActorLocation、bool Branch、`int32` / `double`比較Branch、メンバー変数比較、四則演算連鎖、構造体、コンテナ、ネイティブEnumを含む実Blueprint由来Generator出力の隔離UHT/UBTを確認。実行時のBlueprintとの意味一致は未確認 |
+| UE 5.7での生成C++ビルド・動作一致 | **隔離ビルドを複数ケースで確認** | 2026-10-15時点のAutomation Test 55/55件、ActorLocation、bool Branch、`int32` / `double`比較Branch、メンバー変数比較、四則演算連鎖、構造体、コンテナ、ネイティブEnumを含む実Blueprint由来Generator出力の隔離UHT/UBTを確認。実行時のBlueprintとの意味一致は未確認 |
+
+### 後続の検証記録とCJトラック（2026-10-16時点）
+
+- [Copilot JSONエクスポート・ロードマップ](docs/COPILOT_JSON_EXPORT_ROADMAP.md) はDirect変換のC1〜C5/V3とは別トラック。CJ0〜CJ2の基盤は統合済みと記録され、2026-10-16にはUE 5.7でAutomation Test **64件成功**およびUHT/UBT成功が報告されている。上表の**55/55件**は以前のDirect変換時点の記録であり、現在の総テスト件数を表すものではない。
+- [ForLoop対応範囲](docs/FOR_LOOP_SUPPORT.md) と `BPForLoopConversionTests.cpp` に限定的なForLoop変換とテスト実装がある。上表の「Phase 4」の「Loop未対応」は**2026-10-14〜15時点の範囲**を指し、現在すべてのLoopが未対応という意味ではない。ForEachLoop、Break付きループ、WhileLoop、ネストなどは後続課題。
+- [CJ0 Goldenケース](docs/CJ0_GOLDEN_CASES.md) は最小ケースのAutomation実装を記録する一方、実プロジェクト固有のGolden JSON照合は未完了。合成Fixture、UE EditorのAutomation、生成C++のUHT/UBT、元Blueprintとの実行時比較はそれぞれ別の証跡として扱う。
+- [Editor往復検証](docs/J2-5-editor-roundtrip.md)、[隔離UHT/UBT検証](docs/J2-12-isolated-ubt-verification.md) は当時の手順と実測結果を保存する。過去の表に残る「未実施」「未検証」は、後続証跡を確認したうえで判断する。
 
 GitHubへのコミットとUEでのコンパイル成功・動作確認は区別する。ユーザーからのビルド状況の共有は参考情報として記録し、Automation Test・生成C++のUHT/UBT・実行時の意味一致を別途検証する。
 
