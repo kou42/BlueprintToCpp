@@ -41,6 +41,19 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
         Files.SourceContent.Contains(TEXT("Super::Tick(DeltaTime);")));
     TestFalse(TEXT("Tick設定を勝手に変更しない"),
         Files.SourceContent.Contains(TEXT("bCanEverTick")));
+    TestTrue(TEXT("BeginPlayとTickを同時生成"),
+        FBPNativeSubclassGenerator::GenerateWithLifecycleOverrides(
+            Info, TEXT("AReflectionGeneratedActor"), FString(), true, true, Files, Diagnostics));
+    TestTrue(TEXT("同時生成でBeginPlay宣言"),
+        Files.HeaderContent.Contains(TEXT("virtual void BeginPlay() override;")));
+    TestTrue(TEXT("同時生成でTick宣言"),
+        Files.HeaderContent.Contains(TEXT("virtual void Tick(float DeltaTime) override;")));
+    TestTrue(TEXT("同時生成で両方のSuper呼び出し"),
+        Files.SourceContent.Contains(TEXT("Super::BeginPlay();")) &&
+        Files.SourceContent.Contains(TEXT("Super::Tick(DeltaTime);")));
+    TestTrue(TEXT("同時生成でUCLASSは一つ"),
+        Files.HeaderContent.Find(TEXT("UCLASS()")) ==
+        Files.HeaderContent.Find(TEXT("UCLASS()"), ESearchCase::CaseSensitive, ESearchDir::FromEnd));
     return true;
 }
 
