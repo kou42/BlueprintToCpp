@@ -103,6 +103,8 @@ C++ Generator（宣言・式・文・関数・クラス）
 
 ### JSON・AI並行開発マイルストーン
 
+以下は当初の計画・優先度を残した**履歴表**。J0/J1の基盤、A1のProvider境界、V1の一部は後続PRで実装済みであり、「最優先」「J1後」は現在の着手指示ではない。現在の優先順位は冒頭のDirect変換方針および[CJロードマップ](docs/COPILOT_JSON_EXPORT_ROADMAP.md)の進捗欄を参照する。
+
 | マイルストーン | 優先度 | 作業・完了条件 |
 | --- | --- | --- |
 | J0: 現状整理とスキーマ設計 | **最優先・並行** | Snapshot v1、Graph IR、Semantic IR、PythonServerの差分を整理。Semantic JSON v2の仕様、互換性、診断・追跡IDを定義 |
@@ -142,7 +144,7 @@ C++ Generator（宣言・式・文・関数・クラス）
 
 GitHubへのコミットとUEでのコンパイル成功・動作確認は区別する。ユーザーからのビルド状況の共有は参考情報として記録し、Automation Test・生成C++のUHT/UBT・実行時の意味一致を別途検証する。
 
-## JSON/AIトラックの実装更新（2026-10-12）
+## JSON/AIトラックの実装更新（2026-10-12時点の履歴）
 
 | 項目 | 関連PR | 実装状況・残課題 |
 | --- | --- | --- |
@@ -240,7 +242,7 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 - [ ] 引数と戻り値を持つ単純なBlueprint FunctionGraphをC++へ変換
 - [ ] 関数呼び出しの参照解決と複数関数の生成を検証
 
-### M2の直近作業（PR #31〜#41・UE未検証）
+### M2の当時の直近作業（PR #31〜#41時点・当時UE未検証）
 - [x] `FBPConnectedFunctionCallEmitter` とAutomation Testを追加し、CallFunctionのGUID・署名・ピン検証を統合
 - [x] bool既定値、FHitResult参照引数、GetActorLocation → K2_SetActorLocationの限定生成を追加
 - [x] 出力ピンと後続入力を対応付けるBindingPlanをEmitterへ統合し、Exec順序・変数スコープを限定検証
@@ -263,7 +265,7 @@ GitHubへのコミットとUEでのコンパイル成功・動作確認は区別
 7. **UEバージョン依存性**: Blueprintコンパイラ内部APIを活用する場合はUE 5.7.4での公開範囲・安定性を確認する。
 8. **コード規約**: C++のifは波括弧を必須とし、null判定を明示する。重要な設計判断は日本語コメントで説明する。
 
-## 次の着手対象（2026-10-14更新）
+## 2026-10-14時点の着手対象（履歴）
 
 **優先方針: Python/レビュー基盤の先行拡張を止め、C++プラグイン本体と実Blueprintの縦断変換を進める。** J2-1〜J2-12で得たSemantic JSON、Editor往復、UHT/UBTハーネスは検証手段として利用する。次の主成果物はPython APIではなく、対応Blueprintが増えるC++変更でなければならない。
 
@@ -341,7 +343,7 @@ C1〜C3の限定縦断実装を維持しつつ、Editor APIで作成した実Blu
 
 ### レビュー基盤の到達点と残課題
 
-- PR #43〜#48: Semantic JSON v2 Serializer/Validator、Editor出力、AI Providerと出力検証の基盤を統合済み。UE実機・実AI疎通は未検証。
+- PR #43〜#48: Semantic JSON v2 Serializer/Validator、Editor出力、AI Providerと出力検証の基盤を統合済み。**当該PR群の統合時点**ではUE実機・実AI疎通は未検証。その後のUE Editor往復検証については `docs/J2-5-editor-roundtrip.md` を参照。外部AIの実API疎通は引き続き未確認。
 - PR #49〜#70: Direct/AI差分、構造比較、レビュー記録、外部UHT/UBT・動作証跡、統計・推移・ダッシュボード、索引共有と回帰テストを段階的に統合済み。
 - PR #70: GitHub Actions成功後にmainへマージ済み。レビュー要約と検証レポートの証跡索引を共有。
 - 残課題: Blueprintとの実行結果一致、未検証型・制御フローの生成C++ UHT/UBT、実AI疎通。ローカルのAutomation Test・隔離UHT/UBT・GitHub ActionsのPythonテストは、実行時一致の代替ではない。

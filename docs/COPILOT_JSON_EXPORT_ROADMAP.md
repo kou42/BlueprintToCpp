@@ -50,12 +50,12 @@ Blueprintの**関数宣言・実装元・ノード・Pin・接続・変数・依
 
 ## マイルストーン（優先順）
 
-### CJ0 — JSON現状監査とゴールデンケース（最優先）
+### CJ0 — JSON現状監査とゴールデンケース（基盤実装済み・実測照合は継続）
 
-- [ ] Snapshot v1 / Graph IR / Semantic JSON v2のフィールド対応表を作る。既存Serializerと実際の出力例を照合する
-- [ ] 関数宣言、Native関数呼び出し、Blueprint自作関数、Branch、Return、未対応ノードの代表BPケースを定義する
-- [ ] 各ケースで「抽出済み / 部分対応 / 欠落 / 対象外」を明記し、元ノード・Pin GUIDを追跡する
-- [ ] JSONのスキーマ・例・検証手順を `docs/` に整備する
+- [x] Snapshot v1 / Graph IR / Semantic JSON v2のフィールド対応表を静的コード監査で作成する（`CJ0_JSON_AUDIT.md`）。**実Blueprint出力との照合は未完了**
+- [x] 関数宣言、Native関数呼び出し、Blueprint自作関数、Branch、Return、未対応ノードの代表BPケースを文書で定義する（`CJ0_GOLDEN_CASES.md`）。**全ケースのAutomation・実測Golden収集は未完了**
+- [ ] 各ケースの抽出状態と元ノード・Pin GUIDを**実BlueprintのJSON出力で照合**する。静的監査でのフィールド分類・GUID追跡方針は記載済み
+- [x] JSONのスキーマ・合成Fixture・検証手順を `docs/` に整備する（`COPILOT_GRAPH_JSON_SCHEMA_V1.md`、`CJ0_GOLDEN_CASES.md`）。**実BlueprintのGolden Fixtureは未収集**
 
 **完了条件:** 代表ケースごとにJSON出力の不足項目と再現手順があり、未対応を成功と誤判定しない。
 
