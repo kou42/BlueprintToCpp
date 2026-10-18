@@ -22,6 +22,7 @@
 #include "Misc/EngineVersion.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
+#include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "UObject/SavePackage.h"
@@ -67,7 +68,13 @@ bool FBPGeneratedBranchAssetTest::RunTest(const FString& Parameters)
     {
         return false;
     }
-    UBlueprint* Blueprint = FindObject<UBlueprint>(Package, TEXT("BP_Test_Branch"));
+    // 保存済みBPをロードして再利用することで、再起動後の重複生成を防止する。
+    UBlueprint* Blueprint = LoadObject<UBlueprint>(
+        nullptr, TEXT("/Game/BlueprintToCppTests/BP_Test_Branch.BP_Test_Branch"));
+    if (Blueprint == nullptr)
+    {
+        Blueprint = FindObject<UBlueprint>(Package, TEXT("BP_Test_Branch"));
+    }
     if (Blueprint == nullptr)
     {
         Blueprint = FKismetEditorUtilities::CreateBlueprint(
@@ -135,6 +142,11 @@ bool FBPGeneratedBranchAssetTest::RunTest(const FString& Parameters)
     }
 
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (TestTrue(TEXT("Blueprintコンパイルエラーなし"),
+        Blueprint->Status != BS_Error) == false)
+    {
+        return false;
+    }
     if (TestNotNull(TEXT("コンパイル済みBP"), Blueprint->GeneratedClass.Get()) == false)
     {
         return false;
