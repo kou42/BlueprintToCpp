@@ -105,10 +105,28 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
         Files.HeaderContent.Contains(TEXT("virtual void BeginPlay() override;")));
     TestTrue(TEXT("Component Super呼び出し"),
         Files.SourceContent.Contains(TEXT("Super::BeginPlay();")));
-    TestFalse(TEXT("ActorのTick署名をComponentに誤適用しない"),
+    TestTrue(TEXT("Component固有Tickを生成"),
         FBPNativeSubclassGenerator::GenerateWithTickOverride(
             ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(), Files, Diagnostics));
-    TestTrue(TEXT("拒否時は出力を残さない"), Files.HeaderContent.IsEmpty());
+    TestTrue(TEXT("TickComponent宣言を生成"),
+        Files.HeaderContent.Contains(TEXT("virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;")));
+    TestTrue(TEXT("TickComponentのSuper呼び出し"),
+        Files.SourceContent.Contains(TEXT("Super::TickComponent(DeltaTime, TickType, ThisTickFunction);")));
+    TestFalse(TEXT("Actor用Tick宣言を混入させない"),
+        Files.HeaderContent.Contains(TEXT("virtual void Tick(float DeltaTime) override;")));
+    TestTrue(TEXT("ComponentのBeginPlayとTickを同時生成"),
+        FBPNativeSubclassGenerator::GenerateWithLifecycleOverrides(
+            ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(), true, true, Files, Diagnostics));
+    TestTrue(TEXT("両方のComponent lifecycleを含む"),
+        Files.SourceContent.Contains(TEXT("Super::BeginPlay();")) &&
+        Files.SourceContent.Contains(TEXT("Super::TickComponent(DeltaTime, TickType, ThisTickFunction);")));
+    TestFalse(TEXT("Actor用Tick情報をComponentに流用しない"),
+        FBPNativeSubclassGenerator::GenerateWithVerifiedOverrides(
+            ComponentInfo, TEXT("UReflectionGeneratedComponent"), FString(),
+            {FBPVerifiedOverrideFunction{TEXT("Tick"), TEXT("virtual void Tick(float DeltaTime) override;"),
+                TEXT("void %s::Tick(float DeltaTime)"), TEXT("Super::Tick(DeltaTime);"), TEXT("public")}},
+            Files, Diagnostics));
+    TestTrue(TEXT("不正署名の拒否時は出力を残さない"), Files.HeaderContent.IsEmpty());
 
     return true;
 }
