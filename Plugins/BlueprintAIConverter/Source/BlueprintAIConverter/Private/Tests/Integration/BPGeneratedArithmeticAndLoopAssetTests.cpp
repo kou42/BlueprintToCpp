@@ -70,7 +70,13 @@ bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& 
     {
         return false;
     }
-    UBlueprint* Blueprint = FindObject<UBlueprint>(Package, *AssetName);
+    // 固定パスのアセットを先にロードし、複数回のテスト実行で同じBPを更新する。
+    UBlueprint* Blueprint = LoadObject<UBlueprint>(
+        nullptr, *(PackagePath + TEXT(".") + AssetName));
+    if (Blueprint == nullptr)
+    {
+        Blueprint = FindObject<UBlueprint>(Package, *AssetName);
+    }
     if (Blueprint == nullptr)
     {
         Blueprint = FKismetEditorUtilities::CreateBlueprint(
@@ -220,6 +226,11 @@ bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& 
     }
 
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (Test.TestTrue(TEXT("Blueprintコンパイルエラーなし"),
+        Blueprint->Status != BS_Error) == false)
+    {
+        return false;
+    }
     if (Test.TestNotNull(TEXT("生成クラス"), Blueprint->GeneratedClass.Get()) == false)
     {
         return false;
