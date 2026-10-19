@@ -1316,28 +1316,49 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
         }
         return true;
     }
-    if (Statement.Kind != EBPSemanticStatementKind::Branch ||
-        Statement.ThenStatements.Num() != 1 || Statement.ElseStatements.Num() != 1)
+    if (Statement.Kind != EBPSemanticStatementKind::Branch)
     {
-        Diagnostics.Add(TEXT("ForLoop Branch requires one statement per output"));
+        Diagnostics.Add(TEXT("Unsupported ForLoop body statement"));
         return false;
     }
     FString Condition;
     FString ThenCode;
     FString ElseCode;
     if (EmitForLoopCondition(Statement.Expression, Variables, LocalIndex,
-            Condition, Diagnostics) == false ||
-        EmitForLoopBodyStatement(Statement.ThenStatements[0], ParentClassPath, Variables,
-            LocalIndex, Indent + TEXT("    "), Depth + 1, ThenCode, Diagnostics) == false ||
-        EmitForLoopBodyStatement(Statement.ElseStatements[0], ParentClassPath, Variables,
-            LocalIndex, Indent + TEXT("    "), Depth + 1, ElseCode, Diagnostics) == false)
+            Condition, Diagnostics) == false)
     {
         return false;
     }
+    // 各枝の文を順に生成する。内側のif終了後の文は同じ外側スコープに配置する。
+    for (const FBPSemanticStatement& Child : Statement.ThenStatements)
+    {
+        FString Part;
+        if (EmitForLoopBodyStatement(Child, ParentClassPath, Variables,
+                LocalIndex, Indent + TEXT("    "), Depth + 1, Part, Diagnostics) == false)
+        {
+            return false;
+        }
+        ThenCode += Part;
+    }
+    for (const FBPSemanticStatement& Child : Statement.ElseStatements)
+    {
+        FString Part;
+        if (EmitForLoopBodyStatement(Child, ParentClassPath, Variables,
+                LocalIndex, Indent + TEXT("    "), Depth + 1, Part, Diagnostics) == false)
+        {
+            return false;
+        }
+        ElseCode += Part;
+    }
     OutCode = FString::Printf(
-        TEXT("%sif (%s)\n%s{\n%s%s}\n%selse\n%s{\n%s%s}\n"),
-        *Indent, *Condition, *Indent, *ThenCode, *Indent,
-        *Indent, *Indent, *Indent, *ElseCode, *Indent);
+        TEXT("%sif (%s)\n%s{\n%s%s}\n"),
+        *Indent, *Condition, *Indent, *ThenCode, *Indent);
+    if (Statement.ElseStatements.IsEmpty() == false)
+    {
+        OutCode += FString::Printf(
+            TEXT("%selse\n%s{\n%s%s}\n"),
+            *Indent, *Indent, *ElseCode, *Indent);
+    }
     return true;
 }
 
@@ -1729,39 +1750,32 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     }
     if (Statement.Kind == EBPSemanticStatementKind::Branch)
     {
-        FString Condition;
-        if (EmitBranchCondition(Statement.Expression, IR.Variables,
-            Condition, OutDiagnostics) == false ||
-            Statement.ThenStatements.Num() != 1 || Statement.ElseStatements.Num() != 1)
-        {
-            OutDiagnostics.Add(TEXT("Branch requires one supported bool condition and one statement in each output"));
-            return false;
-        }
-        const FBPSemanticStatement& ThenStatement = Statement.ThenStatements[0];
-        const FBPSemanticStatement& ElseStatement = Statement.ElseStatements[0];
-        if (ThenStatement.Kind != EBPSemanticStatementKind::Expression ||
-            ElseStatement.Kind != EBPSemanticStatementKind::Expression ||
-            ThenStatement.ThenStatements.IsEmpty() == false ||
-            ThenStatement.ElseStatements.IsEmpty() == false ||
-            ElseStatement.ThenStatements.IsEmpty() == false ||
-            ElseStatement.ElseStatements.IsEmpty() == false)
-        {
-            OutDiagnostics.Add(TEXT("Branch outputs contain an unsupported semantic statement"));
-            return false;
-        }
-        FString ThenCode;
-        FString ElseCode;
-        if (EmitExpressionStatement(ThenStatement.Expression, IR.ParentClassPath,
-            TEXT("        "), ThenCode, OutDiagnostics) == false ||
-            EmitExpressionStatement(ElseStatement.Expression, IR.ParentClassPath,
-                TEXT("        "), ElseCode, OutDiagnostics) == false)
+        // 通常BranchもForLoopと同じ再帰Emitterを使い、複数文とネストを保持する。
+        // LoopIndexを参照しない通常Branchでは名前を空にして評価する。
+        FString BranchCode;
+        if (EmitForLoopBodyStatement(Statement, IR.ParentClassPath, IR.Variables,
+                NAME_None, TEXT("    "), 0, BranchCode, OutDiagnostics) == false)
         {
             return false;
         }
-
         FString BranchIncludes = TEXT("#include \"Kismet/KismetMathLibrary.h\"\n");
-        AppendExpressionIncludes(ThenStatement.Expression, BranchIncludes);
-        AppendExpressionIncludes(ElseStatement.Expression, BranchIncludes);
+        TFunction<void(const FBPSemanticStatement&)> CollectIncludes;
+        CollectIncludes = [&](const FBPSemanticStatement& Current)
+        {
+            if (Current.Kind == EBPSemanticStatementKind::Expression)
+            {
+                AppendExpressionIncludes(Current.Expression, BranchIncludes);
+            }
+            for (const FBPSemanticStatement& Child : Current.ThenStatements)
+            {
+                CollectIncludes(Child);
+            }
+            for (const FBPSemanticStatement& Child : Current.ElseStatements)
+            {
+                CollectIncludes(Child);
+            }
+        };
+        CollectIncludes(Statement);
 
         FString VariableDeclarations;
         FString ConstructorBody;
@@ -1790,9 +1804,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
-        const FString Body = FString::Printf(
-            TEXT("%s    if (%s)\n    {\n%s    }\n    else\n    {\n%s    }\n"),
-            *LeadingCode, *Condition, *ThenCode, *ElseCode);
+        const FString Body = LeadingCode + BranchCode;
         Files.SourceContent = FString::Printf(
             TEXT("#include \"%s.h\"\n%s%s%s%s"),
             *BaseName, *BranchIncludes, *LeadingIncludes,
