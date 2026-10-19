@@ -2297,13 +2297,20 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                                             {
                                                 return false;
                                             }
-                                            const FBPIRLink* InputLink =
-                                                EventGraph->DataEdges.FindByPredicate(
-                                                    [&Owner, &InputPin](const FBPIRLink& Edge)
+                                            // 入力が複数のデータエッジを持つ場合は曖昧なので拒否する。
+                                            const FBPIRLink* InputLink = nullptr;
+                                            for (const FBPIRLink& Edge : EventGraph->DataEdges)
+                                            {
+                                                if (Edge.TargetNode == Owner.Id &&
+                                                    Edge.TargetPin == InputPin.Id)
+                                                {
+                                                    if (InputLink != nullptr)
                                                     {
-                                                        return Edge.TargetNode == Owner.Id &&
-                                                            Edge.TargetPin == InputPin.Id;
-                                                    });
+                                                        return false;
+                                                    }
+                                                    InputLink = &Edge;
+                                                }
+                                            }
                                             if (InputLink == nullptr)
                                             {
                                                 int32 Number = 0;
@@ -2516,12 +2523,20 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                                 {
                                     return false;
                                 }
-                                const FBPIRLink* InputLink = EventGraph->DataEdges.FindByPredicate(
-                                    [&Node, &Pin](const FBPIRLink& Link)
+                                // 整数演算の各入力も一意な供給元だけを許可する。
+                                const FBPIRLink* InputLink = nullptr;
+                                for (const FBPIRLink& Link : EventGraph->DataEdges)
+                                {
+                                    if (Link.TargetNode == Node.Id &&
+                                        Link.TargetPin == Pin.Id)
                                     {
-                                        return Link.TargetNode == Node.Id &&
-                                            Link.TargetPin == Pin.Id;
-                                    });
+                                        if (InputLink != nullptr)
+                                        {
+                                            return false;
+                                        }
+                                        InputLink = &Link;
+                                    }
+                                }
                                 if (InputLink == nullptr)
                                 {
                                     int32 Number = 0;
