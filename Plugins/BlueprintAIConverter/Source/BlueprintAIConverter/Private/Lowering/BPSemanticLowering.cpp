@@ -2143,13 +2143,83 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                                 {
                                     return false;
                                 }
-                                for (const FBPIRLink& InputEdge : EventGraph->DataEdges)
+                                // 結合の各入力を再帰的にたどり、結合ノードの入れ子を解決する。
+                                // 循環・複数入力・不正な出力ピンは変換せずに拒否する。
+                                TSet<FGuid> ConcatStack;
+                                TFunction<bool(const FBPIRNode&, const FBPIRPin&,
+                                    int32, FBPSemanticExpression&)> LowerString;
+                                LowerString = [&](const FBPIRNode& Node, const FBPIRPin& Pin,
+                                    int32 Depth, FBPSemanticExpression& Result) -> bool
                                 {
-                                    if (InputEdge.TargetNode == Converter->Id)
+                                    if (Depth > 16)
                                     {
                                         return false;
                                     }
-                                }
+                                    const FBPIRLink* Link = nullptr;
+                                    for (const FBPIRLink& Candidate : EventGraph->DataEdges)
+                                    {
+                                        if (Candidate.TargetNode == Node.Id &&
+                                            Candidate.TargetPin == Pin.Id)
+                                        {
+                                            if (Link != nullptr)
+                                            {
+                                                return false;
+                                            }
+                                            Link = &Candidate;
+                                        }
+                                    }
+                                    if (Link == nullptr)
+                                    {
+                                        Result = Literal(EBPSemanticTypeKind::String,
+                                            Pin.DefaultValue, Node, Pin.Name);
+                                        return true;
+                                    }
+                                    const FBPIRNode* Source = EventGraph->Nodes.FindByPredicate(
+                                        [Link](const FBPIRNode& Candidate)
+                                        {
+                                            return Candidate.Id == Link->SourceNode;
+                                        });
+                                    if (Source == nullptr ||
+                                        Source->FunctionName != TEXT("Concat_StrStr") ||
+                                        Source->FunctionOwnerPath !=
+                                            TEXT("/Script/Engine.KismetStringLibrary") ||
+                                        ConcatStack.Contains(Source->Id) ||
+                                        UsedConverters.Contains(Source->Id))
+                                    {
+                                        return false;
+                                    }
+                                    const FBPIRPin* ReturnPin = FindPin(
+                                        *Source, TEXT("ReturnValue"), EGPD_Output);
+                                    const FBPIRPin* Left = FindPin(
+                                        *Source, TEXT("A"), EGPD_Input);
+                                    const FBPIRPin* Right = FindPin(
+                                        *Source, TEXT("B"), EGPD_Input);
+                                    if (ReturnPin == nullptr || Left == nullptr ||
+                                        Right == nullptr || ReturnPin->Id != Link->SourcePin)
+                                    {
+                                        return false;
+                                    }
+                                    ConcatStack.Add(Source->Id);
+                                    Result.Kind = EBPSemanticExpressionKind::FunctionCall;
+                                    Result.Type.Kind = EBPSemanticTypeKind::String;
+                                    Result.FunctionName = TEXT("Concat_StrStr");
+                                    Result.FunctionOwnerPath =
+                                        TEXT("/Script/Engine.KismetStringLibrary");
+                                    Result.SourceNodeId = Source->Id;
+                                    FBPSemanticExpression LeftValue;
+                                    FBPSemanticExpression RightValue;
+                                    if (LowerString(*Source, *Left, Depth + 1, LeftValue) == false ||
+                                        LowerString(*Source, *Right, Depth + 1, RightValue) == false)
+                                    {
+                                        ConcatStack.Remove(Source->Id);
+                                        return false;
+                                    }
+                                    Result.Arguments.Add(MoveTemp(LeftValue));
+                                    Result.Arguments.Add(MoveTemp(RightValue));
+                                    ConcatStack.Remove(Source->Id);
+                                    UsedConverters.Add(Source->Id);
+                                    return true;
+                                };
                                 FBPSemanticExpression Concat;
                                 Concat.Kind = EBPSemanticExpressionKind::FunctionCall;
                                 Concat.Type.Kind = EBPSemanticTypeKind::String;
@@ -2157,12 +2227,16 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                                 Concat.FunctionOwnerPath =
                                     TEXT("/Script/Engine.KismetStringLibrary");
                                 Concat.SourceNodeId = Converter->Id;
-                                Concat.Arguments.Add(Literal(
-                                    EBPSemanticTypeKind::String, A->DefaultValue,
-                                    *Converter, TEXT("A")));
-                                Concat.Arguments.Add(Literal(
-                                    EBPSemanticTypeKind::String, B->DefaultValue,
-                                    *Converter, TEXT("B")));
+                                FBPSemanticExpression LeftValue;
+                                FBPSemanticExpression RightValue;
+                                ConcatStack.Add(Converter->Id);
+                                if (LowerString(*Converter, *A, 0, LeftValue) == false ||
+                                    LowerString(*Converter, *B, 0, RightValue) == false)
+                                {
+                                    return false;
+                                }
+                                Concat.Arguments.Add(MoveTemp(LeftValue));
+                                Concat.Arguments.Add(MoveTemp(RightValue));
                                 Print.Expression.Arguments[1] = MoveTemp(Concat);
                                 UsedConverters.Add(Converter->Id);
                                 continue;
