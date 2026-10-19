@@ -2012,6 +2012,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         int32 PrintCount = 0;
         int32 ConverterCount = 0;
         int32 ArithmeticCount = 0;
+        int32 AppendCount = 0;
         bool bSupportedNodes = true;
         for (const FBPIRNode& Node : EventGraph->Nodes)
         {
@@ -2030,6 +2031,11 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             {
                 ++ConverterCount;
             }
+            else if (Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+                Node.FunctionName == TEXT("Concat_StrStr"))
+            {
+                ++AppendCount;
+            }
             else if (Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetMathLibrary") &&
                 (Node.FunctionName == TEXT("Add_IntInt") ||
                     Node.FunctionName == TEXT("Subtract_IntInt") ||
@@ -2044,7 +2050,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             }
         }
         if (bSupportedNodes && Entry != nullptr && PrintCount > 0 &&
-            EventGraph->Nodes.Num() == PrintCount + ConverterCount + ArithmeticCount + NestedLoops.Num() + 1)
+            EventGraph->Nodes.Num() == PrintCount + ConverterCount + ArithmeticCount + AppendCount + NestedLoops.Num() + 1)
         {
             const auto NextExec = [EventGraph](const FBPIRNode& Source,
                 const FName PinName, const FBPIRNode*& Next) -> bool
@@ -2120,6 +2126,47 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                             }
                             const FBPIRNode* Converter = EventGraph->Nodes.FindByPredicate(
                                 [&Edge](const FBPIRNode& Node) { return Node.Id == Edge.SourceNode; });
+                            if (Converter != nullptr &&
+                                Converter->FunctionName == TEXT("Concat_StrStr") &&
+                                Converter->FunctionOwnerPath ==
+                                    TEXT("/Script/Engine.KismetStringLibrary"))
+                            {
+                                // 文字列結合のリテラル入力を安全に変換する。
+                                // 未対応の入力接続は、値を黙って無視せず拒否する。
+                                const FBPIRPin* Output = FindPin(
+                                    *Converter, TEXT("ReturnValue"), EGPD_Output);
+                                const FBPIRPin* A = FindPin(*Converter, TEXT("A"), EGPD_Input);
+                                const FBPIRPin* B = FindPin(*Converter, TEXT("B"), EGPD_Input);
+                                if (Output == nullptr || A == nullptr || B == nullptr ||
+                                    Edge.SourcePin != Output->Id ||
+                                    UsedConverters.Contains(Converter->Id))
+                                {
+                                    return false;
+                                }
+                                for (const FBPIRLink& InputEdge : EventGraph->DataEdges)
+                                {
+                                    if (InputEdge.TargetNode == Converter->Id)
+                                    {
+                                        return false;
+                                    }
+                                }
+                                FBPSemanticExpression Concat;
+                                Concat.Kind = EBPSemanticExpressionKind::FunctionCall;
+                                Concat.Type.Kind = EBPSemanticTypeKind::String;
+                                Concat.FunctionName = TEXT("Concat_StrStr");
+                                Concat.FunctionOwnerPath =
+                                    TEXT("/Script/Engine.KismetStringLibrary");
+                                Concat.SourceNodeId = Converter->Id;
+                                Concat.Arguments.Add(Literal(
+                                    EBPSemanticTypeKind::String, A->DefaultValue,
+                                    *Converter, TEXT("A")));
+                                Concat.Arguments.Add(Literal(
+                                    EBPSemanticTypeKind::String, B->DefaultValue,
+                                    *Converter, TEXT("B")));
+                                Print.Expression.Arguments[1] = MoveTemp(Concat);
+                                UsedConverters.Add(Converter->Id);
+                                continue;
+                            }
                             if (Converter == nullptr ||
                                 Converter->FunctionName != TEXT("Conv_IntToString") ||
                                 UsedConverters.Contains(Converter->Id))
