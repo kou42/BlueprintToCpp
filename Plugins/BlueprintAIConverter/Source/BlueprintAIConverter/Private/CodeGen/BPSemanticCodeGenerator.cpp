@@ -1324,8 +1324,11 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
     FString Condition;
     FString ThenCode;
     FString ElseCode;
-    if (EmitForLoopCondition(Statement.Expression, Variables, LocalIndex,
-            Condition, Diagnostics) == false)
+    // 通常Branchでは既存の条件式検証を維持し、ループ内ではIndex参照を許可する。
+    const bool bConditionValid = LocalIndex.IsNone()
+        ? EmitBranchCondition(Statement.Expression, Variables, Condition, Diagnostics)
+        : EmitForLoopCondition(Statement.Expression, Variables, LocalIndex, Condition, Diagnostics);
+    if (bConditionValid == false)
     {
         return false;
     }
