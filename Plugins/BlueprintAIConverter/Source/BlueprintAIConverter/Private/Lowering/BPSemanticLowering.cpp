@@ -2011,6 +2011,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
         const FBPIRNode* Entry = nullptr;
         int32 PrintCount = 0;
         int32 ConverterCount = 0;
+        int32 ArithmeticCount = 0;
         bool bSupportedNodes = true;
         for (const FBPIRNode& Node : EventGraph->Nodes)
         {
@@ -2029,6 +2030,13 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             {
                 ++ConverterCount;
             }
+            else if (Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetMathLibrary") &&
+                (Node.FunctionName == TEXT("Add_IntInt") ||
+                    Node.FunctionName == TEXT("Subtract_IntInt") ||
+                    Node.FunctionName == TEXT("Multiply_IntInt")))
+            {
+                ++ArithmeticCount;
+            }
             else if (Node.MacroGraphName != TEXT("ForLoop") ||
                 Node.ClassPath != TEXT("/Script/BlueprintGraph.K2Node_MacroInstance"))
             {
@@ -2036,7 +2044,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             }
         }
         if (bSupportedNodes && Entry != nullptr && PrintCount > 0 &&
-            EventGraph->Nodes.Num() == PrintCount + ConverterCount + NestedLoops.Num() + 1)
+            EventGraph->Nodes.Num() == PrintCount + ConverterCount + ArithmeticCount + NestedLoops.Num() + 1)
         {
             const auto NextExec = [EventGraph](const FBPIRNode& Source,
                 const FName PinName, const FBPIRNode*& Next) -> bool
@@ -2313,7 +2321,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 First != nullptr && LowerChain(First, Block.Statements, 0) &&
                 Visited.Num() + UsedConverters.Num() == EventGraph->Nodes.Num() - 1 &&
                 EventGraph->ExecEdges.Num() == Visited.Num() &&
-                EventGraph->DataEdges.Num() >= UsedConverters.Num() + 1 &&
+                EventGraph->DataEdges.Num() == ConverterCount * 2 +\n                    ArithmeticCount * 2 +\n                    (ArithmeticCount > 0 ? 0 : 0) &&
                 Block.Statements.Num() == 1 &&
                 Block.Statements[0].Kind == EBPSemanticStatementKind::ForLoop)
             {
