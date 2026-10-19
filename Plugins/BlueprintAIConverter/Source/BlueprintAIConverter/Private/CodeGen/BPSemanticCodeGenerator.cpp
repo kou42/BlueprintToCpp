@@ -940,6 +940,16 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
             {
                 return false;
             }
+            if (Expression.Kind == EBPSemanticExpressionKind::Literal)
+            {
+                int32 Number = 0;
+                if (LexTryParseString(Number, *Expression.LiteralValue) == false)
+                {
+                    return false;
+                }
+                Result = LexToString(Number);
+                return true;
+            }
             if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
             {
                 if (IsIdentifier(Expression.VariableName.ToString()) == false)
