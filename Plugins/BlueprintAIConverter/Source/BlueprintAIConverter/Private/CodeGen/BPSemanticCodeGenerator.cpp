@@ -912,6 +912,19 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         }
         TextExpression = FString::Printf(TEXT("TEXT(\"%s\")"), *EscapedText);
     }
+    else if (TextArgument.Kind == EBPSemanticExpressionKind::VariableReference &&
+        TextArgument.Type.Kind == EBPSemanticTypeKind::String)
+    {
+        // メンバー変数を明示的に参照し、ローカル変数との名前衝突を避ける。
+        if (IsIdentifier(TextArgument.VariableName.ToString()) == false ||
+            TextArgument.VariableName == TEXT("this"))
+        {
+            Diagnostics.Add(TEXT("Invalid PrintString member variable name"));
+            return false;
+        }
+        TextExpression = FString::Printf(TEXT("this->%s"),
+            *TextArgument.VariableName.ToString());
+    }
     else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
         TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
         TextArgument.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
