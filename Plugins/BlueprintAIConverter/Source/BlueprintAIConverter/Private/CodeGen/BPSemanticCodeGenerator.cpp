@@ -946,16 +946,64 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                 Expression.FunctionName == TEXT("Conv_IntToString") &&
                 Expression.Arguments.Num() == 1)
             {
-                const FBPSemanticExpression& Index = Expression.Arguments[0];
-                if (Index.Kind != EBPSemanticExpressionKind::VariableReference ||
-                    Index.Type.Kind != EBPSemanticTypeKind::Int32 ||
-                    IsIdentifier(Index.VariableName.ToString()) == false)
+                // Concatの内側でもIndexと整数演算を同じ規則で再帰生成する。
+                TFunction<bool(const FBPSemanticExpression&, int32, FString&)> EmitInteger;
+                EmitInteger = [&](const FBPSemanticExpression& Integer,
+                    int32 IntegerDepth, FString& Out) -> bool
+                {
+                    if (IntegerDepth > 16 ||
+                        Integer.Type.Kind != EBPSemanticTypeKind::Int32)
+                    {
+                        return false;
+                    }
+                    if (Integer.Kind == EBPSemanticExpressionKind::Literal)
+                    {
+                        int32 Value = 0;
+                        if (LexTryParseString(Value, *Integer.LiteralValue) == false)
+                        {
+                            return false;
+                        }
+                        Out = LexToString(Value);
+                        return true;
+                    }
+                    if (Integer.Kind == EBPSemanticExpressionKind::VariableReference)
+                    {
+                        if (IsIdentifier(Integer.VariableName.ToString()) == false)
+                        {
+                            return false;
+                        }
+                        Out = Integer.VariableName.ToString();
+                        return true;
+                    }
+                    if (Integer.Kind != EBPSemanticExpressionKind::FunctionCall ||
+                        Integer.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
+                        (Integer.FunctionName != TEXT("Add_IntInt") &&
+                            Integer.FunctionName != TEXT("Subtract_IntInt") &&
+                            Integer.FunctionName != TEXT("Multiply_IntInt")) ||
+                        Integer.Arguments.Num() != 2)
+                    {
+                        return false;
+                    }
+                    FString Left;
+                    FString Right;
+                    if (EmitInteger(Integer.Arguments[0], IntegerDepth + 1, Left) == false ||
+                        EmitInteger(Integer.Arguments[1], IntegerDepth + 1, Right) == false)
+                    {
+                        return false;
+                    }
+                    Out = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
+                        *Integer.FunctionName.ToString(), *Left, *Right);
+                    return true;
+                };
+                FString IndexExpression;
+                if (EmitInteger(Expression.Arguments[0], Depth + 1,
+                        IndexExpression) == false)
                 {
                     return false;
                 }
                 Result = FString::Printf(
                     TEXT("UKismetStringLibrary::Conv_IntToString(%s)"),
-                    *Index.VariableName.ToString());
+                    *IndexExpression);
                 return true;
             }
             if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
