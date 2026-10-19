@@ -2571,6 +2571,34 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                                     {
                                         return Candidate.Id == InputLink->SourceNode;
                                     });
+                                if (Arithmetic != nullptr &&
+                                    Arithmetic->ClassPath ==
+                                        TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
+                                {
+                                    // 単独Conv_IntToStringでも反射済みint32メンバーを参照する。
+                                    const FBPSemanticVariable* Variable =
+                                        FindSemanticVariable(OutIR.Variables,
+                                            Arithmetic->VariableName);
+                                    const FBPIRPin* ValuePin = FindPin(
+                                        *Arithmetic, Arithmetic->VariableName, EGPD_Output);
+                                    if (Variable == nullptr ||
+                                        Variable->Type.Kind != EBPSemanticTypeKind::Int32 ||
+                                        Variable->ReflectedCppType != TEXT("int32") ||
+                                        ValuePin == nullptr ||
+                                        ValuePin->Id != InputLink->SourcePin ||
+                                        UsedConverters.Contains(Arithmetic->Id))
+                                    {
+                                        return false;
+                                    }
+                                    Result.Kind =
+                                        EBPSemanticExpressionKind::VariableReference;
+                                    Result.Type = Variable->Type;
+                                    Result.VariableName = Variable->Name;
+                                    Result.SourceNodeId = Arithmetic->Id;
+                                    Result.SourcePinId = ValuePin->Id;
+                                    UsedConverters.Add(Arithmetic->Id);
+                                    return true;
+                                }
                                 if (Arithmetic == nullptr ||
                                     Arithmetic->FunctionOwnerPath !=
                                         TEXT("/Script/Engine.KismetMathLibrary") ||
