@@ -2006,10 +2006,11 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     }
     // PrintStringのみの多重ループでは、Execチェーンを順にたどり、
     // 内側Completedを外側ループ本体の後続処理として配置する。
-    if (NestedLoops.Num() >= 2 && EventGraph->DataEdges.IsEmpty())
+    if (NestedLoops.Num() >= 2)
     {
         const FBPIRNode* Entry = nullptr;
         int32 PrintCount = 0;
+        int32 ConverterCount = 0;
         bool bSupportedNodes = true;
         for (const FBPIRNode& Node : EventGraph->Nodes)
         {
@@ -2023,6 +2024,11 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             {
                 ++PrintCount;
             }
+            else if (Node.FunctionName == TEXT("Conv_IntToString") &&
+                Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary"))
+            {
+                ++ConverterCount;
+            }
             else if (Node.MacroGraphName != TEXT("ForLoop") ||
                 Node.ClassPath != TEXT("/Script/BlueprintGraph.K2Node_MacroInstance"))
             {
@@ -2030,7 +2036,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             }
         }
         if (bSupportedNodes && Entry != nullptr && PrintCount > 0 &&
-            EventGraph->Nodes.Num() == PrintCount + NestedLoops.Num() + 1)
+            EventGraph->Nodes.Num() == PrintCount + ConverterCount + NestedLoops.Num() + 1)
         {
             const auto NextExec = [EventGraph](const FBPIRNode& Source,
                 const FName PinName, const FBPIRNode*& Next) -> bool
@@ -2067,6 +2073,8 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 return true;
             };
             TSet<FGuid> Visited;
+            TSet<FGuid> UsedConverters;
+            TArray<const FBPIRNode*> ActiveLoops;
             TFunction<bool(const FBPIRNode*, TArray<FBPSemanticStatement>&, int32)> LowerChain;
             LowerChain = [&](const FBPIRNode* Current,
                 TArray<FBPSemanticStatement>& Destination, int32 Depth) -> bool
@@ -2092,6 +2100,79 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                         Print.SourceNodeId = Current->Id;
                         Print.Expression = MakePrintStringExpression(
                             Values, *Current, GraphIR.ParentClassPath);
+                        // PrintStringのInStringに接続されたIndex -> IntToStringを解決する。
+                        // 各ループのIndexはそのLoopBody内でのみ有効とし、スコープ外参照を拒否する。
+                        const FBPIRPin* TextPin = FindPin(*Current, TEXT("InString"), EGPD_Input);
+                        for (const FBPIRLink& Edge : EventGraph->DataEdges)
+                        {
+                            if (TextPin == nullptr || Edge.TargetNode != Current->Id ||
+                                Edge.TargetPin != TextPin->Id)
+                            {
+                                continue;
+                            }
+                            const FBPIRNode* Converter = EventGraph->Nodes.FindByPredicate(
+                                [&Edge](const FBPIRNode& Node) { return Node.Id == Edge.SourceNode; });
+                            if (Converter == nullptr ||
+                                Converter->FunctionName != TEXT("Conv_IntToString") ||
+                                UsedConverters.Contains(Converter->Id))
+                            {
+                                return false;
+                            }
+                            const FBPIRPin* Output = FindPin(
+                                *Converter, TEXT("ReturnValue"), EGPD_Output);
+                            const FBPIRPin* Input = FindPin(*Converter, TEXT("InInt"), EGPD_Input);
+                            if (Output == nullptr || Input == nullptr ||
+                                Edge.SourcePin != Output->Id)
+                            {
+                                return false;
+                            }
+                            const FBPIRLink* InputEdge = EventGraph->DataEdges.FindByPredicate(
+                                [Converter, Input](const FBPIRLink& Link)
+                                {
+                                    return Link.TargetNode == Converter->Id &&
+                                        Link.TargetPin == Input->Id;
+                                });
+                            if (InputEdge == nullptr)
+                            {
+                                return false;
+                            }
+                            const FBPIRNode* Owner = nullptr;
+                            FName IndexName;
+                            for (int32 Level = 0; Level < ActiveLoops.Num(); ++Level)
+                            {
+                                const FBPIRPin* Index = FindPin(
+                                    *ActiveLoops[Level], TEXT("Index"), EGPD_Output);
+                                if (Index != nullptr &&
+                                    InputEdge->SourceNode == ActiveLoops[Level]->Id &&
+                                    InputEdge->SourcePin == Index->Id)
+                                {
+                                    Owner = ActiveLoops[Level];
+                                    IndexName = Level == 0 ? TEXT("LoopIndex") :
+                                        Level == 1 ? TEXT("InnerIndex") :
+                                        FName(*FString::Printf(TEXT("LoopIndex%d"), Level));
+                                }
+                            }
+                            if (Owner == nullptr)
+                            {
+                                return false;
+                            }
+                            FBPSemanticExpression Reference;
+                            Reference.Kind = EBPSemanticExpressionKind::VariableReference;
+                            Reference.Type.Kind = EBPSemanticTypeKind::Int32;
+                            Reference.VariableName = IndexName;
+                            Reference.SourceNodeId = Owner->Id;
+                            Reference.SourcePinId = InputEdge->SourcePin;
+                            FBPSemanticExpression Conversion;
+                            Conversion.Kind = EBPSemanticExpressionKind::FunctionCall;
+                            Conversion.Type.Kind = EBPSemanticTypeKind::String;
+                            Conversion.FunctionName = TEXT("Conv_IntToString");
+                            Conversion.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+                            Conversion.SourceNodeId = Converter->Id;
+                            Conversion.SourcePinId = Output->Id;
+                            Conversion.Arguments.Add(MoveTemp(Reference));
+                            Print.Expression.Arguments[1] = MoveTemp(Conversion);
+                            UsedConverters.Add(Converter->Id);
+                        }
                         Destination.Add(MoveTemp(Print));
                         const FBPIRNode* Next = nullptr;
                         if (NextExec(*Current, UEdGraphSchema_K2::PN_Then, Next) == false)
@@ -2117,7 +2198,8 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                         FBPSemanticStatement Loop;
                         Loop.Kind = EBPSemanticStatementKind::ForLoop;
                         Loop.SourceNodeId = Current->Id;
-                        Loop.LoopIndexVariable = Depth == 0 ? TEXT("LoopIndex") :\n                            Depth == 1 ? TEXT("InnerIndex") :\n                            FName(*FString::Printf(TEXT("LoopIndex%d"), Depth));
+                        Loop.LoopIndexVariable = Depth == 0 ? TEXT("LoopIndex") :
+                            Depth == 1 ? TEXT("InnerIndex") :\n                            FName(*FString::Printf(TEXT("LoopIndex%d"), Depth));
                         Loop.LoopFirstIndex = Literal(EBPSemanticTypeKind::Int32,
                             LexToString(FirstValue), *Current, TEXT("FirstIndex"));
                         Loop.LoopLastIndex = Literal(EBPSemanticTypeKind::Int32,
@@ -2127,10 +2209,12 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                         if (NextExec(*Current, TEXT("LoopBody"), Body) == false ||
                             NextExec(*Current, TEXT("Completed"), Completed) == false ||
                             Body == nullptr ||
-                            LowerChain(Body, Loop.LoopBodyStatements, Depth + 1) == false)
+                            (ActiveLoops.Add(Current),
+                                LowerChain(Body, Loop.LoopBodyStatements, Depth + 1)) == false)
                         {
                             return false;
                         }
+                        ActiveLoops.Pop();
                         Destination.Add(MoveTemp(Loop));
                         // 内側Completedは外側LoopBodyの続きとして生成する。
                         Current = Completed;
@@ -2150,8 +2234,9 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             Block.SourceEntryNodeId = Entry->Id;
             if (NextExec(*Entry, UEdGraphSchema_K2::PN_Then, First) &&
                 First != nullptr && LowerChain(First, Block.Statements, 0) &&
-                Visited.Num() == EventGraph->Nodes.Num() - 1 &&
+                Visited.Num() + UsedConverters.Num() == EventGraph->Nodes.Num() - 1 &&
                 EventGraph->ExecEdges.Num() == Visited.Num() &&
+                EventGraph->DataEdges.Num() == UsedConverters.Num() * 2 &&
                 Block.Statements.Num() == 1 &&
                 Block.Statements[0].Kind == EBPSemanticStatementKind::ForLoop)
             {
