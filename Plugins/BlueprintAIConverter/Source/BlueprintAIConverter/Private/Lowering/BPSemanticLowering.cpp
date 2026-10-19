@@ -1934,7 +1934,7 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     return OutIR.HasErrors() == false;
 }
 
-bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
     OutIR = FBPSemanticIR();
     OutIR.AssetPath = GraphIR.AssetPath;
@@ -1960,9 +1960,18 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     }
     if (GraphIR.BlueprintVariableCount != 0)
     {
-        AddDiagnostic(OutIR, FString(), FGuid(),
-            TEXT("ForLoop conversion does not yet support Blueprint member variables"));
-        return false;
+        if (Blueprint == nullptr)
+        {
+            AddDiagnostic(OutIR, FString(), FGuid(),
+                TEXT("ForLoop member variables require a compiled Blueprint"));
+            return false;
+        }
+        // 既存の変数抽出器を利用し、反射で検証された型と名前を保持する。
+        FBPSemanticVariableExtractor::Append(Blueprint, OutIR);
+        if (OutIR.HasErrors())
+        {
+            return false;
+        }
     }
 
     const FBPIRGraph* EventGraph = nullptr;
@@ -2002,6 +2011,731 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             Node.MacroGraphName == TEXT("ForLoop"))
         {
             NestedLoops.Add(&Node);
+        }
+    }
+    // PrintStringのみの多重ループでは、Execチェーンを順にたどり、
+    // 内側Completedを外側ループ本体の後続処理として配置する。
+    if (NestedLoops.Num() >= 2)
+    {
+        const FBPIRNode* Entry = nullptr;
+        int32 PrintCount = 0;
+        int32 ConverterCount = 0;
+        int32 ArithmeticCount = 0;
+        int32 AppendCount = 0;
+        int32 GetterCount = 0;
+        bool bSupportedNodes = true;
+        for (const FBPIRNode& Node : EventGraph->Nodes)
+        {
+            if (Node.FunctionName == TEXT("ReceiveBeginPlay") &&
+                Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event"))
+            {
+                Entry = &Node;
+            }
+            else if (Node.FunctionName == TEXT("PrintString") &&
+                Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction"))
+            {
+                ++PrintCount;
+            }
+            else if (Node.FunctionName == TEXT("Conv_IntToString") &&
+                Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary"))
+            {
+                ++ConverterCount;
+            }
+            else if (Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+                Node.FunctionName == TEXT("Concat_StrStr"))
+            {
+                ++AppendCount;
+            }
+            else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
+            {
+                ++GetterCount;
+            }
+            else if (Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetMathLibrary") &&
+                (Node.FunctionName == TEXT("Add_IntInt") ||
+                    Node.FunctionName == TEXT("Subtract_IntInt") ||
+                    Node.FunctionName == TEXT("Multiply_IntInt")))
+            {
+                ++ArithmeticCount;
+            }
+            else if (Node.MacroGraphName != TEXT("ForLoop") ||
+                Node.ClassPath != TEXT("/Script/BlueprintGraph.K2Node_MacroInstance"))
+            {
+                bSupportedNodes = false;
+            }
+        }
+        if (bSupportedNodes && Entry != nullptr && PrintCount > 0 &&
+            EventGraph->Nodes.Num() == PrintCount + ConverterCount + ArithmeticCount + AppendCount + GetterCount + NestedLoops.Num() + 1)
+        {
+            const auto NextExec = [EventGraph](const FBPIRNode& Source,
+                const FName PinName, const FBPIRNode*& Next) -> bool
+            {
+                Next = nullptr;
+                const FBPIRPin* Output = FindPin(Source, PinName, EGPD_Output);
+                if (Output == nullptr)
+                {
+                    return false;
+                }
+                for (const FBPIRLink& Edge : EventGraph->ExecEdges)
+                {
+                    if (Edge.SourceNode != Source.Id || Edge.SourcePin != Output->Id)
+                    {
+                        continue;
+                    }
+                    if (Next != nullptr)
+                    {
+                        return false;
+                    }
+                    Next = EventGraph->Nodes.FindByPredicate(
+                        [&Edge](const FBPIRNode& Node) { return Node.Id == Edge.TargetNode; });
+                    if (Next == nullptr)
+                    {
+                        return false;
+                    }
+                    const FBPIRPin* Execute = FindPin(
+                        *Next, UEdGraphSchema_K2::PN_Execute, EGPD_Input);
+                    if (Execute == nullptr || Execute->Id != Edge.TargetPin)
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            TSet<FGuid> Visited;
+            TSet<FGuid> UsedConverters;
+            TArray<const FBPIRNode*> ActiveLoops;
+            TFunction<bool(const FBPIRNode*, TArray<FBPSemanticStatement>&, int32)> LowerChain;
+            LowerChain = [&](const FBPIRNode* Current,
+                TArray<FBPSemanticStatement>& Destination, int32 Depth) -> bool
+            {
+                while (Current != nullptr)
+                {
+                    if (Visited.Contains(Current->Id))
+                    {
+                        return false;
+                    }
+                    Visited.Add(Current->Id);
+                    if (Current->FunctionName == TEXT("PrintString") &&
+                        Current->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction"))
+                    {
+                        FBPPrintStringCall Values;
+                        if (AnalyzeBranchPrint(
+                                GraphIR, *EventGraph, *Entry, *Current, Values, OutIR) == false)
+                        {
+                            return false;
+                        }
+                        FBPSemanticStatement Print;
+                        Print.Kind = EBPSemanticStatementKind::Expression;
+                        Print.SourceNodeId = Current->Id;
+                        Print.Expression = MakePrintStringExpression(
+                            Values, *Current, GraphIR.ParentClassPath);
+                        // PrintStringのInStringに接続されたIndex -> IntToStringを解決する。
+                        // 各ループのIndexはそのLoopBody内でのみ有効とし、スコープ外参照を拒否する。
+                        const FBPIRPin* TextPin = FindPin(*Current, TEXT("InString"), EGPD_Input);
+                        // InStringの供給元は必ず一つ以下とする。複数接続を
+                        // 先勝ちで解決するとBlueprintと異なる値を生成してしまう。
+                        int32 TextProducerCount = 0;
+                        for (const FBPIRLink& Candidate : EventGraph->DataEdges)
+                        {
+                            if (TextPin != nullptr &&
+                                Candidate.TargetNode == Current->Id &&
+                                Candidate.TargetPin == TextPin->Id)
+                            {
+                                ++TextProducerCount;
+                            }
+                        }
+                        if (TextProducerCount > 1)
+                        {
+                            return false;
+                        }
+                        for (const FBPIRLink& Edge : EventGraph->DataEdges)
+                        {
+                            if (TextPin == nullptr || Edge.TargetNode != Current->Id ||
+                                Edge.TargetPin != TextPin->Id)
+                            {
+                                continue;
+                            }
+                            const FBPIRNode* Converter = EventGraph->Nodes.FindByPredicate(
+                                [&Edge](const FBPIRNode& Node) { return Node.Id == Edge.SourceNode; });
+                            if (Converter != nullptr &&
+                                Converter->ClassPath ==
+                                    TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
+                            {
+                                // PrintStringへのFString変数直接接続も反射型で検証する。
+                                const FBPSemanticVariable* Variable =
+                                    FindSemanticVariable(OutIR.Variables,
+                                        Converter->VariableName);
+                                const FBPIRPin* ValuePin = FindPin(
+                                    *Converter, Converter->VariableName, EGPD_Output);
+                                if (Variable == nullptr ||
+                                    Variable->Type.Kind != EBPSemanticTypeKind::String ||
+                                    Variable->ReflectedCppType != TEXT("FString") ||
+                                    ValuePin == nullptr ||
+                                    ValuePin->Id != Edge.SourcePin ||
+                                    UsedConverters.Contains(Converter->Id))
+                                {
+                                    return false;
+                                }
+                                FBPSemanticExpression Reference;
+                                Reference.Kind =
+                                    EBPSemanticExpressionKind::VariableReference;
+                                Reference.Type = Variable->Type;
+                                Reference.VariableName = Variable->Name;
+                                Reference.SourceNodeId = Converter->Id;
+                                Reference.SourcePinId = ValuePin->Id;
+                                Print.Expression.Arguments[1] = MoveTemp(Reference);
+                                UsedConverters.Add(Converter->Id);
+                                continue;
+                            }
+                            if (Converter != nullptr &&
+                                Converter->FunctionName == TEXT("Concat_StrStr") &&
+                                Converter->FunctionOwnerPath ==
+                                    TEXT("/Script/Engine.KismetStringLibrary"))
+                            {
+                                // 文字列結合のリテラル入力を安全に変換する。
+                                // 未対応の入力接続は、値を黙って無視せず拒否する。
+                                const FBPIRPin* Output = FindPin(
+                                    *Converter, TEXT("ReturnValue"), EGPD_Output);
+                                const FBPIRPin* A = FindPin(*Converter, TEXT("A"), EGPD_Input);
+                                const FBPIRPin* B = FindPin(*Converter, TEXT("B"), EGPD_Input);
+                                if (Output == nullptr || A == nullptr || B == nullptr ||
+                                    Edge.SourcePin != Output->Id ||
+                                    UsedConverters.Contains(Converter->Id))
+                                {
+                                    return false;
+                                }
+                                // 結合の各入力を再帰的にたどり、結合ノードの入れ子を解決する。
+                                // 循環・複数入力・不正な出力ピンは変換せずに拒否する。
+                                TSet<FGuid> ConcatStack;
+                                TFunction<bool(const FBPIRNode&, const FBPIRPin&,
+                                    int32, FBPSemanticExpression&)> LowerString;
+                                LowerString = [&](const FBPIRNode& Node, const FBPIRPin& Pin,
+                                    int32 Depth, FBPSemanticExpression& Result) -> bool
+                                {
+                                    if (Depth > 16)
+                                    {
+                                        return false;
+                                    }
+                                    const FBPIRLink* Link = nullptr;
+                                    for (const FBPIRLink& Candidate : EventGraph->DataEdges)
+                                    {
+                                        if (Candidate.TargetNode == Node.Id &&
+                                            Candidate.TargetPin == Pin.Id)
+                                        {
+                                            if (Link != nullptr)
+                                            {
+                                                return false;
+                                            }
+                                            Link = &Candidate;
+                                        }
+                                    }
+                                    if (Link == nullptr)
+                                    {
+                                        Result = Literal(EBPSemanticTypeKind::String,
+                                            Pin.DefaultValue, Node, Pin.Name);
+                                        return true;
+                                    }
+                                    const FBPIRNode* Source = EventGraph->Nodes.FindByPredicate(
+                                        [Link](const FBPIRNode& Candidate)
+                                        {
+                                            return Candidate.Id == Link->SourceNode;
+                                        });
+                                    if (Source == nullptr)
+                                    {
+                                        return false;
+                                    }
+                                    if (Source->ClassPath ==
+                                        TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
+                                    {
+                                        // 反射で検証されたFStringメンバーのみ許可する。
+                                        const FBPSemanticVariable* Variable =
+                                            FindSemanticVariable(OutIR.Variables,
+                                                Source->VariableName);
+                                        const FBPIRPin* ValuePin = FindPin(
+                                            *Source, Source->VariableName, EGPD_Output);
+                                        if (Variable == nullptr ||
+                                            Variable->Type.Kind != EBPSemanticTypeKind::String ||
+                                            Variable->ReflectedCppType != TEXT("FString") ||
+                                            ValuePin == nullptr ||
+                                            ValuePin->Id != Link->SourcePin ||
+                                            UsedConverters.Contains(Source->Id))
+                                        {
+                                            return false;
+                                        }
+                                        Result.Kind =
+                                            EBPSemanticExpressionKind::VariableReference;
+                                        Result.Type = Variable->Type;
+                                        Result.VariableName = Variable->Name;
+                                        Result.SourceNodeId = Source->Id;
+                                        Result.SourcePinId = ValuePin->Id;
+                                        UsedConverters.Add(Source->Id);
+                                        return true;
+                                    }
+                                    if (Source->FunctionName == TEXT("Conv_IntToString") &&
+                                        Source->FunctionOwnerPath ==
+                                            TEXT("/Script/Engine.KismetStringLibrary"))
+                                    {
+                                        // Index直結の文字列化をConcatの葉として許可する。
+                                        const FBPIRPin* Output = FindPin(
+                                            *Source, TEXT("ReturnValue"), EGPD_Output);
+                                        const FBPIRPin* Input = FindPin(
+                                            *Source, TEXT("InInt"), EGPD_Input);
+                                        if (Output == nullptr || Input == nullptr ||
+                                            Output->Id != Link->SourcePin ||
+                                            UsedConverters.Contains(Source->Id))
+                                        {
+                                            return false;
+                                        }
+                                        // Concat内部のConv_IntToStringでも整数演算をたどる。
+                                        TSet<FGuid> ArithmeticStack;
+                                        TFunction<bool(const FBPIRNode&, const FBPIRPin&,
+                                            int32, FBPSemanticExpression&)> LowerInteger;
+                                        LowerInteger = [&](const FBPIRNode& Owner,
+                                            const FBPIRPin& InputPin, int32 IntegerDepth,
+                                            FBPSemanticExpression& Value) -> bool
+                                        {
+                                            if (IntegerDepth > 16)
+                                            {
+                                                return false;
+                                            }
+                                            // 入力が複数のデータエッジを持つ場合は曖昧なので拒否する。
+                                            const FBPIRLink* InputLink = nullptr;
+                                            for (const FBPIRLink& Edge : EventGraph->DataEdges)
+                                            {
+                                                if (Edge.TargetNode == Owner.Id &&
+                                                    Edge.TargetPin == InputPin.Id)
+                                                {
+                                                    if (InputLink != nullptr)
+                                                    {
+                                                        return false;
+                                                    }
+                                                    InputLink = &Edge;
+                                                }
+                                            }
+                                            if (InputLink == nullptr)
+                                            {
+                                                int32 Number = 0;
+                                                if (LexTryParseString(Number,
+                                                        *InputPin.DefaultValue) == false)
+                                                {
+                                                    return false;
+                                                }
+                                                Value = Literal(EBPSemanticTypeKind::Int32,
+                                                    LexToString(Number), Owner, InputPin.Name);
+                                                return true;
+                                            }
+                                            for (int32 Level = 0; Level < ActiveLoops.Num(); ++Level)
+                                            {
+                                                const FBPIRPin* Index = FindPin(
+                                                    *ActiveLoops[Level], TEXT("Index"), EGPD_Output);
+                                                if (Index != nullptr &&
+                                                    InputLink->SourceNode == ActiveLoops[Level]->Id &&
+                                                    InputLink->SourcePin == Index->Id)
+                                                {
+                                                    Value.Kind =
+                                                        EBPSemanticExpressionKind::VariableReference;
+                                                    Value.Type.Kind = EBPSemanticTypeKind::Int32;
+                                                    Value.VariableName = Level == 0 ?
+                                                        TEXT("LoopIndex") : Level == 1 ?
+                                                        TEXT("InnerIndex") :
+                                                        FName(*FString::Printf(
+                                                            TEXT("LoopIndex%d"), Level));
+                                                    Value.SourceNodeId = ActiveLoops[Level]->Id;
+                                                    return true;
+                                                }
+                                            }
+                                            const FBPIRNode* Math = EventGraph->Nodes.FindByPredicate(
+                                                [InputLink](const FBPIRNode& Candidate)
+                                                {
+                                                    return Candidate.Id == InputLink->SourceNode;
+                                                });
+                                            if (Math != nullptr &&
+                                                Math->ClassPath ==
+                                                    TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
+                                            {
+                                                // int32の反射済みメンバーGetterのみ算術式へ渡す。
+                                                const FBPSemanticVariable* Variable =
+                                                    FindSemanticVariable(OutIR.Variables,
+                                                        Math->VariableName);
+                                                const FBPIRPin* ValuePin = FindPin(
+                                                    *Math, Math->VariableName, EGPD_Output);
+                                                if (Variable == nullptr ||
+                                                    Variable->Type.Kind != EBPSemanticTypeKind::Int32 ||
+                                                    Variable->ReflectedCppType != TEXT("int32") ||
+                                                    ValuePin == nullptr ||
+                                                    ValuePin->Id != InputLink->SourcePin ||
+                                                    UsedConverters.Contains(Math->Id))
+                                                {
+                                                    return false;
+                                                }
+                                                Value.Kind =
+                                                    EBPSemanticExpressionKind::VariableReference;
+                                                Value.Type = Variable->Type;
+                                                Value.VariableName = Variable->Name;
+                                                Value.SourceNodeId = Math->Id;
+                                                Value.SourcePinId = ValuePin->Id;
+                                                UsedConverters.Add(Math->Id);
+                                                return true;
+                                            }
+                                            if (Math == nullptr ||
+                                                Math->FunctionOwnerPath !=
+                                                    TEXT("/Script/Engine.KismetMathLibrary") ||
+                                                (Math->FunctionName != TEXT("Add_IntInt") &&
+                                                    Math->FunctionName != TEXT("Subtract_IntInt") &&
+                                                    Math->FunctionName != TEXT("Multiply_IntInt")) ||
+                                                ArithmeticStack.Contains(Math->Id))
+                                            {
+                                                return false;
+                                            }
+                                            const FBPIRPin* ReturnPin = FindPin(
+                                                *Math, TEXT("ReturnValue"), EGPD_Output);
+                                            const FBPIRPin* Left = FindPin(
+                                                *Math, TEXT("A"), EGPD_Input);
+                                            const FBPIRPin* Right = FindPin(
+                                                *Math, TEXT("B"), EGPD_Input);
+                                            if (ReturnPin == nullptr || Left == nullptr ||
+                                                Right == nullptr ||
+                                                ReturnPin->Id != InputLink->SourcePin)
+                                            {
+                                                return false;
+                                            }
+                                            ArithmeticStack.Add(Math->Id);
+                                            FBPSemanticExpression LeftValue;
+                                            FBPSemanticExpression RightValue;
+                                            if (LowerInteger(*Math, *Left, IntegerDepth + 1,
+                                                    LeftValue) == false ||
+                                                LowerInteger(*Math, *Right, IntegerDepth + 1,
+                                                    RightValue) == false)
+                                            {
+                                                ArithmeticStack.Remove(Math->Id);
+                                                return false;
+                                            }
+                                            ArithmeticStack.Remove(Math->Id);
+                                            Value.Kind = EBPSemanticExpressionKind::FunctionCall;
+                                            Value.Type.Kind = EBPSemanticTypeKind::Int32;
+                                            Value.FunctionName = Math->FunctionName;
+                                            Value.FunctionOwnerPath = Math->FunctionOwnerPath;
+                                            Value.SourceNodeId = Math->Id;
+                                            Value.Arguments.Add(MoveTemp(LeftValue));
+                                            Value.Arguments.Add(MoveTemp(RightValue));
+                                            UsedConverters.Add(Math->Id);
+                                            return true;
+                                        };
+                                        FBPSemanticExpression IndexReference;
+                                        if (LowerInteger(*Source, *Input, 0,
+                                                IndexReference) == false)
+                                        {
+                                            return false;
+                                        }
+                                        Result.Kind = EBPSemanticExpressionKind::FunctionCall;
+                                        Result.Type.Kind = EBPSemanticTypeKind::String;
+                                        Result.FunctionName = TEXT("Conv_IntToString");
+                                        Result.FunctionOwnerPath =
+                                            TEXT("/Script/Engine.KismetStringLibrary");
+                                        Result.SourceNodeId = Source->Id;
+                                        Result.Arguments.Add(MoveTemp(IndexReference));
+                                        UsedConverters.Add(Source->Id);
+                                        return true;
+                                    }
+                                    if (Source->FunctionName != TEXT("Concat_StrStr") ||
+                                        Source->FunctionOwnerPath !=
+                                            TEXT("/Script/Engine.KismetStringLibrary") ||
+                                        ConcatStack.Contains(Source->Id) ||
+                                        UsedConverters.Contains(Source->Id))
+                                    {
+                                        return false;
+                                    }
+                                    const FBPIRPin* ReturnPin = FindPin(
+                                        *Source, TEXT("ReturnValue"), EGPD_Output);
+                                    const FBPIRPin* Left = FindPin(
+                                        *Source, TEXT("A"), EGPD_Input);
+                                    const FBPIRPin* Right = FindPin(
+                                        *Source, TEXT("B"), EGPD_Input);
+                                    if (ReturnPin == nullptr || Left == nullptr ||
+                                        Right == nullptr || ReturnPin->Id != Link->SourcePin)
+                                    {
+                                        return false;
+                                    }
+                                    ConcatStack.Add(Source->Id);
+                                    Result.Kind = EBPSemanticExpressionKind::FunctionCall;
+                                    Result.Type.Kind = EBPSemanticTypeKind::String;
+                                    Result.FunctionName = TEXT("Concat_StrStr");
+                                    Result.FunctionOwnerPath =
+                                        TEXT("/Script/Engine.KismetStringLibrary");
+                                    Result.SourceNodeId = Source->Id;
+                                    FBPSemanticExpression LeftValue;
+                                    FBPSemanticExpression RightValue;
+                                    if (LowerString(*Source, *Left, Depth + 1, LeftValue) == false ||
+                                        LowerString(*Source, *Right, Depth + 1, RightValue) == false)
+                                    {
+                                        ConcatStack.Remove(Source->Id);
+                                        return false;
+                                    }
+                                    Result.Arguments.Add(MoveTemp(LeftValue));
+                                    Result.Arguments.Add(MoveTemp(RightValue));
+                                    ConcatStack.Remove(Source->Id);
+                                    UsedConverters.Add(Source->Id);
+                                    return true;
+                                };
+                                FBPSemanticExpression Concat;
+                                Concat.Kind = EBPSemanticExpressionKind::FunctionCall;
+                                Concat.Type.Kind = EBPSemanticTypeKind::String;
+                                Concat.FunctionName = TEXT("Concat_StrStr");
+                                Concat.FunctionOwnerPath =
+                                    TEXT("/Script/Engine.KismetStringLibrary");
+                                Concat.SourceNodeId = Converter->Id;
+                                FBPSemanticExpression LeftValue;
+                                FBPSemanticExpression RightValue;
+                                ConcatStack.Add(Converter->Id);
+                                if (LowerString(*Converter, *A, 0, LeftValue) == false ||
+                                    LowerString(*Converter, *B, 0, RightValue) == false)
+                                {
+                                    return false;
+                                }
+                                Concat.Arguments.Add(MoveTemp(LeftValue));
+                                Concat.Arguments.Add(MoveTemp(RightValue));
+                                Print.Expression.Arguments[1] = MoveTemp(Concat);
+                                UsedConverters.Add(Converter->Id);
+                                continue;
+                            }
+                            if (Converter == nullptr ||
+                                Converter->FunctionName != TEXT("Conv_IntToString") ||
+                                UsedConverters.Contains(Converter->Id))
+                            {
+                                return false;
+                            }
+                            const FBPIRPin* Output = FindPin(
+                                *Converter, TEXT("ReturnValue"), EGPD_Output);
+                            const FBPIRPin* Input = FindPin(*Converter, TEXT("InInt"), EGPD_Input);
+                            if (Output == nullptr || Input == nullptr ||
+                                Edge.SourcePin != Output->Id)
+                            {
+                                return false;
+                            }
+                            // Index・整数リテラル・四則演算のうち安全に生成可能な
+                            // Add/Subtract/Multiplyを再帰的に解決する。
+                            TSet<FGuid> ArithmeticStack;
+                            TFunction<bool(const FBPIRNode&, const FBPIRPin&,
+                                int32, FBPSemanticExpression&)> LowerInteger;
+                            LowerInteger = [&](const FBPIRNode& Node, const FBPIRPin& Pin,
+                                int32 Depth, FBPSemanticExpression& Result) -> bool
+                            {
+                                if (Depth > 16)
+                                {
+                                    return false;
+                                }
+                                // 整数演算の各入力も一意な供給元だけを許可する。
+                                const FBPIRLink* InputLink = nullptr;
+                                for (const FBPIRLink& Link : EventGraph->DataEdges)
+                                {
+                                    if (Link.TargetNode == Node.Id &&
+                                        Link.TargetPin == Pin.Id)
+                                    {
+                                        if (InputLink != nullptr)
+                                        {
+                                            return false;
+                                        }
+                                        InputLink = &Link;
+                                    }
+                                }
+                                if (InputLink == nullptr)
+                                {
+                                    int32 Number = 0;
+                                    if (LexTryParseString(Number, *Pin.DefaultValue) == false)
+                                    {
+                                        return false;
+                                    }
+                                    Result = Literal(EBPSemanticTypeKind::Int32,
+                                        LexToString(Number), Node, Pin.Name);
+                                    return true;
+                                }
+                                for (int32 Level = 0; Level < ActiveLoops.Num(); ++Level)
+                                {
+                                    const FBPIRPin* Index = FindPin(
+                                        *ActiveLoops[Level], TEXT("Index"), EGPD_Output);
+                                    if (Index != nullptr &&
+                                        InputLink->SourceNode == ActiveLoops[Level]->Id &&
+                                        InputLink->SourcePin == Index->Id)
+                                    {
+                                        Result.Kind = EBPSemanticExpressionKind::VariableReference;
+                                        Result.Type.Kind = EBPSemanticTypeKind::Int32;
+                                        Result.VariableName = Level == 0 ? TEXT("LoopIndex") :
+                                            Level == 1 ? TEXT("InnerIndex") :
+                                            FName(*FString::Printf(TEXT("LoopIndex%d"), Level));
+                                        Result.SourceNodeId = ActiveLoops[Level]->Id;
+                                        // ローカルIndexにはメンバーGetter識別用のSourcePinIdを設定しない。
+                                        return true;
+                                    }
+                                }
+                                const FBPIRNode* Arithmetic = EventGraph->Nodes.FindByPredicate(
+                                    [InputLink](const FBPIRNode& Candidate)
+                                    {
+                                        return Candidate.Id == InputLink->SourceNode;
+                                    });
+                                if (Arithmetic != nullptr &&
+                                    Arithmetic->ClassPath ==
+                                        TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
+                                {
+                                    // 単独Conv_IntToStringでも反射済みint32メンバーを参照する。
+                                    const FBPSemanticVariable* Variable =
+                                        FindSemanticVariable(OutIR.Variables,
+                                            Arithmetic->VariableName);
+                                    const FBPIRPin* ValuePin = FindPin(
+                                        *Arithmetic, Arithmetic->VariableName, EGPD_Output);
+                                    if (Variable == nullptr ||
+                                        Variable->Type.Kind != EBPSemanticTypeKind::Int32 ||
+                                        Variable->ReflectedCppType != TEXT("int32") ||
+                                        ValuePin == nullptr ||
+                                        ValuePin->Id != InputLink->SourcePin ||
+                                        UsedConverters.Contains(Arithmetic->Id))
+                                    {
+                                        return false;
+                                    }
+                                    Result.Kind =
+                                        EBPSemanticExpressionKind::VariableReference;
+                                    Result.Type = Variable->Type;
+                                    Result.VariableName = Variable->Name;
+                                    Result.SourceNodeId = Arithmetic->Id;
+                                    Result.SourcePinId = ValuePin->Id;
+                                    UsedConverters.Add(Arithmetic->Id);
+                                    return true;
+                                }
+                                if (Arithmetic == nullptr ||
+                                    Arithmetic->FunctionOwnerPath !=
+                                        TEXT("/Script/Engine.KismetMathLibrary") ||
+                                    (Arithmetic->FunctionName != TEXT("Add_IntInt") &&
+                                        Arithmetic->FunctionName != TEXT("Subtract_IntInt") &&
+                                        Arithmetic->FunctionName != TEXT("Multiply_IntInt")) ||
+                                    ArithmeticStack.Contains(Arithmetic->Id))
+                                {
+                                    return false;
+                                }
+                                const FBPIRPin* Output = FindPin(
+                                    *Arithmetic, TEXT("ReturnValue"), EGPD_Output);
+                                if (Output == nullptr || Output->Id != InputLink->SourcePin)
+                                {
+                                    return false;
+                                }
+                                ArithmeticStack.Add(Arithmetic->Id);
+                                Result.Kind = EBPSemanticExpressionKind::FunctionCall;
+                                Result.Type.Kind = EBPSemanticTypeKind::Int32;
+                                Result.FunctionName = Arithmetic->FunctionName;
+                                Result.FunctionOwnerPath = Arithmetic->FunctionOwnerPath;
+                                Result.SourceNodeId = Arithmetic->Id;
+                                const FName Names[] = { TEXT("A"), TEXT("B") };
+                                for (const FName& Name : Names)
+                                {
+                                    const FBPIRPin* Operand = FindPin(
+                                        *Arithmetic, Name, EGPD_Input);
+                                    FBPSemanticExpression Argument;
+                                    if (Operand == nullptr ||
+                                        LowerInteger(*Arithmetic, *Operand, Depth + 1,
+                                            Argument) == false)
+                                    {
+                                        ArithmeticStack.Remove(Arithmetic->Id);
+                                        return false;
+                                    }
+                                    Result.Arguments.Add(MoveTemp(Argument));
+                                }
+                                ArithmeticStack.Remove(Arithmetic->Id);
+                                UsedConverters.Add(Arithmetic->Id);
+                                return true;
+                            };
+                            FBPSemanticExpression Reference;
+                            if (LowerInteger(*Converter, *Input, 0, Reference) == false)
+                            {
+                                return false;
+                            }
+                            FBPSemanticExpression Conversion;
+                            Conversion.Kind = EBPSemanticExpressionKind::FunctionCall;
+                            Conversion.Type.Kind = EBPSemanticTypeKind::String;
+                            Conversion.FunctionName = TEXT("Conv_IntToString");
+                            Conversion.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+                            Conversion.SourceNodeId = Converter->Id;
+                            Conversion.SourcePinId = Output->Id;
+                            Conversion.Arguments.Add(MoveTemp(Reference));
+                            Print.Expression.Arguments[1] = MoveTemp(Conversion);
+                            UsedConverters.Add(Converter->Id);
+                        }
+                        Destination.Add(MoveTemp(Print));
+                        const FBPIRNode* Next = nullptr;
+                        if (NextExec(*Current, UEdGraphSchema_K2::PN_Then, Next) == false)
+                        {
+                            return false;
+                        }
+                        Current = Next;
+                    }
+                    else if (Current->MacroGraphName == TEXT("ForLoop") &&
+                        Current->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
+                        Depth < 16)
+                    {
+                        const FBPIRPin* First = FindPin(*Current, TEXT("FirstIndex"), EGPD_Input);
+                        const FBPIRPin* Last = FindPin(*Current, TEXT("LastIndex"), EGPD_Input);
+                        int32 FirstValue = 0;
+                        int32 LastValue = 0;
+                        if (First == nullptr || Last == nullptr ||
+                            LexTryParseString(FirstValue, *First->DefaultValue) == false ||
+                            LexTryParseString(LastValue, *Last->DefaultValue) == false)
+                        {
+                            return false;
+                        }
+                        FBPSemanticStatement Loop;
+                        Loop.Kind = EBPSemanticStatementKind::ForLoop;
+                        Loop.SourceNodeId = Current->Id;
+                        Loop.LoopIndexVariable = Depth == 0 ? TEXT("LoopIndex") :
+                            Depth == 1 ? TEXT("InnerIndex") :
+                            FName(*FString::Printf(TEXT("LoopIndex%d"), Depth));
+                        Loop.LoopFirstIndex = Literal(EBPSemanticTypeKind::Int32,
+                            LexToString(FirstValue), *Current, TEXT("FirstIndex"));
+                        Loop.LoopLastIndex = Literal(EBPSemanticTypeKind::Int32,
+                            LexToString(LastValue), *Current, TEXT("LastIndex"));
+                        const FBPIRNode* Body = nullptr;
+                        const FBPIRNode* Completed = nullptr;
+                        if (NextExec(*Current, TEXT("LoopBody"), Body) == false ||
+                            NextExec(*Current, TEXT("Completed"), Completed) == false ||
+                            Body == nullptr)
+                        {
+                            return false;
+                        }
+                        ActiveLoops.Add(Current);
+                        const bool bBodyLowered = LowerChain(
+                            Body, Loop.LoopBodyStatements, Depth + 1);
+                        ActiveLoops.Pop();
+                        if (bBodyLowered == false)
+                        {
+                            return false;
+                        }
+                        Destination.Add(MoveTemp(Loop));
+                        // 内側Completedは外側LoopBodyの続きとして生成する。
+                        Current = Completed;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            const FBPIRNode* First = nullptr;
+            FBPSemanticFunction Function;
+            Function.Name = TEXT("BeginPlay");
+            Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+            FBPSemanticBasicBlock Block;
+            Block.SourceEntryNodeId = Entry->Id;
+            if (NextExec(*Entry, UEdGraphSchema_K2::PN_Then, First) &&
+                First != nullptr && LowerChain(First, Block.Statements, 0) &&
+                Visited.Num() + UsedConverters.Num() == EventGraph->Nodes.Num() - 1 &&
+                EventGraph->ExecEdges.Num() == Visited.Num() &&
+                UsedConverters.Num() == ConverterCount + ArithmeticCount + AppendCount + GetterCount &&
+                EventGraph->DataEdges.Num() >= ConverterCount * 2 + AppendCount &&
+                Block.Statements.Num() == 1 &&
+                Block.Statements[0].Kind == EBPSemanticStatementKind::ForLoop)
+            {
+                Function.Blocks.Add(MoveTemp(Block));
+                OutIR.Functions.Add(MoveTemp(Function));
+                return true;
+            }
+            // 専用Loweringが扱う既存の二重ループ形状はそちらへ委譲する。
+            // それ以外の未対応形状は後続の検証で診断する。
         }
     }
     if (NestedLoops.Num() == 2)
@@ -3375,7 +4109,7 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
     if (bHasForLoop && bHasPrintString && bHasBranch == false &&
         bHasGetActorLocation == false && bHasSetActorLocation == false)
     {
-        return LowerForLoop(GraphIR, OutIR);
+        return LowerForLoop(Blueprint, GraphIR, OutIR);
     }
     if (bHasBranch && bHasForLoop == false && bHasPrintString &&
         bHasGetActorLocation == false && bHasSetActorLocation == false)
@@ -3451,5 +4185,11 @@ bool FBPSemanticLowering::LowerBranch(const UBlueprint* Blueprint,
 
 bool FBPSemanticLowering::LowerForLoop(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
-    return LowerForLoopImpl(GraphIR, OutIR);
+    return LowerForLoopImpl(nullptr, GraphIR, OutIR);
+}
+
+bool FBPSemanticLowering::LowerForLoop(const UBlueprint* Blueprint,
+    const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+{
+    return LowerForLoopImpl(Blueprint, GraphIR, OutIR);
 }

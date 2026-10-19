@@ -33,4 +33,8 @@ public:
 
     // BeginPlay -> ForLoop -> PrintString の限定形状を、両端を含むfor文へLoweringする。
     static bool LowerForLoop(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR);
+
+    // メンバー変数を参照するループでは、Blueprintから反射済みの変数定義を取得する。
+    static bool LowerForLoop(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
+        FBPSemanticIR& OutIR);
 };

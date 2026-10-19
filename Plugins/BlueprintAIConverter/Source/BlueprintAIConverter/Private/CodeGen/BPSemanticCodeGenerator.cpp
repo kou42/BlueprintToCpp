@@ -912,6 +912,152 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         }
         TextExpression = FString::Printf(TEXT("TEXT(\"%s\")"), *EscapedText);
     }
+    else if (TextArgument.Kind == EBPSemanticExpressionKind::VariableReference &&
+        TextArgument.Type.Kind == EBPSemanticTypeKind::String)
+    {
+        // メンバー変数を明示的に参照し、ローカル変数との名前衝突を避ける。
+        if (IsIdentifier(TextArgument.VariableName.ToString()) == false ||
+            TextArgument.VariableName == TEXT("this"))
+        {
+            Diagnostics.Add(TEXT("Invalid PrintString member variable name"));
+            return false;
+        }
+        TextExpression = FString::Printf(TEXT("this->%s"),
+            *TextArgument.VariableName.ToString());
+    }
+    else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
+        TextArgument.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+        TextArgument.FunctionName == TEXT("Concat_StrStr") &&
+        TextArgument.Arguments.Num() == 2)
+    {
+        // 結合式を再帰的に出力する。深さ制限と関数の許可リストで
+        // 不正なIRから任意のC++式が生成されることを防ぐ。
+        TFunction<bool(const FBPSemanticExpression&, int32, FString&)> EmitString;
+        EmitString = [&](const FBPSemanticExpression& Expression,
+            int32 Depth, FString& Result) -> bool
+        {
+            if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::String)
+            {
+                return false;
+            }
+            if (Expression.Kind == EBPSemanticExpressionKind::Literal)
+            {
+                FString Value;
+                FString Escaped;
+                if (ReadArgument(Expression, EBPSemanticTypeKind::String,
+                        Value, Diagnostics) == false ||
+                    EscapeString(Value, Escaped, Diagnostics) == false)
+                {
+                    return false;
+                }
+                Result = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
+                return true;
+            }
+            if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
+            {
+                if (IsIdentifier(Expression.VariableName.ToString()) == false ||
+                    Expression.VariableName == TEXT("this"))
+                {
+                    return false;
+                }
+                Result = FString::Printf(TEXT("this->%s"),
+                    *Expression.VariableName.ToString());
+                return true;
+            }
+            if (Expression.Kind == EBPSemanticExpressionKind::FunctionCall &&
+                Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+                Expression.FunctionName == TEXT("Conv_IntToString") &&
+                Expression.Arguments.Num() == 1)
+            {
+                // Concatの内側でもIndexと整数演算を同じ規則で再帰生成する。
+                TFunction<bool(const FBPSemanticExpression&, int32, FString&)> EmitInteger;
+                EmitInteger = [&](const FBPSemanticExpression& Integer,
+                    int32 IntegerDepth, FString& Out) -> bool
+                {
+                    if (IntegerDepth > 16 ||
+                        Integer.Type.Kind != EBPSemanticTypeKind::Int32)
+                    {
+                        return false;
+                    }
+                    if (Integer.Kind == EBPSemanticExpressionKind::Literal)
+                    {
+                        int32 Value = 0;
+                        if (LexTryParseString(Value, *Integer.LiteralValue) == false)
+                        {
+                            return false;
+                        }
+                        Out = LexToString(Value);
+                        return true;
+                    }
+                    if (Integer.Kind == EBPSemanticExpressionKind::VariableReference)
+                    {
+                        if (IsIdentifier(Integer.VariableName.ToString()) == false)
+                        {
+                            return false;
+                        }
+                        // Getterの出力ピンIDは有効、ForLoop Indexは未設定。
+                        // 名前の接頭辞では判定せず、IR上の参照元で区別する。
+                        const FString Name = Integer.VariableName.ToString();
+                        Out = Integer.SourcePinId.IsValid()
+                            ? FString::Printf(TEXT("this->%s"), *Name) : Name;
+                        return true;
+                    }
+                    if (Integer.Kind != EBPSemanticExpressionKind::FunctionCall ||
+                        Integer.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
+                        (Integer.FunctionName != TEXT("Add_IntInt") &&
+                            Integer.FunctionName != TEXT("Subtract_IntInt") &&
+                            Integer.FunctionName != TEXT("Multiply_IntInt")) ||
+                        Integer.Arguments.Num() != 2)
+                    {
+                        return false;
+                    }
+                    FString Left;
+                    FString Right;
+                    if (EmitInteger(Integer.Arguments[0], IntegerDepth + 1, Left) == false ||
+                        EmitInteger(Integer.Arguments[1], IntegerDepth + 1, Right) == false)
+                    {
+                        return false;
+                    }
+                    Out = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
+                        *Integer.FunctionName.ToString(), *Left, *Right);
+                    return true;
+                };
+                FString IndexExpression;
+                if (EmitInteger(Expression.Arguments[0], Depth + 1,
+                        IndexExpression) == false)
+                {
+                    return false;
+                }
+                Result = FString::Printf(
+                    TEXT("UKismetStringLibrary::Conv_IntToString(%s)"),
+                    *IndexExpression);
+                return true;
+            }
+            if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
+                Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetStringLibrary") ||
+                Expression.FunctionName != TEXT("Concat_StrStr") ||
+                Expression.Arguments.Num() != 2)
+            {
+                return false;
+            }
+            FString Left;
+            FString Right;
+            if (EmitString(Expression.Arguments[0], Depth + 1, Left) == false ||
+                EmitString(Expression.Arguments[1], Depth + 1, Right) == false)
+            {
+                return false;
+            }
+            Result = FString::Printf(TEXT("UKismetStringLibrary::Concat_StrStr(%s, %s)"),
+                *Left, *Right);
+            return true;
+        };
+        if (EmitString(TextArgument, 0, TextExpression) == false)
+        {
+            Diagnostics.Add(TEXT("Unsupported nested string concatenation"));
+            return false;
+        }
+    }
     else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
         TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
         TextArgument.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
@@ -921,8 +1067,13 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         TextArgument.Arguments[0].Type.Kind == EBPSemanticTypeKind::Int32 &&
         IsIdentifier(TextArgument.Arguments[0].VariableName.ToString()))
     {
+        // Getterは出力ピンIDを持つ。LoopIndexのローカル参照と区別する。
+        const FBPSemanticExpression& Input = TextArgument.Arguments[0];
+        const FString Name = Input.VariableName.ToString();
+        const FString Reference = Input.SourcePinId.IsValid()
+            ? FString::Printf(TEXT("this->%s"), *Name) : Name;
         TextExpression = FString::Printf(TEXT("UKismetStringLibrary::Conv_IntToString(%s)"),
-            *TextArgument.Arguments[0].VariableName.ToString());
+            *Reference);
     }
     else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
         TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
@@ -939,6 +1090,16 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
             if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::Int32)
             {
                 return false;
+            }
+            if (Expression.Kind == EBPSemanticExpressionKind::Literal)
+            {
+                int32 Number = 0;
+                if (LexTryParseString(Number, *Expression.LiteralValue) == false)
+                {
+                    return false;
+                }
+                Result = LexToString(Number);
+                return true;
             }
             if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
             {

@@ -2427,4 +2427,898 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     return bElementLowered;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedSequentialBodyTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedSequentialBody",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedSequentialBodyTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR;
+    IR.AssetPath = TEXT("/Game/BP_NestedSequential");
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    Graph.Kind = TEXT("event");
+    FBPIRNode Begin;
+    Begin.Id = FGuid::NewGuid();
+    Begin.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_Event");
+    Begin.FunctionName = TEXT("ReceiveBeginPlay");
+    Begin.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Graph.Nodes.Add(MoveTemp(Begin));
+    const auto MakeLoop = []()
+    {
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+        Node.MacroGraphName = TEXT("ForLoop");
+        Node.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("0")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+        return Node;
+    };
+    Graph.Nodes.Add(MakeLoop());
+    Graph.Nodes.Add(MakeLoop());
+    const TCHAR* Names[] = {
+        TEXT("Process1"), TEXT("Process2"), TEXT("Process3"),
+        TEXT("Process4"), TEXT("Process5"), TEXT("Process6")
+    };
+    for (const TCHAR* Name : Names)
+    {
+        FBPIRNode Print;
+        Print.Id = FGuid::NewGuid();
+        Print.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Print.FunctionName = TEXT("PrintString");
+        Print.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"), Name));
+        Graph.Nodes.Add(MoveTemp(Print));
+    }
+    const auto Connect = [&Graph](int32 From, int32 Output, int32 To)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Graph.Nodes[From].Id;
+        Edge.SourcePin = Graph.Nodes[From].Pins[Output].Id;
+        Edge.TargetNode = Graph.Nodes[To].Id;
+        Edge.TargetPin = Graph.Nodes[To].Pins[0].Id;
+        Graph.ExecEdges.Add(Edge);
+    };
+    // 外側: 処理1 -> 処理2 -> 内側ForLoop -> 処理5 -> 処理6。
+    // 内側: 処理3 -> 処理4。Completedは外側本体の後続処理に接続する。
+    Connect(0, 0, 1);
+    Connect(1, 3, 3);
+    Connect(3, 1, 4);
+    Connect(4, 1, 2);
+    Connect(2, 3, 5);
+    Connect(5, 1, 6);
+    Connect(2, 5, 7);
+    Connect(7, 1, 8);
+    IR.Graphs.Add(MoveTemp(Graph));
+
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をLowering"),
+        FBPSemanticLowering::LowerForLoop(IR, Semantic)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
+    TestEqual(TEXT("外側の本体は5文"), Outer.LoopBodyStatements.Num(), 5);
+    TestEqual(TEXT("内側ループは3番目"), Outer.LoopBodyStatements[2].Kind,
+        EBPSemanticStatementKind::ForLoop);
+    const FBPSemanticStatement& Inner = Outer.LoopBodyStatements[2];
+    TestEqual(TEXT("内側の本体は2文"), Inner.LoopBodyStatements.Num(), 2);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をC++生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ANestedSequentialActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    // 内側ループ終了後も外側ループ内で処理5・処理6が順に生成される。
+    int32 Previous = INDEX_NONE;
+    for (const TCHAR* Name : Names)
+    {
+        const int32 Position = Files.SourceContent.Find(Name);
+        TestTrue(FString::Printf(TEXT("%s の出力順"), Name),
+            Position != INDEX_NONE && Position > Previous);
+        Previous = Position;
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedIndexPrintTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedIndexPrint",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedIndexPrintTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR;
+    IR.AssetPath = TEXT("/Game/BP_NestedSequential");
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    Graph.Kind = TEXT("event");
+    FBPIRNode Begin;
+    Begin.Id = FGuid::NewGuid();
+    Begin.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_Event");
+    Begin.FunctionName = TEXT("ReceiveBeginPlay");
+    Begin.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Graph.Nodes.Add(MoveTemp(Begin));
+    const auto MakeLoop = []()
+    {
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+        Node.MacroGraphName = TEXT("ForLoop");
+        Node.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("0")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+        return Node;
+    };
+    Graph.Nodes.Add(MakeLoop());
+    Graph.Nodes.Add(MakeLoop());
+    const TCHAR* Names[] = {
+        TEXT("Process1"), TEXT("Process2"), TEXT("Process3"),
+        TEXT("Process4"), TEXT("Process5"), TEXT("Process6")
+    };
+    for (const TCHAR* Name : Names)
+    {
+        FBPIRNode Print;
+        Print.Id = FGuid::NewGuid();
+        Print.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Print.FunctionName = TEXT("PrintString");
+        Print.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"), Name));
+        Graph.Nodes.Add(MoveTemp(Print));
+    }
+    const auto Connect = [&Graph](int32 From, int32 Output, int32 To)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Graph.Nodes[From].Id;
+        Edge.SourcePin = Graph.Nodes[From].Pins[Output].Id;
+        Edge.TargetNode = Graph.Nodes[To].Id;
+        Edge.TargetPin = Graph.Nodes[To].Pins[0].Id;
+        Graph.ExecEdges.Add(Edge);
+    };
+    // 外側: 処理1 -> 処理2 -> 内側ForLoop -> 処理5 -> 処理6。
+    // 内側: 処理3 -> 処理4。Completedは外側本体の後続処理に接続する。
+    Connect(0, 0, 1);
+    Connect(1, 3, 3);
+    Connect(3, 1, 4);
+    Connect(4, 1, 2);
+    Connect(2, 3, 5);
+    Connect(5, 1, 6);
+    Connect(2, 5, 7);
+    Connect(7, 1, 8);
+    // 内側Indexを文字列に変換し、処理3のPrintStringへ接続する。
+    FBPIRNode Converter;
+    Converter.Id = FGuid::NewGuid();
+    Converter.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Converter.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+    Converter.FunctionName = TEXT("Conv_IntToString");
+    Converter.Pins.Add(MakeLoopPin(TEXT("InInt"), EGPD_Input, TEXT("int")));
+    Converter.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("string")));
+    FBPIRLink IndexLink;
+    IndexLink.SourceNode = Graph.Nodes[2].Id;
+    IndexLink.SourcePin = Graph.Nodes[2].Pins[4].Id;
+    IndexLink.TargetNode = Converter.Id;
+    IndexLink.TargetPin = Converter.Pins[0].Id;
+    Graph.DataEdges.Add(IndexLink);
+    FBPIRLink StringLink;
+    StringLink.SourceNode = Converter.Id;
+    StringLink.SourcePin = Converter.Pins[1].Id;
+    StringLink.TargetNode = Graph.Nodes[5].Id;
+    StringLink.TargetPin = Graph.Nodes[5].Pins[2].Id;
+    Graph.DataEdges.Add(StringLink);
+    Graph.Nodes.Add(MoveTemp(Converter));
+    IR.Graphs.Add(MoveTemp(Graph));
+
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をLowering"),
+        FBPSemanticLowering::LowerForLoop(IR, Semantic)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
+    TestEqual(TEXT("外側の本体は5文"), Outer.LoopBodyStatements.Num(), 5);
+    TestEqual(TEXT("内側ループは3番目"), Outer.LoopBodyStatements[2].Kind,
+        EBPSemanticStatementKind::ForLoop);
+    const FBPSemanticStatement& Inner = Outer.LoopBodyStatements[2];
+    TestEqual(TEXT("内側の本体は2文"), Inner.LoopBodyStatements.Num(), 2);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をC++生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ANestedSequentialActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("内側Indexの文字列変換を生成"),
+        Files.SourceContent.Contains(TEXT("InnerIndex")));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedArithmeticPrintTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedArithmeticPrint",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedArithmeticPrintTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR;
+    IR.AssetPath = TEXT("/Game/BP_NestedSequential");
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    Graph.Kind = TEXT("event");
+    FBPIRNode Begin;
+    Begin.Id = FGuid::NewGuid();
+    Begin.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_Event");
+    Begin.FunctionName = TEXT("ReceiveBeginPlay");
+    Begin.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Graph.Nodes.Add(MoveTemp(Begin));
+    const auto MakeLoop = []()
+    {
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+        Node.MacroGraphName = TEXT("ForLoop");
+        Node.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("0")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+        return Node;
+    };
+    Graph.Nodes.Add(MakeLoop());
+    Graph.Nodes.Add(MakeLoop());
+    const TCHAR* Names[] = {
+        TEXT("Process1"), TEXT("Process2"), TEXT("Process3"),
+        TEXT("Process4"), TEXT("Process5"), TEXT("Process6")
+    };
+    for (const TCHAR* Name : Names)
+    {
+        FBPIRNode Print;
+        Print.Id = FGuid::NewGuid();
+        Print.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Print.FunctionName = TEXT("PrintString");
+        Print.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"), Name));
+        Graph.Nodes.Add(MoveTemp(Print));
+    }
+    const auto Connect = [&Graph](int32 From, int32 Output, int32 To)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Graph.Nodes[From].Id;
+        Edge.SourcePin = Graph.Nodes[From].Pins[Output].Id;
+        Edge.TargetNode = Graph.Nodes[To].Id;
+        Edge.TargetPin = Graph.Nodes[To].Pins[0].Id;
+        Graph.ExecEdges.Add(Edge);
+    };
+    // 外側: 処理1 -> 処理2 -> 内側ForLoop -> 処理5 -> 処理6。
+    // 内側: 処理3 -> 処理4。Completedは外側本体の後続処理に接続する。
+    Connect(0, 0, 1);
+    Connect(1, 3, 3);
+    Connect(3, 1, 4);
+    Connect(4, 1, 2);
+    Connect(2, 3, 5);
+    Connect(5, 1, 6);
+    Connect(2, 5, 7);
+    Connect(7, 1, 8);
+    // 内側Indexを文字列に変換し、処理3のPrintStringへ接続する。
+    FBPIRNode Converter;
+    Converter.Id = FGuid::NewGuid();
+    Converter.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Converter.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+    Converter.FunctionName = TEXT("Conv_IntToString");
+    Converter.Pins.Add(MakeLoopPin(TEXT("InInt"), EGPD_Input, TEXT("int")));
+    Converter.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("string")));
+    FBPIRLink IndexLink;
+    IndexLink.SourceNode = Graph.Nodes[2].Id;
+    IndexLink.SourcePin = Graph.Nodes[2].Pins[4].Id;
+    IndexLink.TargetNode = Converter.Id;
+    IndexLink.TargetPin = Converter.Pins[0].Id;
+    Graph.DataEdges.Add(IndexLink);
+    FBPIRLink StringLink;
+    StringLink.SourceNode = Converter.Id;
+    StringLink.SourcePin = Converter.Pins[1].Id;
+    StringLink.TargetNode = Graph.Nodes[5].Id;
+    StringLink.TargetPin = Graph.Nodes[5].Pins[2].Id;
+    Graph.DataEdges.Add(StringLink);
+    // InnerIndex + 10をConv_IntToStringへ渡す。
+    FBPIRNode Addition;
+    Addition.Id = FGuid::NewGuid();
+    Addition.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Addition.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Addition.FunctionName = TEXT("Add_IntInt");
+    Addition.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), TEXT("10")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("int")));
+    Graph.DataEdges[0].TargetNode = Addition.Id;
+    Graph.DataEdges[0].TargetPin = Addition.Pins[0].Id;
+    FBPIRLink ArithmeticLink;
+    ArithmeticLink.SourceNode = Addition.Id;
+    ArithmeticLink.SourcePin = Addition.Pins[2].Id;
+    ArithmeticLink.TargetNode = Converter.Id;
+    ArithmeticLink.TargetPin = Converter.Pins[0].Id;
+    Graph.DataEdges.Add(ArithmeticLink);
+    Graph.Nodes.Add(MoveTemp(Addition));
+    Graph.Nodes.Add(MoveTemp(Converter));
+    IR.Graphs.Add(MoveTemp(Graph));
+
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をLowering"),
+        FBPSemanticLowering::LowerForLoop(IR, Semantic)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
+    TestEqual(TEXT("外側の本体は5文"), Outer.LoopBodyStatements.Num(), 5);
+    TestEqual(TEXT("内側ループは3番目"), Outer.LoopBodyStatements[2].Kind,
+        EBPSemanticStatementKind::ForLoop);
+    const FBPSemanticStatement& Inner = Outer.LoopBodyStatements[2];
+    TestEqual(TEXT("内側の本体は2文"), Inner.LoopBodyStatements.Num(), 2);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をC++生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ANestedSequentialActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("内側Indexの文字列変換を生成"),
+        Files.SourceContent.Contains(TEXT("Add_IntInt(InnerIndex, 10)")));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedConcatArithmeticPrintTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedConcatArithmeticPrint",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedConcatArithmeticPrintTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR;
+    IR.AssetPath = TEXT("/Game/BP_NestedSequential");
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    Graph.Kind = TEXT("event");
+    FBPIRNode Begin;
+    Begin.Id = FGuid::NewGuid();
+    Begin.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_Event");
+    Begin.FunctionName = TEXT("ReceiveBeginPlay");
+    Begin.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Graph.Nodes.Add(MoveTemp(Begin));
+    const auto MakeLoop = []()
+    {
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+        Node.MacroGraphName = TEXT("ForLoop");
+        Node.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("0")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+        return Node;
+    };
+    Graph.Nodes.Add(MakeLoop());
+    Graph.Nodes.Add(MakeLoop());
+    const TCHAR* Names[] = {
+        TEXT("Process1"), TEXT("Process2"), TEXT("Process3"),
+        TEXT("Process4"), TEXT("Process5"), TEXT("Process6")
+    };
+    for (const TCHAR* Name : Names)
+    {
+        FBPIRNode Print;
+        Print.Id = FGuid::NewGuid();
+        Print.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Print.FunctionName = TEXT("PrintString");
+        Print.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"), Name));
+        Graph.Nodes.Add(MoveTemp(Print));
+    }
+    const auto Connect = [&Graph](int32 From, int32 Output, int32 To)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Graph.Nodes[From].Id;
+        Edge.SourcePin = Graph.Nodes[From].Pins[Output].Id;
+        Edge.TargetNode = Graph.Nodes[To].Id;
+        Edge.TargetPin = Graph.Nodes[To].Pins[0].Id;
+        Graph.ExecEdges.Add(Edge);
+    };
+    // 外側: 処理1 -> 処理2 -> 内側ForLoop -> 処理5 -> 処理6。
+    // 内側: 処理3 -> 処理4。Completedは外側本体の後続処理に接続する。
+    Connect(0, 0, 1);
+    Connect(1, 3, 3);
+    Connect(3, 1, 4);
+    Connect(4, 1, 2);
+    Connect(2, 3, 5);
+    Connect(5, 1, 6);
+    Connect(2, 5, 7);
+    Connect(7, 1, 8);
+    // 内側Indexを文字列に変換し、処理3のPrintStringへ接続する。
+    FBPIRNode Converter;
+    Converter.Id = FGuid::NewGuid();
+    Converter.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Converter.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+    Converter.FunctionName = TEXT("Conv_IntToString");
+    Converter.Pins.Add(MakeLoopPin(TEXT("InInt"), EGPD_Input, TEXT("int")));
+    Converter.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("string")));
+    FBPIRLink IndexLink;
+    IndexLink.SourceNode = Graph.Nodes[2].Id;
+    IndexLink.SourcePin = Graph.Nodes[2].Pins[4].Id;
+    IndexLink.TargetNode = Converter.Id;
+    IndexLink.TargetPin = Converter.Pins[0].Id;
+    Graph.DataEdges.Add(IndexLink);
+    FBPIRLink StringLink;
+    StringLink.SourceNode = Converter.Id;
+    StringLink.SourcePin = Converter.Pins[1].Id;
+    StringLink.TargetNode = Graph.Nodes[5].Id;
+    StringLink.TargetPin = Graph.Nodes[5].Pins[2].Id;
+    Graph.DataEdges.Add(StringLink);
+    // InnerIndex + 10をConv_IntToStringへ渡す。
+    FBPIRNode Addition;
+    Addition.Id = FGuid::NewGuid();
+    Addition.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Addition.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Addition.FunctionName = TEXT("Add_IntInt");
+    Addition.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), TEXT("10")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("int")));
+    Graph.DataEdges[0].TargetNode = Addition.Id;
+    Graph.DataEdges[0].TargetPin = Addition.Pins[0].Id;
+    FBPIRLink ArithmeticLink;
+    ArithmeticLink.SourceNode = Addition.Id;
+    ArithmeticLink.SourcePin = Addition.Pins[2].Id;
+    ArithmeticLink.TargetNode = Converter.Id;
+    ArithmeticLink.TargetPin = Converter.Pins[0].Id;
+    Graph.DataEdges.Add(ArithmeticLink);
+    // "Index = " + Conv_IntToString(InnerIndex + 10) をPrintStringに接続する。
+    FBPIRNode Concat;
+    Concat.Id = FGuid::NewGuid();
+    Concat.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Concat.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+    Concat.FunctionName = TEXT("Concat_StrStr");
+    Concat.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("string"),
+        TEXT("Index = ")));
+    Concat.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("string")));
+    Concat.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("string")));
+    Graph.DataEdges[1].TargetNode = Concat.Id;
+    Graph.DataEdges[1].TargetPin = Concat.Pins[1].Id;
+    FBPIRLink ConcatLink;
+    ConcatLink.SourceNode = Concat.Id;
+    ConcatLink.SourcePin = Concat.Pins[2].Id;
+    ConcatLink.TargetNode = Graph.Nodes[5].Id;
+    ConcatLink.TargetPin = Graph.Nodes[5].Pins[2].Id;
+    Graph.DataEdges.Add(ConcatLink);
+    Graph.Nodes.Add(MoveTemp(Concat));
+    Graph.Nodes.Add(MoveTemp(Addition));
+    Graph.Nodes.Add(MoveTemp(Converter));
+    IR.Graphs.Add(MoveTemp(Graph));
+
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をLowering"),
+        FBPSemanticLowering::LowerForLoop(IR, Semantic)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
+    TestEqual(TEXT("外側の本体は5文"), Outer.LoopBodyStatements.Num(), 5);
+    TestEqual(TEXT("内側ループは3番目"), Outer.LoopBodyStatements[2].Kind,
+        EBPSemanticStatementKind::ForLoop);
+    const FBPSemanticStatement& Inner = Outer.LoopBodyStatements[2];
+    TestEqual(TEXT("内側の本体は2文"), Inner.LoopBodyStatements.Num(), 2);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をC++生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ANestedSequentialActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("内側Indexの文字列変換を生成"),
+        Files.SourceContent.Contains(TEXT("Concat_StrStr(")) &&
+        Files.SourceContent.Contains(TEXT("Add_IntInt(InnerIndex, 10)")));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedDuplicateArithmeticInputTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedDuplicateArithmeticInput",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedDuplicateArithmeticInputTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR;
+    IR.AssetPath = TEXT("/Game/BP_NestedSequential");
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    Graph.Kind = TEXT("event");
+    FBPIRNode Begin;
+    Begin.Id = FGuid::NewGuid();
+    Begin.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_Event");
+    Begin.FunctionName = TEXT("ReceiveBeginPlay");
+    Begin.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Graph.Nodes.Add(MoveTemp(Begin));
+    const auto MakeLoop = []()
+    {
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+        Node.MacroGraphName = TEXT("ForLoop");
+        Node.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("0")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+        return Node;
+    };
+    Graph.Nodes.Add(MakeLoop());
+    Graph.Nodes.Add(MakeLoop());
+    const TCHAR* Names[] = {
+        TEXT("Process1"), TEXT("Process2"), TEXT("Process3"),
+        TEXT("Process4"), TEXT("Process5"), TEXT("Process6")
+    };
+    for (const TCHAR* Name : Names)
+    {
+        FBPIRNode Print;
+        Print.Id = FGuid::NewGuid();
+        Print.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Print.FunctionName = TEXT("PrintString");
+        Print.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"), Name));
+        Graph.Nodes.Add(MoveTemp(Print));
+    }
+    const auto Connect = [&Graph](int32 From, int32 Output, int32 To)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Graph.Nodes[From].Id;
+        Edge.SourcePin = Graph.Nodes[From].Pins[Output].Id;
+        Edge.TargetNode = Graph.Nodes[To].Id;
+        Edge.TargetPin = Graph.Nodes[To].Pins[0].Id;
+        Graph.ExecEdges.Add(Edge);
+    };
+    // 外側: 処理1 -> 処理2 -> 内側ForLoop -> 処理5 -> 処理6。
+    // 内側: 処理3 -> 処理4。Completedは外側本体の後続処理に接続する。
+    Connect(0, 0, 1);
+    Connect(1, 3, 3);
+    Connect(3, 1, 4);
+    Connect(4, 1, 2);
+    Connect(2, 3, 5);
+    Connect(5, 1, 6);
+    Connect(2, 5, 7);
+    Connect(7, 1, 8);
+    // 内側Indexを文字列に変換し、処理3のPrintStringへ接続する。
+    FBPIRNode Converter;
+    Converter.Id = FGuid::NewGuid();
+    Converter.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Converter.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+    Converter.FunctionName = TEXT("Conv_IntToString");
+    Converter.Pins.Add(MakeLoopPin(TEXT("InInt"), EGPD_Input, TEXT("int")));
+    Converter.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("string")));
+    FBPIRLink IndexLink;
+    IndexLink.SourceNode = Graph.Nodes[2].Id;
+    IndexLink.SourcePin = Graph.Nodes[2].Pins[4].Id;
+    IndexLink.TargetNode = Converter.Id;
+    IndexLink.TargetPin = Converter.Pins[0].Id;
+    Graph.DataEdges.Add(IndexLink);
+    FBPIRLink StringLink;
+    StringLink.SourceNode = Converter.Id;
+    StringLink.SourcePin = Converter.Pins[1].Id;
+    StringLink.TargetNode = Graph.Nodes[5].Id;
+    StringLink.TargetPin = Graph.Nodes[5].Pins[2].Id;
+    Graph.DataEdges.Add(StringLink);
+    // InnerIndex + 10をConv_IntToStringへ渡す。
+    FBPIRNode Addition;
+    Addition.Id = FGuid::NewGuid();
+    Addition.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Addition.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Addition.FunctionName = TEXT("Add_IntInt");
+    Addition.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), TEXT("10")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("int")));
+    Graph.DataEdges[0].TargetNode = Addition.Id;
+    Graph.DataEdges[0].TargetPin = Addition.Pins[0].Id;
+    FBPIRLink ArithmeticLink;
+    ArithmeticLink.SourceNode = Addition.Id;
+    ArithmeticLink.SourcePin = Addition.Pins[2].Id;
+    ArithmeticLink.TargetNode = Converter.Id;
+    ArithmeticLink.TargetPin = Converter.Pins[0].Id;
+    Graph.DataEdges.Add(ArithmeticLink);
+    // "Index = " + Conv_IntToString(InnerIndex + 10) をPrintStringに接続する。
+    FBPIRNode Concat;
+    Concat.Id = FGuid::NewGuid();
+    Concat.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Concat.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+    Concat.FunctionName = TEXT("Concat_StrStr");
+    Concat.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("string"),
+        TEXT("Index = ")));
+    Concat.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("string")));
+    Concat.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("string")));
+    Graph.DataEdges[1].TargetNode = Concat.Id;
+    Graph.DataEdges[1].TargetPin = Concat.Pins[1].Id;
+    FBPIRLink ConcatLink;
+    ConcatLink.SourceNode = Concat.Id;
+    ConcatLink.SourcePin = Concat.Pins[2].Id;
+    ConcatLink.TargetNode = Graph.Nodes[5].Id;
+    ConcatLink.TargetPin = Graph.Nodes[5].Pins[2].Id;
+    Graph.DataEdges.Add(ConcatLink);
+    Graph.Nodes.Add(MoveTemp(Concat));
+    // 同じAdd_IntInt.Aに二本のエッジがある異常なIRは拒否する。
+    FBPIRLink Duplicate = Graph.DataEdges[0];
+    Graph.DataEdges.Add(Duplicate);
+    Graph.Nodes.Add(MoveTemp(Addition));
+    Graph.Nodes.Add(MoveTemp(Converter));
+    IR.Graphs.Add(MoveTemp(Graph));
+
+    FBPSemanticIR Semantic;
+    TestFalse(TEXT("整数演算の重複した入力接続を拒否"),
+        FBPSemanticLowering::LowerForLoop(IR, Semantic));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedConcatInvalidInputTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedConcatInvalidInput",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedConcatInvalidInputTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR;
+    IR.AssetPath = TEXT("/Game/BP_NestedSequential");
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    Graph.Kind = TEXT("event");
+    FBPIRNode Begin;
+    Begin.Id = FGuid::NewGuid();
+    Begin.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_Event");
+    Begin.FunctionName = TEXT("ReceiveBeginPlay");
+    Begin.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Graph.Nodes.Add(MoveTemp(Begin));
+    const auto MakeLoop = []()
+    {
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+        Node.MacroGraphName = TEXT("ForLoop");
+        Node.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("0")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+        return Node;
+    };
+    Graph.Nodes.Add(MakeLoop());
+    Graph.Nodes.Add(MakeLoop());
+    const TCHAR* Names[] = {
+        TEXT("Process1"), TEXT("Process2"), TEXT("Process3"),
+        TEXT("Process4"), TEXT("Process5"), TEXT("Process6")
+    };
+    for (const TCHAR* Name : Names)
+    {
+        FBPIRNode Print;
+        Print.Id = FGuid::NewGuid();
+        Print.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Print.FunctionName = TEXT("PrintString");
+        Print.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"), Name));
+        Graph.Nodes.Add(MoveTemp(Print));
+    }
+    const auto Connect = [&Graph](int32 From, int32 Output, int32 To)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Graph.Nodes[From].Id;
+        Edge.SourcePin = Graph.Nodes[From].Pins[Output].Id;
+        Edge.TargetNode = Graph.Nodes[To].Id;
+        Edge.TargetPin = Graph.Nodes[To].Pins[0].Id;
+        Graph.ExecEdges.Add(Edge);
+    };
+    // 外側: 処理1 -> 処理2 -> 内側ForLoop -> 処理5 -> 処理6。
+    // 内側: 処理3 -> 処理4。Completedは外側本体の後続処理に接続する。
+    Connect(0, 0, 1);
+    Connect(1, 3, 3);
+    Connect(3, 1, 4);
+    Connect(4, 1, 2);
+    Connect(2, 3, 5);
+    Connect(5, 1, 6);
+    Connect(2, 5, 7);
+    Connect(7, 1, 8);
+    // 内側Indexを文字列に変換し、処理3のPrintStringへ接続する。
+    FBPIRNode Converter;
+    Converter.Id = FGuid::NewGuid();
+    Converter.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Converter.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+    Converter.FunctionName = TEXT("Conv_IntToString");
+    Converter.Pins.Add(MakeLoopPin(TEXT("InInt"), EGPD_Input, TEXT("int")));
+    Converter.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("string")));
+    FBPIRLink IndexLink;
+    IndexLink.SourceNode = Graph.Nodes[2].Id;
+    IndexLink.SourcePin = Graph.Nodes[2].Pins[4].Id;
+    IndexLink.TargetNode = Converter.Id;
+    IndexLink.TargetPin = Converter.Pins[0].Id;
+    Graph.DataEdges.Add(IndexLink);
+    FBPIRLink StringLink;
+    StringLink.SourceNode = Converter.Id;
+    StringLink.SourcePin = Converter.Pins[1].Id;
+    StringLink.TargetNode = Graph.Nodes[5].Id;
+    StringLink.TargetPin = Graph.Nodes[5].Pins[2].Id;
+    Graph.DataEdges.Add(StringLink);
+    // InnerIndex + 10をConv_IntToStringへ渡す。
+    FBPIRNode Addition;
+    Addition.Id = FGuid::NewGuid();
+    Addition.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Addition.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Addition.FunctionName = TEXT("Add_IntInt");
+    Addition.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("int")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("int"), TEXT("10")));
+    Addition.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("int")));
+    Graph.DataEdges[0].TargetNode = Addition.Id;
+    Graph.DataEdges[0].TargetPin = Addition.Pins[0].Id;
+    FBPIRLink ArithmeticLink;
+    ArithmeticLink.SourceNode = Addition.Id;
+    ArithmeticLink.SourcePin = Addition.Pins[2].Id;
+    ArithmeticLink.TargetNode = Converter.Id;
+    ArithmeticLink.TargetPin = Converter.Pins[0].Id;
+    Graph.DataEdges.Add(ArithmeticLink);
+    // "Index = " + Conv_IntToString(InnerIndex + 10) をPrintStringに接続する。
+    FBPIRNode Concat;
+    Concat.Id = FGuid::NewGuid();
+    Concat.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    Concat.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+    Concat.FunctionName = TEXT("Concat_StrStr");
+    Concat.Pins.Add(MakeLoopPin(TEXT("A"), EGPD_Input, TEXT("string"),
+        TEXT("Index = ")));
+    Concat.Pins.Add(MakeLoopPin(TEXT("B"), EGPD_Input, TEXT("string")));
+    Concat.Pins.Add(MakeLoopPin(TEXT("ReturnValue"), EGPD_Output, TEXT("string")));
+    Graph.DataEdges[1].TargetNode = Concat.Id;
+    Graph.DataEdges[1].TargetPin = Concat.Pins[1].Id;
+    FBPIRLink ConcatLink;
+    ConcatLink.SourceNode = Concat.Id;
+    ConcatLink.SourcePin = Concat.Pins[2].Id;
+    ConcatLink.TargetNode = Graph.Nodes[5].Id;
+    ConcatLink.TargetPin = Graph.Nodes[5].Pins[2].Id;
+    Graph.DataEdges.Add(ConcatLink);
+    // 同一のConcat入力へ二つのデータ接続を作り、曖昧な入力を拒否する。
+    FBPIRLink DuplicateInput = Graph.DataEdges[1];
+    Graph.DataEdges.Add(DuplicateInput);
+    Graph.Nodes.Add(MoveTemp(Concat));
+    Graph.Nodes.Add(MoveTemp(Addition));
+    Graph.Nodes.Add(MoveTemp(Converter));
+    IR.Graphs.Add(MoveTemp(Graph));
+
+    FBPSemanticIR Semantic;
+    TestFalse(TEXT("重複したConcat入力接続を拒否"),
+        FBPSemanticLowering::LowerForLoop(IR, Semantic));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopTripleSequentialBodyTest,
+    "BlueprintAIConverter.Conversion.ForLoop.TripleSequentialBody",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopTripleSequentialBodyTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR;
+    IR.AssetPath = TEXT("/Game/BP_NestedSequential");
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    Graph.Kind = TEXT("event");
+    FBPIRNode Begin;
+    Begin.Id = FGuid::NewGuid();
+    Begin.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_Event");
+    Begin.FunctionName = TEXT("ReceiveBeginPlay");
+    Begin.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Graph.Nodes.Add(MoveTemp(Begin));
+    const auto MakeLoop = []()
+    {
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+        Node.MacroGraphName = TEXT("ForLoop");
+        Node.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("0")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+        return Node;
+    };
+    Graph.Nodes.Add(MakeLoop());
+    Graph.Nodes.Add(MakeLoop());
+    Graph.Nodes.Add(MakeLoop());
+    const TCHAR* Names[] = {
+        TEXT("Process1"), TEXT("Process2"), TEXT("Process3"),
+        TEXT("Process4"), TEXT("Process5"), TEXT("Process6")
+    };
+    for (const TCHAR* Name : Names)
+    {
+        FBPIRNode Print;
+        Print.Id = FGuid::NewGuid();
+        Print.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Print.FunctionName = TEXT("PrintString");
+        Print.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"), Name));
+        Graph.Nodes.Add(MoveTemp(Print));
+    }
+    const auto Connect = [&Graph](int32 From, int32 Output, int32 To)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Graph.Nodes[From].Id;
+        Edge.SourcePin = Graph.Nodes[From].Pins[Output].Id;
+        Edge.TargetNode = Graph.Nodes[To].Id;
+        Edge.TargetPin = Graph.Nodes[To].Pins[0].Id;
+        Graph.ExecEdges.Add(Edge);
+    };
+    // 三重ループでCompletedが一つ外側の本体へ戻ることを確認する。
+    Connect(0, 0, 1);
+    Connect(1, 3, 4);
+    Connect(4, 1, 2);
+    Connect(2, 3, 5);
+    Connect(5, 1, 3);
+    Connect(3, 3, 6);
+    Connect(6, 1, 7);
+    Connect(3, 5, 8);
+    Connect(8, 1, 9);
+    IR.Graphs.Add(MoveTemp(Graph));
+
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をLowering"),
+        FBPSemanticLowering::LowerForLoop(IR, Semantic)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
+    TestEqual(TEXT("外側本体"), Outer.LoopBodyStatements.Num(), 2);
+    const FBPSemanticStatement& Middle = Outer.LoopBodyStatements[1];
+    TestEqual(TEXT("中間ループ"), Middle.Kind, EBPSemanticStatementKind::ForLoop);
+    TestEqual(TEXT("中間本体"), Middle.LoopBodyStatements.Num(), 4);
+    const FBPSemanticStatement& Inner = Middle.LoopBodyStatements[1];
+    TestEqual(TEXT("内側ループ"), Inner.Kind, EBPSemanticStatementKind::ForLoop);
+    TestEqual(TEXT("内側本体"), Inner.LoopBodyStatements.Num(), 2);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("三重ForLoopのC++生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ATripleSequentialActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("三段目のIndex名"), Files.SourceContent.Contains(TEXT("LoopIndex2")));
+    return true;
+}
+
 #endif
