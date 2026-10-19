@@ -2198,43 +2198,109 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                                         {
                                             return false;
                                         }
-                                        const FBPIRLink* IndexEdge =
-                                            EventGraph->DataEdges.FindByPredicate(
-                                                [Source, Input](const FBPIRLink& Edge)
-                                                {
-                                                    return Edge.TargetNode == Source->Id &&
-                                                        Edge.TargetPin == Input->Id;
-                                                });
-                                        if (IndexEdge == nullptr)
+                                        // Concat内部のConv_IntToStringでも整数演算をたどる。
+                                        TSet<FGuid> ArithmeticStack;
+                                        TFunction<bool(const FBPIRNode&, const FBPIRPin&,
+                                            int32, FBPSemanticExpression&)> LowerInteger;
+                                        LowerInteger = [&](const FBPIRNode& Owner,
+                                            const FBPIRPin& InputPin, int32 IntegerDepth,
+                                            FBPSemanticExpression& Value) -> bool
                                         {
-                                            return false;
-                                        }
-                                        FBPSemanticExpression IndexReference;
-                                        bool bFoundIndex = false;
-                                        for (int32 Level = 0; Level < ActiveLoops.Num(); ++Level)
-                                        {
-                                            const FBPIRPin* Index = FindPin(
-                                                *ActiveLoops[Level], TEXT("Index"), EGPD_Output);
-                                            if (Index != nullptr &&
-                                                IndexEdge->SourceNode == ActiveLoops[Level]->Id &&
-                                                IndexEdge->SourcePin == Index->Id)
+                                            if (IntegerDepth > 16)
                                             {
-                                                IndexReference.Kind =
-                                                    EBPSemanticExpressionKind::VariableReference;
-                                                IndexReference.Type.Kind =
-                                                    EBPSemanticTypeKind::Int32;
-                                                IndexReference.VariableName = Level == 0 ?
-                                                    TEXT("LoopIndex") : Level == 1 ?
-                                                    TEXT("InnerIndex") :
-                                                    FName(*FString::Printf(
-                                                        TEXT("LoopIndex%d"), Level));
-                                                IndexReference.SourceNodeId =
-                                                    ActiveLoops[Level]->Id;
-                                                bFoundIndex = true;
-                                                break;
+                                                return false;
                                             }
-                                        }
-                                        if (bFoundIndex == false)
+                                            const FBPIRLink* InputLink =
+                                                EventGraph->DataEdges.FindByPredicate(
+                                                    [&Owner, &InputPin](const FBPIRLink& Edge)
+                                                    {
+                                                        return Edge.TargetNode == Owner.Id &&
+                                                            Edge.TargetPin == InputPin.Id;
+                                                    });
+                                            if (InputLink == nullptr)
+                                            {
+                                                int32 Number = 0;
+                                                if (LexTryParseString(Number,
+                                                        *InputPin.DefaultValue) == false)
+                                                {
+                                                    return false;
+                                                }
+                                                Value = Literal(EBPSemanticTypeKind::Int32,
+                                                    LexToString(Number), Owner, InputPin.Name);
+                                                return true;
+                                            }
+                                            for (int32 Level = 0; Level < ActiveLoops.Num(); ++Level)
+                                            {
+                                                const FBPIRPin* Index = FindPin(
+                                                    *ActiveLoops[Level], TEXT("Index"), EGPD_Output);
+                                                if (Index != nullptr &&
+                                                    InputLink->SourceNode == ActiveLoops[Level]->Id &&
+                                                    InputLink->SourcePin == Index->Id)
+                                                {
+                                                    Value.Kind =
+                                                        EBPSemanticExpressionKind::VariableReference;
+                                                    Value.Type.Kind = EBPSemanticTypeKind::Int32;
+                                                    Value.VariableName = Level == 0 ?
+                                                        TEXT("LoopIndex") : Level == 1 ?
+                                                        TEXT("InnerIndex") :
+                                                        FName(*FString::Printf(
+                                                            TEXT("LoopIndex%d"), Level));
+                                                    Value.SourceNodeId = ActiveLoops[Level]->Id;
+                                                    return true;
+                                                }
+                                            }
+                                            const FBPIRNode* Math = EventGraph->Nodes.FindByPredicate(
+                                                [InputLink](const FBPIRNode& Candidate)
+                                                {
+                                                    return Candidate.Id == InputLink->SourceNode;
+                                                });
+                                            if (Math == nullptr ||
+                                                Math->FunctionOwnerPath !=
+                                                    TEXT("/Script/Engine.KismetMathLibrary") ||
+                                                (Math->FunctionName != TEXT("Add_IntInt") &&
+                                                    Math->FunctionName != TEXT("Subtract_IntInt") &&
+                                                    Math->FunctionName != TEXT("Multiply_IntInt")) ||
+                                                ArithmeticStack.Contains(Math->Id))
+                                            {
+                                                return false;
+                                            }
+                                            const FBPIRPin* ReturnPin = FindPin(
+                                                *Math, TEXT("ReturnValue"), EGPD_Output);
+                                            const FBPIRPin* Left = FindPin(
+                                                *Math, TEXT("A"), EGPD_Input);
+                                            const FBPIRPin* Right = FindPin(
+                                                *Math, TEXT("B"), EGPD_Input);
+                                            if (ReturnPin == nullptr || Left == nullptr ||
+                                                Right == nullptr ||
+                                                ReturnPin->Id != InputLink->SourcePin)
+                                            {
+                                                return false;
+                                            }
+                                            ArithmeticStack.Add(Math->Id);
+                                            FBPSemanticExpression LeftValue;
+                                            FBPSemanticExpression RightValue;
+                                            if (LowerInteger(*Math, *Left, IntegerDepth + 1,
+                                                    LeftValue) == false ||
+                                                LowerInteger(*Math, *Right, IntegerDepth + 1,
+                                                    RightValue) == false)
+                                            {
+                                                ArithmeticStack.Remove(Math->Id);
+                                                return false;
+                                            }
+                                            ArithmeticStack.Remove(Math->Id);
+                                            Value.Kind = EBPSemanticExpressionKind::FunctionCall;
+                                            Value.Type.Kind = EBPSemanticTypeKind::Int32;
+                                            Value.FunctionName = Math->FunctionName;
+                                            Value.FunctionOwnerPath = Math->FunctionOwnerPath;
+                                            Value.SourceNodeId = Math->Id;
+                                            Value.Arguments.Add(MoveTemp(LeftValue));
+                                            Value.Arguments.Add(MoveTemp(RightValue));
+                                            UsedConverters.Add(Math->Id);
+                                            return true;
+                                        };
+                                        FBPSemanticExpression IndexReference;
+                                        if (LowerInteger(*Source, *Input, 0,
+                                                IndexReference) == false)
                                         {
                                             return false;
                                         }
