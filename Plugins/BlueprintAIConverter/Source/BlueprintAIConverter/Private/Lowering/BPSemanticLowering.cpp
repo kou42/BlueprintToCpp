@@ -2134,16 +2134,6 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                             {
                                 return false;
                             }
-                            const FBPIRLink* InputEdge = EventGraph->DataEdges.FindByPredicate(
-                                [Converter, Input](const FBPIRLink& Link)
-                                {
-                                    return Link.TargetNode == Converter->Id &&
-                                        Link.TargetPin == Input->Id;
-                                });
-                            if (InputEdge == nullptr)
-                            {
-                                return false;
-                            }
                             // Index・整数リテラル・四則演算のうち安全に生成可能な
                             // Add/Subtract/Multiplyを再帰的に解決する。
                             TSet<FGuid> ArithmeticStack;
