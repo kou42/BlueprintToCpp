@@ -2022,6 +2022,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
         int32 ConverterCount = 0;
         int32 ArithmeticCount = 0;
         int32 AppendCount = 0;
+        int32 GetterCount = 0;
         bool bSupportedNodes = true;
         for (const FBPIRNode& Node : EventGraph->Nodes)
         {
@@ -2045,6 +2046,10 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
             {
                 ++AppendCount;
             }
+            else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
+            {
+                ++GetterCount;
+            }
             else if (Node.FunctionOwnerPath == TEXT("/Script/Engine.KismetMathLibrary") &&
                 (Node.FunctionName == TEXT("Add_IntInt") ||
                     Node.FunctionName == TEXT("Subtract_IntInt") ||
@@ -2059,7 +2064,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
             }
         }
         if (bSupportedNodes && Entry != nullptr && PrintCount > 0 &&
-            EventGraph->Nodes.Num() == PrintCount + ConverterCount + ArithmeticCount + AppendCount + NestedLoops.Num() + 1)
+            EventGraph->Nodes.Num() == PrintCount + ConverterCount + ArithmeticCount + AppendCount + GetterCount + NestedLoops.Num() + 1)
         {
             const auto NextExec = [EventGraph](const FBPIRNode& Source,
                 const FName PinName, const FBPIRNode*& Next) -> bool
@@ -2191,6 +2196,33 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                                     if (Source == nullptr)
                                     {
                                         return false;
+                                    }
+                                    if (Source->ClassPath ==
+                                        TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
+                                    {
+                                        // 反射で検証されたFStringメンバーのみ許可する。
+                                        const FBPSemanticVariable* Variable =
+                                            FindSemanticVariable(OutIR.Variables,
+                                                Source->VariableName);
+                                        const FBPIRPin* ValuePin = FindPin(
+                                            *Source, Source->VariableName, EGPD_Output);
+                                        if (Variable == nullptr ||
+                                            Variable->Type.Kind != EBPSemanticTypeKind::String ||
+                                            Variable->ReflectedCppType != TEXT("FString") ||
+                                            ValuePin == nullptr ||
+                                            ValuePin->Id != Link->SourcePin ||
+                                            UsedConverters.Contains(Source->Id))
+                                        {
+                                            return false;
+                                        }
+                                        Result.Kind =
+                                            EBPSemanticExpressionKind::VariableReference;
+                                        Result.Type = Variable->Type;
+                                        Result.VariableName = Variable->Name;
+                                        Result.SourceNodeId = Source->Id;
+                                        Result.SourcePinId = ValuePin->Id;
+                                        UsedConverters.Add(Source->Id);
+                                        return true;
                                     }
                                     if (Source->FunctionName == TEXT("Conv_IntToString") &&
                                         Source->FunctionOwnerPath ==
@@ -2576,7 +2608,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                 First != nullptr && LowerChain(First, Block.Statements, 0) &&
                 Visited.Num() + UsedConverters.Num() == EventGraph->Nodes.Num() - 1 &&
                 EventGraph->ExecEdges.Num() == Visited.Num() &&
-                UsedConverters.Num() == ConverterCount + ArithmeticCount + AppendCount &&
+                UsedConverters.Num() == ConverterCount + ArithmeticCount + AppendCount + GetterCount &&
                 EventGraph->DataEdges.Num() >= ConverterCount * 2 + AppendCount &&
                 Block.Statements.Num() == 1 &&
                 Block.Statements[0].Kind == EBPSemanticStatementKind::ForLoop)
