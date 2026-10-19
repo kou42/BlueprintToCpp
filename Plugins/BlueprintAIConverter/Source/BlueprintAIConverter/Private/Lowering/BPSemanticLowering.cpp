@@ -980,12 +980,12 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         }
         else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse"))
         {
-            if (Branch != nullptr)
+            // ネストしたBranchは複数存在するため、最初の候補のみ保持する。
+            // 単一Branchの既存検証は後続のExec接続検証で行う。
+            if (Branch == nullptr)
             {
-                AddDiagnostic(OutIR, Graph.Name, Node.Id, TEXT("Duplicate Branch node"));
-                return false;
+                Branch = &Node;
             }
-            Branch = &Node;
         }
         else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
             Node.FunctionName == TEXT("PrintString"))
@@ -1192,7 +1192,8 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
             : nullptr;
         const FBPIRPin* RootExecute = Root != nullptr
             ? FindPin(*Root, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr;
-        if (Root == nullptr || RootExecute == nullptr || Start->TargetPin != RootExecute->Id)
+        if (Root == nullptr || RootExecute == nullptr || Start->TargetPin != RootExecute->Id ||
+            Root->ClassPath != TEXT("/Script/BlueprintGraph.K2Node_IfThenElse"))
         {
             AddDiagnostic(OutIR, Graph.Name, BeginPlay->Id,
                 TEXT("Nested Branch entry Exec edge is invalid"));
