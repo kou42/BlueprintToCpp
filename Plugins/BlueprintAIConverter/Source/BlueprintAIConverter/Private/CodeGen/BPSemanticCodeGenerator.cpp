@@ -933,7 +933,7 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
             return false;
         }
         TextExpression = FString::Printf(
-            TEXT("UKismetStringLibrary::Concat_StrStr(TEXT(\\"%s\\"), TEXT(\\"%s\\"))"),
+            TEXT("UKismetStringLibrary::Concat_StrStr(TEXT(\"%s\"), TEXT(\"%s\"))"),
             *EscapedLeft, *EscapedRight);
     }
     else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
