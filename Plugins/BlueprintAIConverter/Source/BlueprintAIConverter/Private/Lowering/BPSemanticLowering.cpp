@@ -2141,6 +2141,36 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                             const FBPIRNode* Converter = EventGraph->Nodes.FindByPredicate(
                                 [&Edge](const FBPIRNode& Node) { return Node.Id == Edge.SourceNode; });
                             if (Converter != nullptr &&
+                                Converter->ClassPath ==
+                                    TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
+                            {
+                                // PrintStringへのFString変数直接接続も反射型で検証する。
+                                const FBPSemanticVariable* Variable =
+                                    FindSemanticVariable(OutIR.Variables,
+                                        Converter->VariableName);
+                                const FBPIRPin* ValuePin = FindPin(
+                                    *Converter, Converter->VariableName, EGPD_Output);
+                                if (Variable == nullptr ||
+                                    Variable->Type.Kind != EBPSemanticTypeKind::String ||
+                                    Variable->ReflectedCppType != TEXT("FString") ||
+                                    ValuePin == nullptr ||
+                                    ValuePin->Id != Edge.SourcePin ||
+                                    UsedConverters.Contains(Converter->Id))
+                                {
+                                    return false;
+                                }
+                                FBPSemanticExpression Reference;
+                                Reference.Kind =
+                                    EBPSemanticExpressionKind::VariableReference;
+                                Reference.Type = Variable->Type;
+                                Reference.VariableName = Variable->Name;
+                                Reference.SourceNodeId = Converter->Id;
+                                Reference.SourcePinId = ValuePin->Id;
+                                Print.Expression.Arguments[1] = MoveTemp(Reference);
+                                UsedConverters.Add(Converter->Id);
+                                continue;
+                            }
+                            if (Converter != nullptr &&
                                 Converter->FunctionName == TEXT("Concat_StrStr") &&
                                 Converter->FunctionOwnerPath ==
                                     TEXT("/Script/Engine.KismetStringLibrary"))
