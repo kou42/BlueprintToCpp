@@ -2615,7 +2615,7 @@ bool FBPForLoopTripleSequentialBodyTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("外側本体"), Outer.LoopBodyStatements.Num(), 2);
     const FBPSemanticStatement& Middle = Outer.LoopBodyStatements[1];
     TestEqual(TEXT("中間ループ"), Middle.Kind, EBPSemanticStatementKind::ForLoop);
-    TestEqual(TEXT("中間本体"), Middle.LoopBodyStatements.Num(), 2);
+    TestEqual(TEXT("中間本体"), Middle.LoopBodyStatements.Num(), 4);
     const FBPSemanticStatement& Inner = Middle.LoopBodyStatements[1];
     TestEqual(TEXT("内側ループ"), Inner.Kind, EBPSemanticStatementKind::ForLoop);
     TestEqual(TEXT("内側本体"), Inner.LoopBodyStatements.Num(), 2);
