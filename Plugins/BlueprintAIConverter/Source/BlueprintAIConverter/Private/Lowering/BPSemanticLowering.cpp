@@ -2136,32 +2136,104 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                             {
                                 return false;
                             }
-                            const FBPIRNode* Owner = nullptr;
-                            FName IndexName;
-                            for (int32 Level = 0; Level < ActiveLoops.Num(); ++Level)
+                            // Index・整数リテラル・四則演算のうち安全に生成可能な
+                            // Add/Subtract/Multiplyを再帰的に解決する。
+                            TSet<FGuid> ArithmeticStack;
+                            TFunction<bool(const FBPIRNode&, const FBPIRPin&,
+                                int32, FBPSemanticExpression&)> LowerInteger;
+                            LowerInteger = [&](const FBPIRNode& Node, const FBPIRPin& Pin,
+                                int32 Depth, FBPSemanticExpression& Result) -> bool
                             {
-                                const FBPIRPin* Index = FindPin(
-                                    *ActiveLoops[Level], TEXT("Index"), EGPD_Output);
-                                if (Index != nullptr &&
-                                    InputEdge->SourceNode == ActiveLoops[Level]->Id &&
-                                    InputEdge->SourcePin == Index->Id)
+                                if (Depth > 16)
                                 {
-                                    Owner = ActiveLoops[Level];
-                                    IndexName = Level == 0 ? TEXT("LoopIndex") :
-                                        Level == 1 ? TEXT("InnerIndex") :
-                                        FName(*FString::Printf(TEXT("LoopIndex%d"), Level));
+                                    return false;
                                 }
-                            }
-                            if (Owner == nullptr)
+                                const FBPIRLink* InputLink = EventGraph->DataEdges.FindByPredicate(
+                                    [&Node, &Pin](const FBPIRLink& Link)
+                                    {
+                                        return Link.TargetNode == Node.Id &&
+                                            Link.TargetPin == Pin.Id;
+                                    });
+                                if (InputLink == nullptr)
+                                {
+                                    int32 Number = 0;
+                                    if (LexTryParseString(Number, *Pin.DefaultValue) == false)
+                                    {
+                                        return false;
+                                    }
+                                    Result = Literal(EBPSemanticTypeKind::Int32,
+                                        LexToString(Number), Node, Pin.Name);
+                                    return true;
+                                }
+                                for (int32 Level = 0; Level < ActiveLoops.Num(); ++Level)
+                                {
+                                    const FBPIRPin* Index = FindPin(
+                                        *ActiveLoops[Level], TEXT("Index"), EGPD_Output);
+                                    if (Index != nullptr &&
+                                        InputLink->SourceNode == ActiveLoops[Level]->Id &&
+                                        InputLink->SourcePin == Index->Id)
+                                    {
+                                        Result.Kind = EBPSemanticExpressionKind::VariableReference;
+                                        Result.Type.Kind = EBPSemanticTypeKind::Int32;
+                                        Result.VariableName = Level == 0 ? TEXT("LoopIndex") :
+                                            Level == 1 ? TEXT("InnerIndex") :
+                                            FName(*FString::Printf(TEXT("LoopIndex%d"), Level));
+                                        Result.SourceNodeId = ActiveLoops[Level]->Id;
+                                        Result.SourcePinId = Index->Id;
+                                        return true;
+                                    }
+                                }
+                                const FBPIRNode* Arithmetic = EventGraph->Nodes.FindByPredicate(
+                                    [InputLink](const FBPIRNode& Candidate)
+                                    {
+                                        return Candidate.Id == InputLink->SourceNode;
+                                    });
+                                if (Arithmetic == nullptr ||
+                                    Arithmetic->FunctionOwnerPath !=
+                                        TEXT("/Script/Engine.KismetMathLibrary") ||
+                                    (Arithmetic->FunctionName != TEXT("Add_IntInt") &&
+                                        Arithmetic->FunctionName != TEXT("Subtract_IntInt") &&
+                                        Arithmetic->FunctionName != TEXT("Multiply_IntInt")) ||
+                                    ArithmeticStack.Contains(Arithmetic->Id))
+                                {
+                                    return false;
+                                }
+                                const FBPIRPin* Output = FindPin(
+                                    *Arithmetic, TEXT("ReturnValue"), EGPD_Output);
+                                if (Output == nullptr || Output->Id != InputLink->SourcePin)
+                                {
+                                    return false;
+                                }
+                                ArithmeticStack.Add(Arithmetic->Id);
+                                Result.Kind = EBPSemanticExpressionKind::FunctionCall;
+                                Result.Type.Kind = EBPSemanticTypeKind::Int32;
+                                Result.FunctionName = Arithmetic->FunctionName;
+                                Result.FunctionOwnerPath = Arithmetic->FunctionOwnerPath;
+                                Result.SourceNodeId = Arithmetic->Id;
+                                const FName Names[] = { TEXT("A"), TEXT("B") };
+                                for (const FName& Name : Names)
+                                {
+                                    const FBPIRPin* Operand = FindPin(
+                                        *Arithmetic, Name, EGPD_Input);
+                                    FBPSemanticExpression Argument;
+                                    if (Operand == nullptr ||
+                                        LowerInteger(*Arithmetic, *Operand, Depth + 1,
+                                            Argument) == false)
+                                    {
+                                        ArithmeticStack.Remove(Arithmetic->Id);
+                                        return false;
+                                    }
+                                    Result.Arguments.Add(MoveTemp(Argument));
+                                }
+                                ArithmeticStack.Remove(Arithmetic->Id);
+                                UsedConverters.Add(Arithmetic->Id);
+                                return true;
+                            };
+                            FBPSemanticExpression Reference;
+                            if (LowerInteger(*Converter, *Input, 0, Reference) == false)
                             {
                                 return false;
                             }
-                            FBPSemanticExpression Reference;
-                            Reference.Kind = EBPSemanticExpressionKind::VariableReference;
-                            Reference.Type.Kind = EBPSemanticTypeKind::Int32;
-                            Reference.VariableName = IndexName;
-                            Reference.SourceNodeId = Owner->Id;
-                            Reference.SourcePinId = InputEdge->SourcePin;
                             FBPSemanticExpression Conversion;
                             Conversion.Kind = EBPSemanticExpressionKind::FunctionCall;
                             Conversion.Type.Kind = EBPSemanticTypeKind::String;
@@ -2241,7 +2313,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 First != nullptr && LowerChain(First, Block.Statements, 0) &&
                 Visited.Num() + UsedConverters.Num() == EventGraph->Nodes.Num() - 1 &&
                 EventGraph->ExecEdges.Num() == Visited.Num() &&
-                EventGraph->DataEdges.Num() == UsedConverters.Num() * 2 &&
+                EventGraph->DataEdges.Num() >= UsedConverters.Num() + 1 &&
                 Block.Statements.Num() == 1 &&
                 Block.Statements[0].Kind == EBPSemanticStatementKind::ForLoop)
             {
