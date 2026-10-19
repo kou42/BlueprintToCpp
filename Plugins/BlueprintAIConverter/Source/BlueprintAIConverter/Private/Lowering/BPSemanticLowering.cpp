@@ -2029,7 +2029,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 bSupportedNodes = false;
             }
         }
-        if (bSupportedNodes && Entry != nullptr && PrintCount > 0 &&
+        if (bSupportedNodes && Entry != nullptr && PrintCount >= 4 &&
             EventGraph->Nodes.Num() == PrintCount + 3)
         {
             const auto NextExec = [EventGraph](const FBPIRNode& Source,
