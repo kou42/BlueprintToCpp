@@ -941,6 +941,17 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                 Result = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
                 return true;
             }
+            if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
+            {
+                if (IsIdentifier(Expression.VariableName.ToString()) == false ||
+                    Expression.VariableName == TEXT("this"))
+                {
+                    return false;
+                }
+                Result = FString::Printf(TEXT("this->%s"),
+                    *Expression.VariableName.ToString());
+                return true;
+            }
             if (Expression.Kind == EBPSemanticExpressionKind::FunctionCall &&
                 Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
                 Expression.FunctionName == TEXT("Conv_IntToString") &&
