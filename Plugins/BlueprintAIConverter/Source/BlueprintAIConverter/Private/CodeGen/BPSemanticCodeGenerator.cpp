@@ -918,23 +918,52 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         TextArgument.FunctionName == TEXT("Concat_StrStr") &&
         TextArgument.Arguments.Num() == 2)
     {
-        // 結合対象は文字列リテラルに限定し、エスケープ後にC++へ埋め込む。
-        FString Left;
-        FString Right;
-        FString EscapedLeft;
-        FString EscapedRight;
-        if (ReadArgument(TextArgument.Arguments[0], EBPSemanticTypeKind::String,
-                Left, Diagnostics) == false ||
-            ReadArgument(TextArgument.Arguments[1], EBPSemanticTypeKind::String,
-                Right, Diagnostics) == false ||
-            EscapeString(Left, EscapedLeft, Diagnostics) == false ||
-            EscapeString(Right, EscapedRight, Diagnostics) == false)
+        // 結合式を再帰的に出力する。深さ制限と関数の許可リストで
+        // 不正なIRから任意のC++式が生成されることを防ぐ。
+        TFunction<bool(const FBPSemanticExpression&, int32, FString&)> EmitString;
+        EmitString = [&](const FBPSemanticExpression& Expression,
+            int32 Depth, FString& Result) -> bool
         {
+            if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::String)
+            {
+                return false;
+            }
+            if (Expression.Kind == EBPSemanticExpressionKind::Literal)
+            {
+                FString Value;
+                FString Escaped;
+                if (ReadArgument(Expression, EBPSemanticTypeKind::String,
+                        Value, Diagnostics) == false ||
+                    EscapeString(Value, Escaped, Diagnostics) == false)
+                {
+                    return false;
+                }
+                Result = FString::Printf(TEXT("TEXT(\\"%s\\")"), *Escaped);
+                return true;
+            }
+            if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
+                Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetStringLibrary") ||
+                Expression.FunctionName != TEXT("Concat_StrStr") ||
+                Expression.Arguments.Num() != 2)
+            {
+                return false;
+            }
+            FString Left;
+            FString Right;
+            if (EmitString(Expression.Arguments[0], Depth + 1, Left) == false ||
+                EmitString(Expression.Arguments[1], Depth + 1, Right) == false)
+            {
+                return false;
+            }
+            Result = FString::Printf(TEXT("UKismetStringLibrary::Concat_StrStr(%s, %s)"),
+                *Left, *Right);
+            return true;
+        };
+        if (EmitString(TextArgument, 0, TextExpression) == false)
+        {
+            Diagnostics.Add(TEXT("Unsupported nested string concatenation"));
             return false;
         }
-        TextExpression = FString::Printf(
-            TEXT("UKismetStringLibrary::Concat_StrStr(TEXT(\"%s\"), TEXT(\"%s\"))"),
-            *EscapedLeft, *EscapedRight);
     }
     else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
         TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
