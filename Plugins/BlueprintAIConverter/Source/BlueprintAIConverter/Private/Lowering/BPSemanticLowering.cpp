@@ -2179,8 +2179,76 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                                         {
                                             return Candidate.Id == Link->SourceNode;
                                         });
-                                    if (Source == nullptr ||
-                                        Source->FunctionName != TEXT("Concat_StrStr") ||
+                                    if (Source == nullptr)
+                                    {
+                                        return false;
+                                    }
+                                    if (Source->FunctionName == TEXT("Conv_IntToString") &&
+                                        Source->FunctionOwnerPath ==
+                                            TEXT("/Script/Engine.KismetStringLibrary"))
+                                    {
+                                        // Index直結の文字列化をConcatの葉として許可する。
+                                        const FBPIRPin* Output = FindPin(
+                                            *Source, TEXT("ReturnValue"), EGPD_Output);
+                                        const FBPIRPin* Input = FindPin(
+                                            *Source, TEXT("InInt"), EGPD_Input);
+                                        if (Output == nullptr || Input == nullptr ||
+                                            Output->Id != Link->SourcePin ||
+                                            UsedConverters.Contains(Source->Id))
+                                        {
+                                            return false;
+                                        }
+                                        const FBPIRLink* IndexEdge =
+                                            EventGraph->DataEdges.FindByPredicate(
+                                                [Source, Input](const FBPIRLink& Edge)
+                                                {
+                                                    return Edge.TargetNode == Source->Id &&
+                                                        Edge.TargetPin == Input->Id;
+                                                });
+                                        if (IndexEdge == nullptr)
+                                        {
+                                            return false;
+                                        }
+                                        FBPSemanticExpression IndexReference;
+                                        bool bFoundIndex = false;
+                                        for (int32 Level = 0; Level < ActiveLoops.Num(); ++Level)
+                                        {
+                                            const FBPIRPin* Index = FindPin(
+                                                *ActiveLoops[Level], TEXT("Index"), EGPD_Output);
+                                            if (Index != nullptr &&
+                                                IndexEdge->SourceNode == ActiveLoops[Level]->Id &&
+                                                IndexEdge->SourcePin == Index->Id)
+                                            {
+                                                IndexReference.Kind =
+                                                    EBPSemanticExpressionKind::VariableReference;
+                                                IndexReference.Type.Kind =
+                                                    EBPSemanticTypeKind::Int32;
+                                                IndexReference.VariableName = Level == 0 ?
+                                                    TEXT("LoopIndex") : Level == 1 ?
+                                                    TEXT("InnerIndex") :
+                                                    FName(*FString::Printf(
+                                                        TEXT("LoopIndex%d"), Level));
+                                                IndexReference.SourceNodeId =
+                                                    ActiveLoops[Level]->Id;
+                                                bFoundIndex = true;
+                                                break;
+                                            }
+                                        }
+                                        if (bFoundIndex == false)
+                                        {
+                                            return false;
+                                        }
+                                        Result.Kind = EBPSemanticExpressionKind::FunctionCall;
+                                        Result.Type.Kind = EBPSemanticTypeKind::String;
+                                        Result.FunctionName = TEXT("Conv_IntToString");
+                                        Result.FunctionOwnerPath =
+                                            TEXT("/Script/Engine.KismetStringLibrary");
+                                        Result.SourceNodeId = Source->Id;
+                                        Result.Arguments.Add(MoveTemp(IndexReference));
+                                        UsedConverters.Add(Source->Id);
+                                        return true;
+                                    }
+                                    if (Source->FunctionName != TEXT("Concat_StrStr") ||
                                         Source->FunctionOwnerPath !=
                                             TEXT("/Script/Engine.KismetStringLibrary") ||
                                         ConcatStack.Contains(Source->Id) ||
