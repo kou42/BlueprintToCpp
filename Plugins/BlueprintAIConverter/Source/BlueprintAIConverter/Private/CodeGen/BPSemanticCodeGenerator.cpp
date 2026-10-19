@@ -1216,6 +1216,37 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     return false;
 }
 
+// 式文が必要とするヘッダーを、通常文・Branch・Loopの配置から独立して収集する。
+// 新しい式Emitterを追加するときは、共通ディスパッチと依存ヘッダーだけを登録する。
+void AppendExpressionIncludes(const FBPSemanticExpression& Expression, FString& OutIncludes)
+{
+    if (Expression.FunctionOwnerPath == TEXT("/Script/Engine.Actor") &&
+        Expression.FunctionName == TEXT("K2_SetActorLocation") &&
+        OutIncludes.Contains(TEXT("#include \"Engine/HitResult.h\"")) == false)
+    {
+        OutIncludes += TEXT("#include \"Engine/HitResult.h\"\n");
+    }
+    if (Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetMathLibrary") &&
+        OutIncludes.Contains(TEXT("#include \"Kismet/KismetMathLibrary.h\"")) == false)
+    {
+        OutIncludes += TEXT("#include \"Kismet/KismetMathLibrary.h\"\n");
+    }
+    if (Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+        OutIncludes.Contains(TEXT("#include \"Kismet/KismetStringLibrary.h\"")) == false)
+    {
+        OutIncludes += TEXT("#include \"Kismet/KismetStringLibrary.h\"\n");
+    }
+    if (Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetSystemLibrary") &&
+        OutIncludes.Contains(TEXT("#include \"Kismet/KismetSystemLibrary.h\"")) == false)
+    {
+        OutIncludes += TEXT("#include \"Kismet/KismetSystemLibrary.h\"\n");
+    }
+    for (const FBPSemanticExpression& Argument : Expression.Arguments)
+    {
+        AppendExpressionIncludes(Argument, OutIncludes);
+    }
+}
+
 // ForLoopのBranchを再帰的に生成する。対応する葉は共通の式文Emitterへ渡し、
 // 深さ制限で異常なSemantic IRによる過度な再帰を防ぐ。
 bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
@@ -1267,7 +1298,7 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
             InnerCode += Part;
         }
         OutCode = FString::Printf(
-            TEXT("%sfor (int32 %s = %d; %s <= %d; ++%s)\\n%s{\\n%s%s}\\n"),
+            TEXT("%sfor (int32 %s = %d; %s <= %d; ++%s)\n%s{\n%s%s}\n"),
             *Indent, *Statement.LoopIndexVariable.ToString(), First,
             *Statement.LoopIndexVariable.ToString(), Last,
             *Statement.LoopIndexVariable.ToString(), *Indent, *InnerCode, *Indent);
@@ -1304,7 +1335,7 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
         return false;
     }
     OutCode = FString::Printf(
-        TEXT("%sif (%s)\\n%s{\\n%s%s}\\n%selse\\n%s{\\n%s%s}\\n"),
+        TEXT("%sif (%s)\n%s{\n%s%s}\n%selse\n%s{\n%s%s}\n"),
         *Indent, *Condition, *Indent, *ThenCode, *Indent,
         *Indent, *Indent, *Indent, *ElseCode, *Indent);
     return true;
@@ -1720,13 +1751,17 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         }
         FString ThenCode;
         FString ElseCode;
-        if (EmitPrintStringStatement(ThenStatement.Expression, IR.ParentClassPath,
+        if (EmitExpressionStatement(ThenStatement.Expression, IR.ParentClassPath,
             TEXT("        "), ThenCode, OutDiagnostics) == false ||
-            EmitPrintStringStatement(ElseStatement.Expression, IR.ParentClassPath,
+            EmitExpressionStatement(ElseStatement.Expression, IR.ParentClassPath,
                 TEXT("        "), ElseCode, OutDiagnostics) == false)
         {
             return false;
         }
+
+        FString BranchIncludes = TEXT("#include \"Kismet/KismetMathLibrary.h\"\n");
+        AppendExpressionIncludes(ThenStatement.Expression, BranchIncludes);
+        AppendExpressionIncludes(ElseStatement.Expression, BranchIncludes);
 
         FString VariableDeclarations;
         FString ConstructorBody;
@@ -1759,21 +1794,23 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             TEXT("%s    if (%s)\n    {\n%s    }\n    else\n    {\n%s    }\n"),
             *LeadingCode, *Condition, *ThenCode, *ElseCode);
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s"),
-            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
+            TEXT("#include \"%s.h\"\n%s%s%s%s"),
+            *BaseName, *BranchIncludes, *LeadingIncludes,
+            *UnrealTypeInclude, *ConstructorDefinition);
         Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
         OutFiles = MoveTemp(Files);
         return true;
     }
-    if (Statement.Kind == EBPSemanticStatementKind::Expression &&
-        Call.FunctionName == TEXT("K2_SetActorLocation"))
+    if (Statement.Kind == EBPSemanticStatementKind::Expression)
     {
-        FString ActorLocationStatement;
-        if (EmitActorLocationStatement(Call, IR.ParentClassPath, TEXT("    "),
-            ActorLocationStatement, OutDiagnostics) == false)
+        FString ExpressionStatementCode;
+        if (EmitExpressionStatement(Call, IR.ParentClassPath, TEXT("    "),
+            ExpressionStatementCode, OutDiagnostics) == false)
         {
             return false;
         }
+        FString ExpressionIncludes;
+        AppendExpressionIncludes(Call, ExpressionIncludes);
         FString VariableDeclarations;
         FString ConstructorBody;
         if (EmitVariables(IR.Variables, ClassName, VariableDeclarations,
@@ -1801,107 +1838,15 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
-        // ActorLocation文の生成は既存Emitterに委ね、関数定義の外枠だけを共有する。
-        const FString Body = LeadingCode + ActorLocationStatement;
+        const FString Body = LeadingCode + ExpressionStatementCode;
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Engine/HitResult.h\"\n%s%s%s"),
-            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
+            TEXT("#include \"%s.h\"\n%s%s%s%s"),
+            *BaseName, *ExpressionIncludes, *LeadingIncludes,
+            *UnrealTypeInclude, *ConstructorDefinition);
         Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
         OutFiles = MoveTemp(Files);
         return true;
     }
-    if (Statement.Kind != EBPSemanticStatementKind::Expression ||
-        Call.Kind != EBPSemanticExpressionKind::FunctionCall ||
-        Call.Type.Kind != EBPSemanticTypeKind::Void ||
-        Call.FunctionName != TEXT("PrintString") ||
-        Call.FunctionOwnerPath != TEXT("/Script/Engine.KismetSystemLibrary") ||
-        Call.Arguments.Num() != 7)
-    {
-        OutDiagnostics.Add(TEXT("Unsupported semantic statement or function signature"));
-        return false;
-    }
-    const FBPSemanticExpression& Context = Call.Arguments[0];
-    if (Context.Kind != EBPSemanticExpressionKind::VariableReference ||
-        Context.VariableName != TEXT("this") ||
-        Context.Type.Kind != EBPSemanticTypeKind::Object ||
-        Context.Type.TypePath != IR.ParentClassPath)
-    {
-        OutDiagnostics.Add(TEXT("Unsupported PrintString world context"));
-        return false;
-    }
-
-    FString Text, Screen, Log, Color, DurationText, Key;
-    if (ReadArgument(Call.Arguments[1], EBPSemanticTypeKind::String, Text, OutDiagnostics) == false ||
-        ReadArgument(Call.Arguments[2], EBPSemanticTypeKind::Bool, Screen, OutDiagnostics) == false ||
-        ReadArgument(Call.Arguments[3], EBPSemanticTypeKind::Bool, Log, OutDiagnostics) == false ||
-        ReadArgument(Call.Arguments[4], EBPSemanticTypeKind::Struct, Color, OutDiagnostics) == false ||
-        ReadArgument(Call.Arguments[5], EBPSemanticTypeKind::Float, DurationText, OutDiagnostics) == false ||
-        ReadArgument(Call.Arguments[6], EBPSemanticTypeKind::String, Key, OutDiagnostics) == false)
-    {
-        return false;
-    }
-    if ((Screen != TEXT("true") && Screen != TEXT("false")) ||
-        (Log != TEXT("true") && Log != TEXT("false")) ||
-        Call.Arguments[4].Type.TypePath != TEXT("/Script/CoreUObject.LinearColor"))
-    {
-        OutDiagnostics.Add(TEXT("Invalid PrintString boolean or color type"));
-        return false;
-    }
-    float Duration = 0.0f;
-    FLinearColor LinearColor;
-    if (LexTryParseString(Duration, *DurationText) == false || FMath::IsFinite(Duration) == false ||
-        LinearColor.InitFromString(Color) == false ||
-        FMath::IsFinite(LinearColor.R) == false || FMath::IsFinite(LinearColor.G) == false ||
-        FMath::IsFinite(LinearColor.B) == false || FMath::IsFinite(LinearColor.A) == false)
-    {
-        OutDiagnostics.Add(TEXT("Invalid PrintString duration or color"));
-        return false;
-    }
-    FString EscapedText, EscapedKey;
-    if (EscapeString(Text, EscapedText, OutDiagnostics) == false ||
-        EscapeString(Key, EscapedKey, OutDiagnostics) == false)
-    {
-        return false;
-    }
-
-    FString VariableDeclarations;
-    FString ConstructorBody;
-    if (EmitVariables(IR.Variables, ClassName, VariableDeclarations, ConstructorBody, OutDiagnostics,
-        VariableFallbackMode) == false)
-    {
-        return false;
-    }
-
-    const FString ApiPrefix = ModuleApiMacro.IsEmpty() ? FString() : ModuleApiMacro + TEXT(" ");
-    const FString ConstructorDeclaration = ConstructorBody.IsEmpty()
-        ? FString()
-        : FString::Printf(TEXT("public:\n    %s();\n\n"), *ClassName);
-    const FString UnrealTypeInclude = ConstructorBody.IsEmpty()
-        ? FString()
-        : TEXT("#include \"UObject/UnrealType.h\"\n");
-    const FString ConstructorDefinition = ConstructorBody.IsEmpty()
-        ? FString()
-        : FString::Printf(TEXT("\n%s::%s()\n{\n%s}\n"),
-            *ClassName, *ClassName, *ConstructorBody);
-    FBPGeneratedActorFiles Files;
-    Files.HeaderFileName = BaseName + TEXT(".h");
-    Files.SourceFileName = BaseName + TEXT(".cpp");
-    Files.HeaderContent = FString::Printf(
-        TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
-        *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName, *ParentClass.CppClassName,
-        *VariableDeclarations, *ConstructorDeclaration, *FunctionShape.Declaration);
-    // PrintStringの引数検証と文字列エスケープは従来どおり行い、定義出力だけ共通化する。
-    const FString PrintStatement = FString::Printf(
-        TEXT("    UKismetSystemLibrary::PrintString(this, TEXT(\"%s\"), %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n"),
-        *EscapedText, *Screen, *Log,
-        *FloatLiteral(LinearColor.R), *FloatLiteral(LinearColor.G),
-        *FloatLiteral(LinearColor.B), *FloatLiteral(LinearColor.A),
-        *FloatLiteral(Duration), *EscapedKey);
-    const FString Body = LeadingCode + PrintStatement;
-    Files.SourceContent = FString::Printf(
-        TEXT("#include \"%s.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s"),
-        *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
-    Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
-        OutFiles = MoveTemp(Files);
-    return true;
+    OutDiagnostics.Add(TEXT("Unsupported semantic statement kind"));
+    return false;
 }

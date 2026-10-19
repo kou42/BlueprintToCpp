@@ -69,7 +69,8 @@ bool FBPGeneratedUserFunctionAssetTest::RunTest(const FString& Parameters)
         FunctionGraph = FBlueprintEditorUtils::CreateNewGraph(
             Blueprint, FunctionName, UEdGraph::StaticClass(),
             UEdGraphSchema_K2::StaticClass());
-        FBlueprintEditorUtils::AddFunctionGraph(Blueprint, FunctionGraph, true, nullptr);
+        FBlueprintEditorUtils::AddFunctionGraph<UFunction>(
+            Blueprint, FunctionGraph, true, nullptr);
     }
     if (TestNotNull(TEXT("ユーザー定義関数Graph"), FunctionGraph) == false)
     {
@@ -306,12 +307,22 @@ bool FBPGeneratedUserFunctionAssetTest::RunTest(const FString& Parameters)
     {
         return false;
     }
-    TestEqual(TEXT("関数引数数"), Function->Parameters.Num(), 1);
-    if (Function->Parameters.Num() == 1)
+    TestEqual(TEXT("関数パラメータ数（戻り値を含む）"), Function->Parameters.Num(), 2);
+    const FBPSemanticParameter* InputParameter = Function->Parameters.FindByPredicate(
+        [](const FBPSemanticParameter& Parameter)
+        {
+            return Parameter.bIsReturn == false;
+        });
+    const FBPSemanticParameter* ReturnParameter = Function->Parameters.FindByPredicate(
+        [](const FBPSemanticParameter& Parameter)
+        {
+            return Parameter.bIsReturn;
+        });
+    if (TestNotNull(TEXT("関数入力パラメータ"), InputParameter) != false)
     {
-        TestEqual(TEXT("関数引数名"), Function->Parameters[0].Name,
-            FName(TEXT("InputValue")));
+        TestEqual(TEXT("関数引数名"), InputParameter->Name, FName(TEXT("InputValue")));
     }
+    TestNotNull(TEXT("関数戻り値パラメータ"), ReturnParameter);
 
     FBPGraphIR GraphIR;
     if (TestTrue(TEXT("関数Graph IR生成"),

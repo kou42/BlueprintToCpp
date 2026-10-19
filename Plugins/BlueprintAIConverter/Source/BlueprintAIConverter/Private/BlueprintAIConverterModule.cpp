@@ -111,7 +111,7 @@ void CopyNativeClassCppPreview(const TArray<FString>& Args)
         TEXT("Native UCLASS reference preview copied (not compilable): %s"), *Args[0]);
 }
 
-FAutoConsoleCommandWithArgs CopyNativeClassCppPreviewCommand(
+FAutoConsoleCommand CopyNativeClassCppPreviewCommand(
     TEXT("BlueprintAIConverter.CopyNativeClassCppPreview"),
     TEXT("Copy native UCLASS reflection reference to clipboard (not compilable)"),
     FConsoleCommandWithArgsDelegate::CreateStatic(&CopyNativeClassCppPreview));
@@ -238,22 +238,22 @@ void ShowNativeMemberMigrationReport(const TArray<FString>& Args)
     UE_LOG(LogBlueprintAIConverter, Display, TEXT("%s"), *Report);
 }
 
-FAutoConsoleCommandWithArgs NativeMemberMigrationCommand(
+FAutoConsoleCommand NativeMemberMigrationCommand(
     TEXT("BlueprintAIConverter.NativeMemberMigration"),
     TEXT("Assess native UCLASS members for safe inheritance and migration"),
     FConsoleCommandWithArgsDelegate::CreateStatic(&ShowNativeMemberMigrationReport));
 
-FAutoConsoleCommandWithArgs NativeClassDependenciesCommand(
+FAutoConsoleCommand NativeClassDependenciesCommand(
     TEXT("BlueprintAIConverter.NativeClassDependencies"),
     TEXT("Show target Build.cs dependency checklist: /Script/Module.ClassName TargetModule"),
     FConsoleCommandWithArgsDelegate::CreateStatic(&ShowNativeClassDependencies));
 
-FAutoConsoleCommandWithArgs CopyNativeSubclassCppCommand(
+FAutoConsoleCommand CopyNativeSubclassCppCommand(
     TEXT("BlueprintAIConverter.CopyNativeSubclassCpp"),
     TEXT("Copy minimal native UCLASS subclass header/source: /Script/Module.ClassName ANewClass"),
     FConsoleCommandWithArgsDelegate::CreateStatic(&CopyNativeSubclassCpp));
 
-FAutoConsoleCommandWithArgs ExportNativeClassCommand(
+FAutoConsoleCommand ExportNativeClassCommand(
     TEXT("BlueprintAIConverter.ExportNativeClass"),
     TEXT("Export native UCLASS declarations: /Script/Module.ClassName"),
     FConsoleCommandWithArgsDelegate::CreateStatic(&ExportNativeClassSemanticJson));

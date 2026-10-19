@@ -65,6 +65,26 @@ void AppendGraph(const UEdGraph* Graph, const FString& Kind, FBPGraphIR& IR)
             IRNode.FunctionName = Call->GetFunctionName();
             // 表示名ではなく解決済みUFunctionを優先し、Copilotが呼び出し先を推測しないようにする。
             const UFunction* TargetFunction = Call->GetTargetFunction();
+            // Blueprint内の関数呼び出しは、編集中のノードがSKELクラス側の
+            // UFunctionを解決することがある。外部利用者が一時的なSKEL名に
+            // 依存しないよう、対応するGeneratedClass上の関数へ正規化する。
+            if (TargetFunction != nullptr)
+            {
+                const UClass* OwnerClass = TargetFunction->GetOwnerClass();
+                const UBlueprint* OwnerBlueprint = OwnerClass != nullptr
+                    ? Cast<UBlueprint>(OwnerClass->ClassGeneratedBy)
+                    : nullptr;
+                if (OwnerBlueprint != nullptr
+                    && OwnerClass == OwnerBlueprint->SkeletonGeneratedClass
+                    && OwnerBlueprint->GeneratedClass != nullptr)
+                {
+                    if (const UFunction* GeneratedFunction =
+                        OwnerBlueprint->GeneratedClass->FindFunctionByName(TargetFunction->GetFName()))
+                    {
+                        TargetFunction = GeneratedFunction;
+                    }
+                }
+            }
             if (TargetFunction != nullptr)
             {
                 IRNode.bFunctionResolved = true;

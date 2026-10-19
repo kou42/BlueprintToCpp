@@ -103,7 +103,8 @@ bool FBPGeneratedVariableAssetTest::RunTest(const FString& Parameters)
     {
         return false;
     }
-    TestEqual(TEXT("生成した変数数"), GraphIR.BlueprintVariableCount, UE_ARRAY_COUNT(Cases));
+    TestEqual(TEXT("生成した変数数"), GraphIR.BlueprintVariableCount,
+        static_cast<int32>(UE_ARRAY_COUNT(Cases)));
 
     FBPSemanticIR SemanticIR;
     SemanticIR.AssetPath = GraphIR.AssetPath;

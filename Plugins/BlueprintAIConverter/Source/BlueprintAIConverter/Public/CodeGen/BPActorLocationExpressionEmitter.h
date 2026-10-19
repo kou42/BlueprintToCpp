@@ -4,7 +4,7 @@
 #include "BPSemanticIR.h"
 
 // 純粋なGetActorLocation式だけをC++式へ変換する限定Emitter。
-// 既存のPrintString専用Generatorを変更せず、後続の式ツリー生成に利用する。
+// 検証済みの共通式文Generatorから、後続の式ツリー生成に利用する。
 class BLUEPRINTAICONVERTER_API FBPActorLocationExpressionEmitter
 {
 public:

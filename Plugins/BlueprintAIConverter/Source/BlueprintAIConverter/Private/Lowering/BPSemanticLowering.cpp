@@ -1886,8 +1886,8 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
                 Index.VariableName = Print == IndexConsumerPrint
                     ? Statement.LoopIndexVariable : Statement.LoopElementVariable;
                 Index.SourceNodeId = Loop->Id;
-                Index.SourcePinId = Print == IndexConsumerPrint
-                    ? IndexPin->Id : ElementPin->Id;
+                // ループローカルはメンバーGetterではないためSourcePinIdを持たせない。
+                Index.SourcePinId = FGuid();
                 FBPSemanticExpression Conversion;
                 Conversion.Kind = EBPSemanticExpressionKind::FunctionCall;
                 Conversion.Type.Kind = EBPSemanticTypeKind::String;
@@ -2983,8 +2983,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                 {
                     Reference.VariableName = IndexName;
                     Reference.SourceNodeId = IndexOwner->Id;
-                    const FBPIRPin* Index = FindPin(*IndexOwner, TEXT("Index"), EGPD_Output);
-                    Reference.SourcePinId = Index->Id;
+                    Reference.SourcePinId = FGuid();
                     Conversion.Arguments.Add(MoveTemp(Reference));
                 }
                 else
@@ -3029,7 +3028,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                                 Expression.Type.Kind = EBPSemanticTypeKind::Int32;
                                 Expression.VariableName = Names[I];
                                 Expression.SourceNodeId = Candidates[I]->Id;
-                                Expression.SourcePinId = IndexPin->Id;
+                                Expression.SourcePinId = FGuid();
                                 return true;
                             }
                         }
@@ -3499,7 +3498,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                 Result.Type.Kind = EBPSemanticTypeKind::Int32;
                 Result.VariableName = LoopStatement.LoopIndexVariable;
                 Result.SourceNodeId = Loop->Id;
-                Result.SourcePinId = LoopIndex->Id;
+                Result.SourcePinId = FGuid();
                 return true;
             }
             const FBPIRNode* Arithmetic = nullptr;
@@ -3876,7 +3875,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                     OutExpression.Kind = EBPSemanticExpressionKind::VariableReference;
                     OutExpression.Type.Kind = EBPSemanticTypeKind::Int32;
                     OutExpression.SourceNodeId = Loop->Id;
-                    OutExpression.SourcePinId = LoopIndex->Id;
+                    OutExpression.SourcePinId = FGuid();
                     OutExpression.VariableName = LoopStatement.LoopIndexVariable;
                     return true;
                 }
@@ -4009,7 +4008,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
         IndexReference.Kind = EBPSemanticExpressionKind::VariableReference;
         IndexReference.Type.Kind = EBPSemanticTypeKind::Int32;
         IndexReference.SourceNodeId = Loop->Id;
-        IndexReference.SourcePinId = LoopIndex->Id;
+        IndexReference.SourcePinId = FGuid();
         IndexReference.VariableName = LoopStatement.LoopIndexVariable;
         IndexConversion.Arguments.Add(MoveTemp(IndexReference));
         // 対象Body文を構築するときに式へ差し込む。

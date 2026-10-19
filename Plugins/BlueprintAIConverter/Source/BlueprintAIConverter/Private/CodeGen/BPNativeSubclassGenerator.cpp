@@ -63,11 +63,12 @@ bool FBPNativeSubclassGenerator::Generate(const FBPSemanticClassInfo& Info,
         return false;
     }
 
-    // finalクラスからは派生できないため、通常経路でも拒否する。
+    // UE 5.7のEClassFlagsにはfinal情報がないため、ここでは反射上の存在を検証する。
+    // 実際のC++継承可否は公開ヘッダーをコンパイルする段階で最終確認される。
     UClass* NativeParent = FindObject<UClass>(nullptr, *Info.ClassPath);
-    if (NativeParent == nullptr || NativeParent->HasAnyClassFlags(CLASS_Final))
+    if (NativeParent == nullptr)
     {
-        OutDiagnostics.Add(TEXT("Native parent is unavailable or final"));
+        OutDiagnostics.Add(TEXT("Native parent is unavailable"));
         return false;
     }
 

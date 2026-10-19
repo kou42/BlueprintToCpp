@@ -56,6 +56,47 @@ FBPGraphIR MakeGeneratorTestGraph()
     IR.Graphs.Add(MoveTemp(Graph));
     return IR;
 }
+
+FBPSemanticExpression MakeActorLocationCall(const FString& ParentClassPath,
+    const FName HitResultName)
+{
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = ParentClassPath;
+    Target.VariableName = TEXT("this");
+
+    FBPSemanticExpression Location;
+    Location.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Location.Type.Kind = EBPSemanticTypeKind::Struct;
+    Location.Type.TypePath = TEXT("/Script/CoreUObject.Vector");
+    Location.FunctionName = TEXT("K2_GetActorLocation");
+    Location.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Location.Arguments.Add(Target);
+
+    FBPSemanticExpression BoolLiteral;
+    BoolLiteral.Kind = EBPSemanticExpressionKind::Literal;
+    BoolLiteral.Type.Kind = EBPSemanticTypeKind::Bool;
+    BoolLiteral.LiteralValue = TEXT("false");
+
+    FBPSemanticExpression HitResult;
+    HitResult.Kind = EBPSemanticExpressionKind::VariableReference;
+    HitResult.Type.Kind = EBPSemanticTypeKind::Struct;
+    HitResult.Type.TypePath = TEXT("/Script/Engine.HitResult");
+    HitResult.VariableName = HitResultName;
+
+    FBPSemanticExpression Call;
+    Call.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Call.Type.Kind = EBPSemanticTypeKind::Bool;
+    Call.FunctionName = TEXT("K2_SetActorLocation");
+    Call.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Call.Arguments.Add(MoveTemp(Target));
+    Call.Arguments.Add(MoveTemp(Location));
+    Call.Arguments.Add(BoolLiteral);
+    Call.Arguments.Add(MoveTemp(HitResult));
+    Call.Arguments.Add(MoveTemp(BoolLiteral));
+    return Call;
+}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorParityTest,
@@ -116,6 +157,61 @@ bool FBPSemanticGeneratorRejectTest::RunTest(const FString& Parameters)
         FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AParityActor"), FString(), Files, Diagnostics));
     TestTrue(TEXT("診断あり"), Diagnostics.IsEmpty() == false);
     TestTrue(TEXT("失敗時にソースを公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorGenericBranchStatementsTest,
+    "BlueprintAIConverter.SemanticIR.Generator.GenericBranchStatements",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorGenericBranchStatementsTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("テスト用Semantic IRを生成"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticStatement& Statement = Semantic.Functions[0].Blocks[0].Statements[0];
+    Statement.Kind = EBPSemanticStatementKind::Branch;
+    Statement.Expression = FBPSemanticExpression();
+    Statement.Expression.Kind = EBPSemanticExpressionKind::Literal;
+    Statement.Expression.Type.Kind = EBPSemanticTypeKind::Bool;
+    Statement.Expression.LiteralValue = TEXT("true");
+
+    FBPSemanticStatement ThenStatement;
+    ThenStatement.Kind = EBPSemanticStatementKind::Expression;
+    ThenStatement.Expression = MakeActorLocationCall(
+        Semantic.ParentClassPath, TEXT("ThenHitResult"));
+    Statement.ThenStatements.Add(MoveTemp(ThenStatement));
+
+    FBPSemanticStatement ElseStatement;
+    ElseStatement.Kind = EBPSemanticStatementKind::Expression;
+    ElseStatement.Expression = MakeActorLocationCall(
+        Semantic.ParentClassPath, TEXT("ElseHitResult"));
+    Statement.ElseStatements.Add(MoveTemp(ElseStatement));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("Branch末端を共通式Emitterで生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AGenericBranchActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("必要なHitResultヘッダーを収集"),
+        Files.SourceContent.Contains(TEXT("#include \"Engine/HitResult.h\"")));
+    TestTrue(TEXT("True側の汎用式文"), Files.SourceContent.Contains(
+        TEXT("FHitResult ThenHitResult{};")));
+    TestTrue(TEXT("False側の汎用式文"), Files.SourceContent.Contains(
+        TEXT("FHitResult ElseHitResult{};")));
+    TestFalse(TEXT("Branch生成がPrintStringに依存しない"),
+        Files.SourceContent.Contains(TEXT("UKismetSystemLibrary::PrintString")));
     return true;
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorOptionsParityTest,

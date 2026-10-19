@@ -576,6 +576,10 @@ bool FBPCopilotJsonFunctionSignatureGoldenTest::RunTest(const FString& Parameter
     {
         return false;
     }
+    // UE 5.7ではこのテスト用の一時関数グラフに自動配置されたノードが
+    // 無効GUIDのまま残る場合があるため、エクスポート契約に沿うGUIDを付与する。
+    Entry->CreateNewGuid();
+    Result->CreateNewGuid();
 
     FEdGraphPinType IntType;
     IntType.PinCategory = UEdGraphSchema_K2::PC_Int;

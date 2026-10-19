@@ -136,7 +136,7 @@ bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& 
         UK2Node_CallFunction* Body = AddFixturePrint(Graph, PrintFunction, TEXT("Loop body"));
         UK2Node_CallFunction* Done = AddFixturePrint(Graph, PrintFunction, TEXT("Loop completed"));
         if (Test.TestTrue(TEXT("BeginPlayからForLoop"), ConnectFixture(Graph, Begin,
-                UEdGraphSchema_K2::PN_Then, Loop, TEXT("Exec"))) == false ||
+                UEdGraphSchema_K2::PN_Then, Loop, UEdGraphSchema_K2::PN_Execute)) == false ||
             Test.TestTrue(TEXT("LoopBodyからPrint"), ConnectFixture(Graph, Loop,
                 TEXT("LoopBody"), Body, UEdGraphSchema_K2::PN_Execute)) == false ||
             Test.TestTrue(TEXT("CompletedからPrint"), ConnectFixture(Graph, Loop,

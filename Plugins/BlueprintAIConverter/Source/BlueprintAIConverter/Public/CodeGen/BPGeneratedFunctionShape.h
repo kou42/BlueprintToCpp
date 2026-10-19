@@ -25,7 +25,7 @@ struct FBPFunctionDefinitionEmitter
 
     static FString RenderDefinition(const FBPGeneratedFunctionShape& Shape, const FString& Body)
     {
-        return FString::Printf(TEXT("\\n%s\\n{\\n%s%s}\\n"),
+        return FString::Printf(TEXT("\n%s\n{\n%s%s}\n"),
             *Shape.Definition, *RenderBodyPrefix(Shape), *Body);
     }
 };
