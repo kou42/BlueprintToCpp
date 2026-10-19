@@ -996,7 +996,18 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                         {
                             return false;
                         }
-                        Out = Integer.VariableName.ToString();
+                        // Indexはローカル、反射済みメンバーはthis経由で参照する。
+                        const FString Name = Integer.VariableName.ToString();
+                        if (Name == TEXT("LoopIndex") ||
+                            Name == TEXT("InnerIndex") ||
+                            Name.StartsWith(TEXT("LoopIndex")))
+                        {
+                            Out = Name;
+                        }
+                        else
+                        {
+                            Out = FString::Printf(TEXT("this->%s"), *Name);
+                        }
                         return true;
                     }
                     if (Integer.Kind != EBPSemanticExpressionKind::FunctionCall ||
