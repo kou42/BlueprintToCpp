@@ -2534,4 +2534,101 @@ bool FBPForLoopNestedSequentialBodyTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopTripleSequentialBodyTest,
+    "BlueprintAIConverter.Conversion.ForLoop.TripleSequentialBody",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopTripleSequentialBodyTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR;
+    IR.AssetPath = TEXT("/Game/BP_NestedSequential");
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    Graph.Kind = TEXT("event");
+    FBPIRNode Begin;
+    Begin.Id = FGuid::NewGuid();
+    Begin.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_Event");
+    Begin.FunctionName = TEXT("ReceiveBeginPlay");
+    Begin.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Graph.Nodes.Add(MoveTemp(Begin));
+    const auto MakeLoop = []()
+    {
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+        Node.MacroGraphName = TEXT("ForLoop");
+        Node.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("0")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+        return Node;
+    };
+    Graph.Nodes.Add(MakeLoop());
+    Graph.Nodes.Add(MakeLoop());
+    Graph.Nodes.Add(MakeLoop());
+    const TCHAR* Names[] = {
+        TEXT("Process1"), TEXT("Process2"), TEXT("Process3"),
+        TEXT("Process4"), TEXT("Process5"), TEXT("Process6")
+    };
+    for (const TCHAR* Name : Names)
+    {
+        FBPIRNode Print;
+        Print.Id = FGuid::NewGuid();
+        Print.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Print.FunctionName = TEXT("PrintString");
+        Print.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"), Name));
+        Graph.Nodes.Add(MoveTemp(Print));
+    }
+    const auto Connect = [&Graph](int32 From, int32 Output, int32 To)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Graph.Nodes[From].Id;
+        Edge.SourcePin = Graph.Nodes[From].Pins[Output].Id;
+        Edge.TargetNode = Graph.Nodes[To].Id;
+        Edge.TargetPin = Graph.Nodes[To].Pins[0].Id;
+        Graph.ExecEdges.Add(Edge);
+    };
+    // 三重ループでCompletedが一つ外側の本体へ戻ることを確認する。
+    Connect(0, 0, 1);
+    Connect(1, 3, 4);
+    Connect(4, 1, 2);
+    Connect(2, 3, 5);
+    Connect(5, 1, 3);
+    Connect(3, 3, 6);
+    Connect(6, 1, 7);
+    Connect(3, 5, 8);
+    Connect(8, 1, 9);
+    IR.Graphs.Add(MoveTemp(Graph));
+
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をLowering"),
+        FBPSemanticLowering::LowerForLoop(IR, Semantic)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
+    TestEqual(TEXT("外側本体"), Outer.LoopBodyStatements.Num(), 2);
+    const FBPSemanticStatement& Middle = Outer.LoopBodyStatements[1];
+    TestEqual(TEXT("中間ループ"), Middle.Kind, EBPSemanticStatementKind::ForLoop);
+    TestEqual(TEXT("中間本体"), Middle.LoopBodyStatements.Num(), 2);
+    const FBPSemanticStatement& Inner = Middle.LoopBodyStatements[1];
+    TestEqual(TEXT("内側ループ"), Inner.Kind, EBPSemanticStatementKind::ForLoop);
+    TestEqual(TEXT("内側本体"), Inner.LoopBodyStatements.Num(), 2);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("三重ForLoopのC++生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ATripleSequentialActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("三段目のIndex名"), Files.SourceContent.Contains(TEXT("LoopIndex2")));
+    return true;
+}
+
 #endif
