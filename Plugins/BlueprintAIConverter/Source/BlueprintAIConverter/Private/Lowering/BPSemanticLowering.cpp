@@ -2004,6 +2004,165 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             NestedLoops.Add(&Node);
         }
     }
+    // PrintStringのみの二重ループでは、Execチェーンを順にたどり、
+    // 内側Completedを外側ループ本体の後続処理として配置する。
+    if (NestedLoops.Num() == 2 && EventGraph->DataEdges.IsEmpty())
+    {
+        const FBPIRNode* Entry = nullptr;
+        int32 PrintCount = 0;
+        bool bSupportedNodes = true;
+        for (const FBPIRNode& Node : EventGraph->Nodes)
+        {
+            if (Node.FunctionName == TEXT("ReceiveBeginPlay") &&
+                Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event"))
+            {
+                Entry = &Node;
+            }
+            else if (Node.FunctionName == TEXT("PrintString") &&
+                Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction"))
+            {
+                ++PrintCount;
+            }
+            else if (Node.MacroGraphName != TEXT("ForLoop") ||
+                Node.ClassPath != TEXT("/Script/BlueprintGraph.K2Node_MacroInstance"))
+            {
+                bSupportedNodes = false;
+            }
+        }
+        if (bSupportedNodes && Entry != nullptr && PrintCount > 0 &&
+            EventGraph->Nodes.Num() == PrintCount + 3)
+        {
+            const auto NextExec = [EventGraph](const FBPIRNode& Source,
+                const FName PinName, const FBPIRNode*& Next) -> bool
+            {
+                Next = nullptr;
+                const FBPIRPin* Output = FindPin(Source, PinName, EGPD_Output);
+                if (Output == nullptr)
+                {
+                    return false;
+                }
+                for (const FBPIRLink& Edge : EventGraph->ExecEdges)
+                {
+                    if (Edge.SourceNode != Source.Id || Edge.SourcePin != Output->Id)
+                    {
+                        continue;
+                    }
+                    if (Next != nullptr)
+                    {
+                        return false;
+                    }
+                    Next = EventGraph->Nodes.FindByPredicate(
+                        [&Edge](const FBPIRNode& Node) { return Node.Id == Edge.TargetNode; });
+                    if (Next == nullptr)
+                    {
+                        return false;
+                    }
+                    const FBPIRPin* Execute = FindPin(
+                        *Next, UEdGraphSchema_K2::PN_Execute, EGPD_Input);
+                    if (Execute == nullptr || Execute->Id != Edge.TargetPin)
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            TSet<FGuid> Visited;
+            TFunction<bool(const FBPIRNode*, TArray<FBPSemanticStatement>&, int32)> LowerChain;
+            LowerChain = [&](const FBPIRNode* Current,
+                TArray<FBPSemanticStatement>& Destination, int32 Depth) -> bool
+            {
+                while (Current != nullptr)
+                {
+                    if (Visited.Contains(Current->Id))
+                    {
+                        return false;
+                    }
+                    Visited.Add(Current->Id);
+                    if (Current->FunctionName == TEXT("PrintString") &&
+                        Current->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction"))
+                    {
+                        FBPPrintStringCall Values;
+                        if (AnalyzeBranchPrint(
+                                GraphIR, *EventGraph, *Entry, *Current, Values, OutIR) == false)
+                        {
+                            return false;
+                        }
+                        FBPSemanticStatement Print;
+                        Print.Kind = EBPSemanticStatementKind::Expression;
+                        Print.SourceNodeId = Current->Id;
+                        Print.Expression = MakePrintStringExpression(
+                            Values, *Current, GraphIR.ParentClassPath);
+                        Destination.Add(MoveTemp(Print));
+                        const FBPIRNode* Next = nullptr;
+                        if (NextExec(*Current, UEdGraphSchema_K2::PN_Then, Next) == false)
+                        {
+                            return false;
+                        }
+                        Current = Next;
+                    }
+                    else if (Current->MacroGraphName == TEXT("ForLoop") &&
+                        Current->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
+                        Depth < 2)
+                    {
+                        const FBPIRPin* First = FindPin(*Current, TEXT("FirstIndex"), EGPD_Input);
+                        const FBPIRPin* Last = FindPin(*Current, TEXT("LastIndex"), EGPD_Input);
+                        int32 FirstValue = 0;
+                        int32 LastValue = 0;
+                        if (First == nullptr || Last == nullptr ||
+                            LexTryParseString(FirstValue, *First->DefaultValue) == false ||
+                            LexTryParseString(LastValue, *Last->DefaultValue) == false)
+                        {
+                            return false;
+                        }
+                        FBPSemanticStatement Loop;
+                        Loop.Kind = EBPSemanticStatementKind::ForLoop;
+                        Loop.SourceNodeId = Current->Id;
+                        Loop.LoopIndexVariable = Depth == 0 ? TEXT("LoopIndex") : TEXT("InnerIndex");
+                        Loop.LoopFirstIndex = Literal(EBPSemanticTypeKind::Int32,
+                            LexToString(FirstValue), *Current, TEXT("FirstIndex"));
+                        Loop.LoopLastIndex = Literal(EBPSemanticTypeKind::Int32,
+                            LexToString(LastValue), *Current, TEXT("LastIndex"));
+                        const FBPIRNode* Body = nullptr;
+                        const FBPIRNode* Completed = nullptr;
+                        if (NextExec(*Current, TEXT("LoopBody"), Body) == false ||
+                            NextExec(*Current, TEXT("Completed"), Completed) == false ||
+                            Body == nullptr ||
+                            LowerChain(Body, Loop.LoopBodyStatements, Depth + 1) == false)
+                        {
+                            return false;
+                        }
+                        Destination.Add(MoveTemp(Loop));
+                        // 内側Completedは外側LoopBodyの続きとして生成する。
+                        Current = Completed;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            const FBPIRNode* First = nullptr;
+            FBPSemanticFunction Function;
+            Function.Name = TEXT("BeginPlay");
+            Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+            FBPSemanticBasicBlock Block;
+            Block.SourceEntryNodeId = Entry->Id;
+            if (NextExec(*Entry, UEdGraphSchema_K2::PN_Then, First) &&
+                First != nullptr && LowerChain(First, Block.Statements, 0) &&
+                Visited.Num() == EventGraph->Nodes.Num() - 1 &&
+                Block.Statements.Num() == 1 &&
+                Block.Statements[0].Kind == EBPSemanticStatementKind::ForLoop)
+            {
+                Function.Blocks.Add(MoveTemp(Block));
+                OutIR.Functions.Add(MoveTemp(Function));
+                return true;
+            }
+            AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
+                TEXT("Nested ForLoop sequential Exec flow is unsupported"));
+            return false;
+        }
+    }
     if (NestedLoops.Num() == 2)
     {
         const FBPIRNode* Entry = nullptr;
