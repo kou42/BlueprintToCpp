@@ -1934,7 +1934,7 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     return OutIR.HasErrors() == false;
 }
 
-bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
     OutIR = FBPSemanticIR();
     OutIR.AssetPath = GraphIR.AssetPath;
@@ -1960,9 +1960,18 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
     }
     if (GraphIR.BlueprintVariableCount != 0)
     {
-        AddDiagnostic(OutIR, FString(), FGuid(),
-            TEXT("ForLoop conversion does not yet support Blueprint member variables"));
-        return false;
+        if (Blueprint == nullptr)
+        {
+            AddDiagnostic(OutIR, FString(), FGuid(),
+                TEXT("ForLoop member variables require a compiled Blueprint"));
+            return false;
+        }
+        // 既存の変数抽出器を利用し、反射で検証された型と名前を保持する。
+        FBPSemanticVariableExtractor::Append(Blueprint, OutIR);
+        if (OutIR.HasErrors())
+        {
+            return false;
+        }
     }
 
     const FBPIRGraph* EventGraph = nullptr;
@@ -3951,7 +3960,7 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
     if (bHasForLoop && bHasPrintString && bHasBranch == false &&
         bHasGetActorLocation == false && bHasSetActorLocation == false)
     {
-        return LowerForLoop(GraphIR, OutIR);
+        return LowerForLoop(Blueprint, GraphIR, OutIR);
     }
     if (bHasBranch && bHasForLoop == false && bHasPrintString &&
         bHasGetActorLocation == false && bHasSetActorLocation == false)
@@ -4027,5 +4036,11 @@ bool FBPSemanticLowering::LowerBranch(const UBlueprint* Blueprint,
 
 bool FBPSemanticLowering::LowerForLoop(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
-    return LowerForLoopImpl(GraphIR, OutIR);
+    return LowerForLoopImpl(nullptr, GraphIR, OutIR);
+}
+
+bool FBPSemanticLowering::LowerForLoop(const UBlueprint* Blueprint,
+    const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+{
+    return LowerForLoopImpl(Blueprint, GraphIR, OutIR);
 }
