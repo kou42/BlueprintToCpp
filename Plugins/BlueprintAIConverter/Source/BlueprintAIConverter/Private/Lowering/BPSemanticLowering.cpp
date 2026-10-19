@@ -2524,7 +2524,8 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                         Loop.Kind = EBPSemanticStatementKind::ForLoop;
                         Loop.SourceNodeId = Current->Id;
                         Loop.LoopIndexVariable = Depth == 0 ? TEXT("LoopIndex") :
-                            Depth == 1 ? TEXT("InnerIndex") :\n                            FName(*FString::Printf(TEXT("LoopIndex%d"), Depth));
+                            Depth == 1 ? TEXT("InnerIndex") :
+                            FName(*FString::Printf(TEXT("LoopIndex%d"), Depth));
                         Loop.LoopFirstIndex = Literal(EBPSemanticTypeKind::Int32,
                             LexToString(FirstValue), *Current, TEXT("FirstIndex"));
                         Loop.LoopLastIndex = Literal(EBPSemanticTypeKind::Int32,
