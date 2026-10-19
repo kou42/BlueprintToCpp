@@ -938,7 +938,7 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                 {
                     return false;
                 }
-                Result = FString::Printf(TEXT("TEXT(\\"%s\\")"), *Escaped);
+                Result = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
                 return true;
             }
             if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
