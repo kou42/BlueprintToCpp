@@ -2004,9 +2004,9 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             NestedLoops.Add(&Node);
         }
     }
-    // PrintStringのみの二重ループでは、Execチェーンを順にたどり、
+    // PrintStringのみの多重ループでは、Execチェーンを順にたどり、
     // 内側Completedを外側ループ本体の後続処理として配置する。
-    if (NestedLoops.Num() == 2 && EventGraph->DataEdges.IsEmpty())
+    if (NestedLoops.Num() >= 2 && EventGraph->DataEdges.IsEmpty())
     {
         const FBPIRNode* Entry = nullptr;
         int32 PrintCount = 0;
@@ -2030,7 +2030,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             }
         }
         if (bSupportedNodes && Entry != nullptr && PrintCount >= 4 &&
-            EventGraph->Nodes.Num() == PrintCount + 3)
+            EventGraph->Nodes.Num() == PrintCount + NestedLoops.Num() + 1)
         {
             const auto NextExec = [EventGraph](const FBPIRNode& Source,
                 const FName PinName, const FBPIRNode*& Next) -> bool
@@ -2102,7 +2102,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                     }
                     else if (Current->MacroGraphName == TEXT("ForLoop") &&
                         Current->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
-                        Depth < 2)
+                        Depth < 16)
                     {
                         const FBPIRPin* First = FindPin(*Current, TEXT("FirstIndex"), EGPD_Input);
                         const FBPIRPin* Last = FindPin(*Current, TEXT("LastIndex"), EGPD_Input);
@@ -2117,7 +2117,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                         FBPSemanticStatement Loop;
                         Loop.Kind = EBPSemanticStatementKind::ForLoop;
                         Loop.SourceNodeId = Current->Id;
-                        Loop.LoopIndexVariable = Depth == 0 ? TEXT("LoopIndex") : TEXT("InnerIndex");
+                        Loop.LoopIndexVariable = Depth == 0 ? TEXT("LoopIndex") :\n                            Depth == 1 ? TEXT("InnerIndex") :\n                            FName(*FString::Printf(TEXT("LoopIndex%d"), Depth));
                         Loop.LoopFirstIndex = Literal(EBPSemanticTypeKind::Int32,
                             LexToString(FirstValue), *Current, TEXT("FirstIndex"));
                         Loop.LoopLastIndex = Literal(EBPSemanticTypeKind::Int32,
