@@ -996,18 +996,11 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                         {
                             return false;
                         }
-                        // Indexはローカル、反射済みメンバーはthis経由で参照する。
+                        // Getterの出力ピンIDは有効、ForLoop Indexは未設定。
+                        // 名前の接頭辞では判定せず、IR上の参照元で区別する。
                         const FString Name = Integer.VariableName.ToString();
-                        if (Name == TEXT("LoopIndex") ||
-                            Name == TEXT("InnerIndex") ||
-                            Name.StartsWith(TEXT("LoopIndex")))
-                        {
-                            Out = Name;
-                        }
-                        else
-                        {
-                            Out = FString::Printf(TEXT("this->%s"), *Name);
-                        }
+                        Out = Integer.SourcePinId.IsValid()
+                            ? FString::Printf(TEXT("this->%s"), *Name) : Name;
                         return true;
                     }
                     if (Integer.Kind != EBPSemanticExpressionKind::FunctionCall ||
