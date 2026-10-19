@@ -2566,7 +2566,8 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 First != nullptr && LowerChain(First, Block.Statements, 0) &&
                 Visited.Num() + UsedConverters.Num() == EventGraph->Nodes.Num() - 1 &&
                 EventGraph->ExecEdges.Num() == Visited.Num() &&
-                EventGraph->DataEdges.Num() == ConverterCount * 2 +\n                    ArithmeticCount * 2 +\n                    (ArithmeticCount > 0 ? 0 : 0) &&
+                UsedConverters.Num() == ConverterCount + ArithmeticCount + AppendCount &&
+                EventGraph->DataEdges.Num() >= ConverterCount * 2 + AppendCount &&
                 Block.Statements.Num() == 1 &&
                 Block.Statements[0].Kind == EBPSemanticStatementKind::ForLoop)
             {
