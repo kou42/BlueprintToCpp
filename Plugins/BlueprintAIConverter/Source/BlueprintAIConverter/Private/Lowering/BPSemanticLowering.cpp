@@ -2208,13 +2208,18 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                         const FBPIRNode* Completed = nullptr;
                         if (NextExec(*Current, TEXT("LoopBody"), Body) == false ||
                             NextExec(*Current, TEXT("Completed"), Completed) == false ||
-                            Body == nullptr ||
-                            (ActiveLoops.Add(Current),
-                                LowerChain(Body, Loop.LoopBodyStatements, Depth + 1)) == false)
+                            Body == nullptr)
                         {
                             return false;
                         }
+                        ActiveLoops.Add(Current);
+                        const bool bBodyLowered = LowerChain(
+                            Body, Loop.LoopBodyStatements, Depth + 1);
                         ActiveLoops.Pop();
+                        if (bBodyLowered == false)
+                        {
+                            return false;
+                        }
                         Destination.Add(MoveTemp(Loop));
                         // 内側Completedは外側LoopBodyの続きとして生成する。
                         Current = Completed;
