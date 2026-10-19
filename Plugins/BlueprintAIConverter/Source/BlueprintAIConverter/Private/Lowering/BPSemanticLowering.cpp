@@ -2131,6 +2131,22 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                         // PrintStringのInStringに接続されたIndex -> IntToStringを解決する。
                         // 各ループのIndexはそのLoopBody内でのみ有効とし、スコープ外参照を拒否する。
                         const FBPIRPin* TextPin = FindPin(*Current, TEXT("InString"), EGPD_Input);
+                        // InStringの供給元は必ず一つ以下とする。複数接続を
+                        // 先勝ちで解決するとBlueprintと異なる値を生成してしまう。
+                        int32 TextProducerCount = 0;
+                        for (const FBPIRLink& Candidate : EventGraph->DataEdges)
+                        {
+                            if (TextPin != nullptr &&
+                                Candidate.TargetNode == Current->Id &&
+                                Candidate.TargetPin == TextPin->Id)
+                            {
+                                ++TextProducerCount;
+                            }
+                        }
+                        if (TextProducerCount > 1)
+                        {
+                            return false;
+                        }
                         for (const FBPIRLink& Edge : EventGraph->DataEdges)
                         {
                             if (TextPin == nullptr || Edge.TargetNode != Current->Id ||
