@@ -2151,6 +2151,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
             if (NextExec(*Entry, UEdGraphSchema_K2::PN_Then, First) &&
                 First != nullptr && LowerChain(First, Block.Statements, 0) &&
                 Visited.Num() == EventGraph->Nodes.Num() - 1 &&
+                EventGraph->ExecEdges.Num() == Visited.Num() &&
                 Block.Statements.Num() == 1 &&
                 Block.Statements[0].Kind == EBPSemanticStatementKind::ForLoop)
             {
