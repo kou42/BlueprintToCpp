@@ -1067,8 +1067,13 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         TextArgument.Arguments[0].Type.Kind == EBPSemanticTypeKind::Int32 &&
         IsIdentifier(TextArgument.Arguments[0].VariableName.ToString()))
     {
+        // Getterは出力ピンIDを持つ。LoopIndexのローカル参照と区別する。
+        const FBPSemanticExpression& Input = TextArgument.Arguments[0];
+        const FString Name = Input.VariableName.ToString();
+        const FString Reference = Input.SourcePinId.IsValid()
+            ? FString::Printf(TEXT("this->%s"), *Name) : Name;
         TextExpression = FString::Printf(TEXT("UKismetStringLibrary::Conv_IntToString(%s)"),
-            *TextArgument.Arguments[0].VariableName.ToString());
+            *Reference);
     }
     else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
         TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
