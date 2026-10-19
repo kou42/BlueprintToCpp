@@ -2029,7 +2029,7 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 bSupportedNodes = false;
             }
         }
-        if (bSupportedNodes && Entry != nullptr && PrintCount >= 4 &&
+        if (bSupportedNodes && Entry != nullptr && PrintCount > 0 &&
             EventGraph->Nodes.Num() == PrintCount + NestedLoops.Num() + 1)
         {
             const auto NextExec = [EventGraph](const FBPIRNode& Source,
@@ -2159,9 +2159,8 @@ bool LowerForLoopImpl(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
                 OutIR.Functions.Add(MoveTemp(Function));
                 return true;
             }
-            AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
-                TEXT("Nested ForLoop sequential Exec flow is unsupported"));
-            return false;
+            // 専用Loweringが扱う既存の二重ループ形状はそちらへ委譲する。
+            // それ以外の未対応形状は後続の検証で診断する。
         }
     }
     if (NestedLoops.Num() == 2)
