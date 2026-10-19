@@ -915,6 +915,30 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
     else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
         TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
         TextArgument.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+        TextArgument.FunctionName == TEXT("Concat_StrStr") &&
+        TextArgument.Arguments.Num() == 2)
+    {
+        // 結合対象は文字列リテラルに限定し、エスケープ後にC++へ埋め込む。
+        FString Left;
+        FString Right;
+        FString EscapedLeft;
+        FString EscapedRight;
+        if (ReadArgument(TextArgument.Arguments[0], EBPSemanticTypeKind::String,
+                Left, Diagnostics) == false ||
+            ReadArgument(TextArgument.Arguments[1], EBPSemanticTypeKind::String,
+                Right, Diagnostics) == false ||
+            EscapeString(Left, EscapedLeft, Diagnostics) == false ||
+            EscapeString(Right, EscapedRight, Diagnostics) == false)
+        {
+            return false;
+        }
+        TextExpression = FString::Printf(
+            TEXT("UKismetStringLibrary::Concat_StrStr(TEXT(\\"%s\\"), TEXT(\\"%s\\"))"),
+            *EscapedLeft, *EscapedRight);
+    }
+    else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
+        TextArgument.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
         TextArgument.FunctionName == TEXT("Conv_IntToString") &&
         TextArgument.Arguments.Num() == 1 &&
         TextArgument.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
