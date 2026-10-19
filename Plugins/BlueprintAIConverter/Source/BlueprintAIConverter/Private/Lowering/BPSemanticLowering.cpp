@@ -2341,6 +2341,34 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                                                 {
                                                     return Candidate.Id == InputLink->SourceNode;
                                                 });
+                                            if (Math != nullptr &&
+                                                Math->ClassPath ==
+                                                    TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
+                                            {
+                                                // int32の反射済みメンバーGetterのみ算術式へ渡す。
+                                                const FBPSemanticVariable* Variable =
+                                                    FindSemanticVariable(OutIR.Variables,
+                                                        Math->VariableName);
+                                                const FBPIRPin* ValuePin = FindPin(
+                                                    *Math, Math->VariableName, EGPD_Output);
+                                                if (Variable == nullptr ||
+                                                    Variable->Type.Kind != EBPSemanticTypeKind::Int32 ||
+                                                    Variable->ReflectedCppType != TEXT("int32") ||
+                                                    ValuePin == nullptr ||
+                                                    ValuePin->Id != InputLink->SourcePin ||
+                                                    UsedConverters.Contains(Math->Id))
+                                                {
+                                                    return false;
+                                                }
+                                                Value.Kind =
+                                                    EBPSemanticExpressionKind::VariableReference;
+                                                Value.Type = Variable->Type;
+                                                Value.VariableName = Variable->Name;
+                                                Value.SourceNodeId = Math->Id;
+                                                Value.SourcePinId = ValuePin->Id;
+                                                UsedConverters.Add(Math->Id);
+                                                return true;
+                                            }
                                             if (Math == nullptr ||
                                                 Math->FunctionOwnerPath !=
                                                     TEXT("/Script/Engine.KismetMathLibrary") ||
