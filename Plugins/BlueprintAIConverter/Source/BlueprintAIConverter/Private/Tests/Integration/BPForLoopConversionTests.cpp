@@ -2505,13 +2505,32 @@ bool FBPForLoopNestedSequentialBodyTest::RunTest(const FString& Parameters)
         return false;
     }
     const FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
-    TestEqual(TEXT("外側の本体は3文"), Outer.LoopBodyStatements.Num(), 5);
+    TestEqual(TEXT("外側の本体は5文"), Outer.LoopBodyStatements.Num(), 5);
     TestEqual(TEXT("内側ループは3番目"), Outer.LoopBodyStatements[2].Kind,
         EBPSemanticStatementKind::ForLoop);
     const FBPSemanticStatement& Inner = Outer.LoopBodyStatements[2];
     TestEqual(TEXT("内側の本体は2文"), Inner.LoopBodyStatements.Num(), 2);
-    // 内側Completedから続く処理5・処理6は外側ループの本体に含める。
-    // ここでは外側の文数を5にするのが期待値。
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をC++生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ANestedSequentialActor"),
+            TEXT("TEST_API"), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    // 内側ループ終了後も外側ループ内で処理5・処理6が順に生成される。
+    int32 Previous = INDEX_NONE;
+    for (const TCHAR* Name : Names)
+    {
+        const int32 Position = Files.SourceContent.Find(Name);
+        TestTrue(FString::Printf(TEXT("%s の出力順"), Name),
+            Position != INDEX_NONE && Position > Previous);
+        Previous = Position;
+    }
     return true;
 }
 
