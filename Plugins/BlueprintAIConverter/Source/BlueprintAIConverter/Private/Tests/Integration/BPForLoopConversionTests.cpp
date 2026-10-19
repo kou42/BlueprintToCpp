@@ -2427,4 +2427,92 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     return bElementLowered;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPForLoopNestedSequentialBodyTest,
+    "BlueprintAIConverter.Conversion.ForLoop.NestedSequentialBody",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPForLoopNestedSequentialBodyTest::RunTest(const FString& Parameters)
+{
+    FBPGraphIR IR;
+    IR.AssetPath = TEXT("/Game/BP_NestedSequential");
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPIRGraph Graph;
+    Graph.Name = TEXT("EventGraph");
+    Graph.Kind = TEXT("event");
+    FBPIRNode Begin;
+    Begin.Id = FGuid::NewGuid();
+    Begin.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_Event");
+    Begin.FunctionName = TEXT("ReceiveBeginPlay");
+    Begin.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+    Graph.Nodes.Add(MoveTemp(Begin));
+    const auto MakeLoop = []()
+    {
+        FBPIRNode Node;
+        Node.Id = FGuid::NewGuid();
+        Node.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+        Node.MacroGraphName = TEXT("ForLoop");
+        Node.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("FirstIndex"), EGPD_Input, TEXT("int"), TEXT("0")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LastIndex"), EGPD_Input, TEXT("int"), TEXT("2")));
+        Node.Pins.Add(MakeLoopPin(TEXT("LoopBody"), EGPD_Output, TEXT("exec")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Index"), EGPD_Output, TEXT("int")));
+        Node.Pins.Add(MakeLoopPin(TEXT("Completed"), EGPD_Output, TEXT("exec")));
+        return Node;
+    };
+    Graph.Nodes.Add(MakeLoop());
+    Graph.Nodes.Add(MakeLoop());
+    const TCHAR* Names[] = {
+        TEXT("Process1"), TEXT("Process2"), TEXT("Process3"),
+        TEXT("Process4"), TEXT("Process5"), TEXT("Process6")
+    };
+    for (const TCHAR* Name : Names)
+    {
+        FBPIRNode Print;
+        Print.Id = FGuid::NewGuid();
+        Print.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+        Print.FunctionName = TEXT("PrintString");
+        Print.Pins.Add(MakeLoopPin(TEXT("execute"), EGPD_Input, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("then"), EGPD_Output, TEXT("exec")));
+        Print.Pins.Add(MakeLoopPin(TEXT("InString"), EGPD_Input, TEXT("string"), Name));
+        Graph.Nodes.Add(MoveTemp(Print));
+    }
+    const auto Connect = [&Graph](int32 From, int32 Output, int32 To)
+    {
+        FBPIRLink Edge;
+        Edge.SourceNode = Graph.Nodes[From].Id;
+        Edge.SourcePin = Graph.Nodes[From].Pins[Output].Id;
+        Edge.TargetNode = Graph.Nodes[To].Id;
+        Edge.TargetPin = Graph.Nodes[To].Pins[0].Id;
+        Graph.ExecEdges.Add(Edge);
+    };
+    // 外側: 処理1 -> 処理2 -> 内側ForLoop -> 処理5 -> 処理6。
+    // 内側: 処理3 -> 処理4。Completedは外側本体の後続処理に接続する。
+    Connect(0, 0, 1);
+    Connect(1, 3, 3);
+    Connect(3, 1, 4);
+    Connect(4, 1, 2);
+    Connect(2, 3, 5);
+    Connect(5, 1, 6);
+    Connect(2, 5, 7);
+    Connect(7, 1, 8);
+    IR.Graphs.Add(MoveTemp(Graph));
+
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("二重ForLoopの直列処理をLowering"),
+        FBPSemanticLowering::LowerForLoop(IR, Semantic)) == false)
+    {
+        return false;
+    }
+    const FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
+    TestEqual(TEXT("外側の本体は3文"), Outer.LoopBodyStatements.Num(), 5);
+    TestEqual(TEXT("内側ループは3番目"), Outer.LoopBodyStatements[2].Kind,
+        EBPSemanticStatementKind::ForLoop);
+    const FBPSemanticStatement& Inner = Outer.LoopBodyStatements[2];
+    TestEqual(TEXT("内側の本体は2文"), Inner.LoopBodyStatements.Num(), 2);
+    // 内側Completedから続く処理5・処理6は外側ループの本体に含める。
+    // ここでは外側の文数を5にするのが期待値。
+    return true;
+}
+
 #endif
