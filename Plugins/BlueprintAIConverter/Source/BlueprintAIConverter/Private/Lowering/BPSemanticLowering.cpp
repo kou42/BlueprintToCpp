@@ -2562,7 +2562,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                                             Level == 1 ? TEXT("InnerIndex") :
                                             FName(*FString::Printf(TEXT("LoopIndex%d"), Level));
                                         Result.SourceNodeId = ActiveLoops[Level]->Id;
-                                        Result.SourcePinId = Index->Id;
+                                        // ローカルIndexにはメンバーGetter識別用のSourcePinIdを設定しない。
                                         return true;
                                     }
                                 }
