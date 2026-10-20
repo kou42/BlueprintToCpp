@@ -25,6 +25,7 @@ bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
     OutExpression = FBPSemanticExpression();
     if (Function == nullptr || GraphIR.Diagnostics.IsEmpty() == false ||
         Function->HasAnyFunctionFlags(FUNC_Native) == false ||
+        Function->HasAnyFunctionFlags(FUNC_BlueprintPure) == false ||
         Function->HasAnyFunctionFlags(FUNC_Static | FUNC_BlueprintEvent) ||
         Function->GetOwnerClass() == nullptr)
     {
@@ -65,7 +66,9 @@ bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
         }
         return false;
     }
-    if (Call->bFunctionPure == false || Signature.bStatic ||
+    if (Call->bFunctionPure == false ||
+        Call->FunctionOwnerPath != Function->GetOwnerClass()->GetPathName() ||
+        Signature.bStatic ||
         Signature.ReturnType.Kind == EBPSemanticTypeKind::Void ||
         Signature.ParameterNames.IsEmpty() == false)
     {
