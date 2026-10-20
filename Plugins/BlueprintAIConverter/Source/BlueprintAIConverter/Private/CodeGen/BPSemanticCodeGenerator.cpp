@@ -1236,9 +1236,23 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
         FString Arguments;
         const bool bStatic = ReflectedFunction->HasAnyFunctionFlags(FUNC_Static);
         const int32 FirstArgument = bStatic ? 0 : 1;
+        if (Expression.Arguments.Num() - FirstArgument !=
+            ResolvedCall.Signature.ParameterNames.Num())
+        {
+            Diagnostics.Add(TEXT("Reflected function parameter count does not match semantic call"));
+            return false;
+        }
         for (int32 Index = FirstArgument; Index < Expression.Arguments.Num(); ++Index)
         {
             const FBPSemanticExpression& Argument = Expression.Arguments[Index];
+            const int32 ParameterIndex = Index - FirstArgument;
+            if (ResolvedCall.Signature.OutputParameters[ParameterIndex] ||
+                ResolvedCall.Signature.ParameterTypes[ParameterIndex].Kind != Argument.Type.Kind ||
+                ResolvedCall.Signature.ParameterTypes[ParameterIndex].bIsReference)
+            {
+                Diagnostics.Add(TEXT("Reflected parameter type or direction does not match semantic call"));
+                return false;
+            }
             if (Argument.Kind != EBPSemanticExpressionKind::Literal ||
                 Argument.Type.bIsReference || Argument.Type.bIsConst)
             {
