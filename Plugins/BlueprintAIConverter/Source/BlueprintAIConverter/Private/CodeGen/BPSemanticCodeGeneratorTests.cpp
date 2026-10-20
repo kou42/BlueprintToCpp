@@ -328,6 +328,17 @@ bool FBPReflectedCallResolverInheritanceTest::RunTest(const FString& Parameters)
             TEXT("SetComponentTickEnabled"), TEXT("/Script/Engine.Actor"),
             false, Call, Diagnostics));
     TestNull(TEXT("失敗時に古い関数参照を残さない"), Call.Function);
+    Diagnostics.Reset();
+    TestTrue(TEXT("TargetがActor派生ならクラス名によらず関数を解決"),
+        FBPReflectedCallResolver::ResolveForTarget(TEXT("/Script/Engine.Actor"),
+            TEXT("SetActorTickEnabled"), TEXT("/Script/Engine.Pawn"),
+            false, Call, Diagnostics));
+    Diagnostics.Reset();
+    TestFalse(TEXT("Component型TargetにActor関数を適用しない"),
+        FBPReflectedCallResolver::ResolveForTarget(TEXT("/Script/Engine.Actor"),
+            TEXT("SetActorTickEnabled"), TEXT("/Script/Engine.ActorComponent"),
+            false, Call, Diagnostics));
+
     return true;
 }
 
