@@ -277,6 +277,29 @@ bool FBPSemanticGeneratorNestedBranchStatementsTest::RunTest(const FString& Para
         Step3 < Step4 && Step4 < Step5 && Step5 < Step6);
     TestTrue(TEXT("内側ifを出力"), Source.Contains(TEXT("if (false)")));
     TestTrue(TEXT("外側ifを出力"), Source.Contains(TEXT("if (true)")));
+
+    // Branchの両枝が合流した後の文は、ifの外側へ一度だけ出力する。
+    Semantic.Functions[0].Blocks[0].Statements.Add(MakeCall(TEXT("AfterJoin")));
+    FBPGeneratedActorFiles JoinedFiles;
+    TArray<FString> JoinedDiagnostics;
+    if (TestTrue(TEXT("Branch後続文のC++生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ANestedBranchActor"),
+            FString(), JoinedFiles, JoinedDiagnostics)) == false)
+    {
+        for (const FString& Diagnostic : JoinedDiagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    const FString& JoinedSource = JoinedFiles.SourceContent;
+    const int32 JoinPosition = JoinedSource.Find(TEXT("FHitResult AfterJoin{};"));
+    TestTrue(TEXT("合流後の文は内側のifより後ろ"),
+        JoinPosition > JoinedSource.Find(TEXT("FHitResult Step6{};")));
+    TestTrue(TEXT("合流後の文を重複出力しない"),
+        JoinedSource.Contains(TEXT("FHitResult AfterJoin{};")) &&
+        JoinedSource.Find(TEXT("FHitResult AfterJoin{};"), ESearchCase::CaseSensitive,
+            ESearchDir::FromEnd) == JoinPosition);
     return true;
 }
 
