@@ -196,7 +196,8 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
         TArray<FString> LocalArguments;
         for (int32 Index = 0; Index < Arguments.Num(); ++Index)
         {
-            const FString LocalName = FString::Printf(TEXT("BPArg%d"), Index);
+            const FString LocalName = FString::Printf(TEXT("BPGeneratedArg_%s_%d_%d"),
+                *Expression.SourceNodeId.ToString(EGuidFormats::Digits), Depth, Index);
             Preparation += FString::Printf(TEXT("const auto %s = %s;\n"),
                 *LocalName, *Arguments[Index]);
             LocalArguments.Add(LocalName);
