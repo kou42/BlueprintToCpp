@@ -4,6 +4,7 @@
 #include "BPActorCodeGenerator.h"
 #include "BPSemanticCodeGenerator.h"
 #include "BPSemanticLowering.h"
+#include "BPReflectedCallResolver.h"
 #include "Components/ActorComponent.h"
 #include "GameFramework/Pawn.h"
 
@@ -300,6 +301,33 @@ bool FBPSemanticGeneratorNestedBranchStatementsTest::RunTest(const FString& Para
         JoinedSource.Contains(TEXT("FHitResult AfterJoin{};")) &&
         JoinedSource.Find(TEXT("FHitResult AfterJoin{};"), ESearchCase::CaseSensitive,
             ESearchDir::FromEnd) == JoinPosition);
+    return true;
+}
+
+// 関数名やクラス別の分岐ではなく、リフレクションと継承関係で解決する。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPReflectedCallResolverInheritanceTest,
+    "BlueprintAIConverter.SemanticIR.Resolver.Inheritance",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPReflectedCallResolverInheritanceTest::RunTest(const FString& Parameters)
+{
+    FBPReflectedCall Call;
+    TArray<FString> Diagnostics;
+    TestTrue(TEXT("Pawn派生のselfからActorの関数を解決"),
+        FBPReflectedCallResolver::Resolve(TEXT("/Script/Engine.Actor"),
+            TEXT("SetActorTickEnabled"), TEXT("/Script/Engine.Pawn"),
+            false, Call, Diagnostics));
+    TestNotNull(TEXT("反射で解決された関数"), Call.Function);
+    TestEqual(TEXT("所有クラス"), Call.Signature.OwnerClassPath,
+        FString(TEXT("/Script/Engine.Actor")));
+
+    // ActorはComponentの派生ではないためself呼び出しに変換してはいけない。
+    Diagnostics.Reset();
+    TestFalse(TEXT("継承関係のない所有クラスを拒否"),
+        FBPReflectedCallResolver::Resolve(TEXT("/Script/Engine.ActorComponent"),
+            TEXT("SetComponentTickEnabled"), TEXT("/Script/Engine.Actor"),
+            false, Call, Diagnostics));
+    TestNull(TEXT("失敗時に古い関数参照を残さない"), Call.Function);
     return true;
 }
 
