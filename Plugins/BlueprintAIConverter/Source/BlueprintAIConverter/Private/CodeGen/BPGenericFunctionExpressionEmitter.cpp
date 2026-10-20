@@ -210,8 +210,10 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
     {
         // Targetプロパティを一度だけ読み取り、検査した同じポインタで呼び出す。
         const FString PropertyName = Target.VariableName.ToString();
-        const FString TargetCall = FString::Printf(TEXT("BPTarget->%s(%s)"),
-            *Name, *InvocationArguments);
+        const FString TargetLocal = FString::Printf(TEXT("BPGeneratedTarget_%s_%d"),
+            *Expression.SourceNodeId.ToString(EGuidFormats::Digits), Depth);
+        const FString TargetCall = FString::Printf(TEXT("%s->%s(%s)"),
+            *TargetLocal, *Name, *InvocationArguments);
         OutCpp = FString::Printf(
             TEXT("([&]() { auto* BPTarget = %s; if (BPTarget == nullptr) { return %s; }\n%sreturn %s; }())"),
             *PropertyName, *Fallback, *Preparation, *TargetCall);
