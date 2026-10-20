@@ -3,6 +3,7 @@
 #include "BPNumericArithmeticResolver.h"
 #include "BPNumericComparisonResolver.h"
 #include "BPParentClassResolver.h"
+#include "BPReflectedCallResolver.h"
 #include "UObject/Class.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -1215,24 +1216,21 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     }
     // Actorのネイティブ関数呼び出しは、Loweringで検証済みのリテラルのみを
     // C++引数へ変換する。任意の式や参照引数を文字列として出力しない。
-    const UClass* OwnerClass = FindObject<UClass>(
-        nullptr, *Expression.FunctionOwnerPath);
-    const UClass* ParentClass = FindObject<UClass>(
-        nullptr, *ParentClassPath);
-    const UFunction* ReflectedFunction = OwnerClass != nullptr
-        ? OwnerClass->FindFunctionByName(Expression.FunctionName) : nullptr;
-    if (OwnerClass != nullptr && ParentClass != nullptr &&
-        ((ReflectedFunction != nullptr && ReflectedFunction->HasAnyFunctionFlags(FUNC_Static)) ||
-         ParentClass->IsChildOf(OwnerClass)) &&
-        ReflectedFunction != nullptr &&
-        ReflectedFunction->HasAnyFunctionFlags(FUNC_Native) &&
+    // Semantic IRの所有クラスを共通Resolverで検証する。
+    // static/selfの区別は先頭引数のthis参照から判断し、反射結果と照合する。
+    const bool bSelfCall = Expression.Arguments.IsEmpty() == false &&
+        Expression.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
+        Expression.Arguments[0].VariableName == TEXT("this");
+    FBPReflectedCall ResolvedCall;
+    TArray<FString> ResolveDiagnostics;
+    const bool bResolved = FBPReflectedCallResolver::Resolve(
+        Expression.FunctionOwnerPath, Expression.FunctionName,
+        ParentClassPath, bSelfCall == false, ResolvedCall, ResolveDiagnostics);
+    const UClass* OwnerClass = ResolvedCall.Owner;
+    const UFunction* ReflectedFunction = ResolvedCall.Function;
+    if (bResolved && ReflectedFunction != nullptr &&
         ReflectedFunction->GetReturnProperty() == nullptr &&
         Expression.Type.Kind == EBPSemanticTypeKind::Void &&
-        (ReflectedFunction->HasAnyFunctionFlags(FUNC_Static)
-            ? OwnerClass->GetMetaData(TEXT("IncludePath")).IsEmpty() == false
-            : Expression.Arguments.Num() >= 1 &&
-              Expression.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
-              Expression.Arguments[0].VariableName == TEXT("this")) &&
         IsIdentifier(Expression.FunctionName.ToString()))
     {
         FString Arguments;
