@@ -1083,6 +1083,15 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         {
             return false;
         }
+        // Target(self)が別オブジェクトに接続されている場合はthis呼び出しにできない。
+        const FBPIRPin* SelfPin = FindPin(Node, TEXT("self"), EGPD_Input);
+        if (SelfPin != nullptr &&
+            (Graph.DataEdges.ContainsByPredicate(
+                [SelfPin](const FBPIRLink& Edge) { return Edge.TargetPin == SelfPin->Id; }) ||
+             (SelfPin->DefaultObjectPath.IsEmpty() == false)))
+        {
+            return false;
+        }
         FBPResolvedFunctionSignature Signature;
         TArray<FString> Diagnostics;
         if (FBPFunctionSignatureResolver::Resolve(Function, Signature, Diagnostics) == false ||
