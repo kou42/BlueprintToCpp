@@ -1048,7 +1048,7 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
             return true;
         }
         const UFunction* Function = AActor::StaticClass()->FindFunctionByName(Node.FunctionName);
-        if (Function == nullptr || Function->HasAnyFunctionFlags(FUNC_Native) == false ||
+        if (Node.FunctionOwnerPath != TEXT("/Script/Engine.Actor") || Function == nullptr || Function->HasAnyFunctionFlags(FUNC_Native) == false ||
             Function->HasAnyFunctionFlags(FUNC_Static) ||
             Function->GetReturnProperty() != nullptr)
         {
@@ -1073,7 +1073,9 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
                 return false;
             }
             const FBPIRPin* Pin = FindPin(Node, Signature.ParameterNames[Index], EGPD_Input);
-            if (Pin == nullptr || Pin->DefaultValue.IsEmpty())
+            if (Pin == nullptr || Pin->DefaultValue.IsEmpty() ||
+                Graph.DataEdges.ContainsByPredicate(
+                    [Pin](const FBPIRLink& Edge) { return Edge.TargetPin == Pin->Id; }))
             {
                 return false;
             }
