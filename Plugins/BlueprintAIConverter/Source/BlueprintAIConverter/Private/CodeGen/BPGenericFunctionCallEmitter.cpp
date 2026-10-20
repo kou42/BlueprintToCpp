@@ -10,6 +10,7 @@
 #include "EdGraphSchema_K2.h"
 #include "UObject/Class.h"
 #include "UObject/UnrealType.h"
+#include "UObject/UObjectGlobals.h"
 
 namespace
 {
@@ -102,6 +103,7 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
 {
     OutStatement.Reset();
     if (Function == nullptr || OwnerClass == nullptr ||
+        GraphIR.Diagnostics.IsEmpty() == false ||
         Function->HasAnyFunctionFlags(FUNC_Native) == false ||
         Function->HasAnyFunctionFlags(FUNC_Static | FUNC_BlueprintEvent) ||
         Function->GetOwnerClass() == nullptr)
@@ -265,6 +267,7 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         }
     }
 
+    // 関数名を反射で確認できても、特殊なC++呼び出し規約の関数は対象外。
     const FString FunctionName = Function->GetName();
     if (IsIdentifier(FunctionName) == false)
     {
