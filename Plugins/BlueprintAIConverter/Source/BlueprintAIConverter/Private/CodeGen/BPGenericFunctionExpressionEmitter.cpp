@@ -131,7 +131,7 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
     if (Target.Kind != EBPSemanticExpressionKind::VariableReference ||
         Target.VariableName != TEXT("this") ||
         Target.Type.Kind != EBPSemanticTypeKind::Object ||
-        Target.Type.TypePath != OwnerClass->GetPathName() ||
+        Target.Type.TypePath.IsEmpty() ||
         OwnerClass->IsChildOf(FunctionOwner) == false)
     {
         // 外部Targetはnull時の戻り値を推測できないため、現段階では拒否する。
