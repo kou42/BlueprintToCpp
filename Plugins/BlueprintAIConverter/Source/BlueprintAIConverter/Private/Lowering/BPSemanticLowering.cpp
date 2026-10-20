@@ -1292,7 +1292,6 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
                 Statement.Expression = Literal(EBPSemanticTypeKind::Bool,
                     ConditionValue, Current, TEXT("Condition"));
                 const FBPIRNode* Children[2] = { TrueNext, FalseNext };
-                const FBPIRPin* Outputs[2] = { TruePin, FalsePin };
                 for (int32 Index = 0; Index < 2; ++Index)
                 {
                     if (Children[Index] != nullptr)
