@@ -70,9 +70,10 @@ bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
         Call->FunctionOwnerPath != Function->GetOwnerClass()->GetPathName() ||
         Signature.bStatic ||
         Signature.ReturnType.Kind == EBPSemanticTypeKind::Void ||
-        Signature.ParameterNames.IsEmpty() == false)
+        Signature.ParameterNames.Num() != Signature.ParameterTypes.Num() ||
+        Signature.ParameterNames.Num() != Signature.OutputParameters.Num())
     {
-        Report(OutDiagnostics, CallNodeId, TEXT("Only zero-argument pure value calls are supported"));
+        Report(OutDiagnostics, CallNodeId, TEXT("Unsupported pure value call signature"));
         return false;
     }
     const FBPIRPin* ReturnPin = Call->Pins.FindByPredicate(
@@ -99,7 +100,8 @@ bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
             Call->Pins.ContainsByPredicate([&Edge](const FBPIRPin& Pin)
             {
                 return Pin.Id == Edge.TargetPin &&
-                    (Pin.Name == TEXT("self") || Pin.Name == TEXT("Target"));
+                    ((Pin.Name == TEXT("self") || Pin.Name == TEXT("Target")) ||
+                        Signature.ParameterNames.Contains(Pin.Name));
             }) == false)
         {
             Report(OutDiagnostics, CallNodeId, TEXT("Unsupported expression input edge"));
@@ -117,6 +119,44 @@ bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
     {
         return false;
     }
+    // 接続のない入力引数を型付きリテラルとして保持する。
+    // 接続された式や出力引数は、この段階では推測せず拒否する。
+    TArray<FBPSemanticExpression> Parameters;
+    for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
+    {
+        if (Signature.OutputParameters[Index] ||
+            Signature.ParameterTypes[Index].ContainerKind != TEXT("none") ||
+            Signature.ParameterTypes[Index].bIsReference)
+        {
+            Report(OutDiagnostics, CallNodeId, TEXT("Unsupported pure function parameter"));
+            return false;
+        }
+        const FBPIRPin* Pin = Call->Pins.FindByPredicate(
+            [Name = Signature.ParameterNames[Index]](const FBPIRPin& Candidate)
+            {
+                return Candidate.Name == Name && Candidate.Direction == EGPD_Input;
+            });
+        if (Pin == nullptr)
+        {
+            Report(OutDiagnostics, CallNodeId, TEXT("Pure function input pin missing"));
+            return false;
+        }
+        for (const FBPIRLink& Edge : Graph->DataEdges)
+        {
+            if (Edge.TargetNode == CallNodeId && Edge.TargetPin == Pin->Id)
+            {
+                Report(OutDiagnostics, CallNodeId, TEXT("Connected pure function parameter is unsupported"));
+                return false;
+            }
+        }
+        FBPSemanticExpression Argument;
+        Argument.Kind = EBPSemanticExpressionKind::Literal;
+        Argument.Type = Signature.ParameterTypes[Index];
+        Argument.LiteralValue = Pin->DefaultValue;
+        Argument.SourceNodeId = CallNodeId;
+        Argument.SourcePinId = Pin->Id;
+        Parameters.Add(MoveTemp(Argument));
+    }
     FBPSemanticExpression Result;
     Result.Kind = EBPSemanticExpressionKind::FunctionCall;
     Result.Type = Signature.ReturnType;
@@ -125,6 +165,7 @@ bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
     Result.FunctionName = Signature.FunctionName;
     Result.FunctionOwnerPath = Signature.OwnerClassPath;
     Result.Arguments.Add(MoveTemp(Target));
+    Result.Arguments.Append(MoveTemp(Parameters));
     OutExpression = MoveTemp(Result);
     return true;
 }
