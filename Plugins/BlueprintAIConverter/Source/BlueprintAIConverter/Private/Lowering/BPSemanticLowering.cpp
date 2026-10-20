@@ -1034,6 +1034,31 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
             return false;
         }
     }
+    // ネストした実行列では、引数なしのネイティブActor関数を
+    // PrintStringと同様に葉ノードとして扱う。引数・戻り値の接続が必要な
+    // 関数は専用の型付きLoweringが必要なので推測で変換しない。
+    auto IsSupportedNestedCall = [&](const FBPIRNode& Node) -> bool
+    {
+        if (Node.ClassPath != TEXT("/Script/BlueprintGraph.K2Node_CallFunction"))
+        {
+            return false;
+        }
+        if (Node.FunctionName == TEXT("PrintString"))
+        {
+            return true;
+        }
+        const UFunction* Function = AActor::StaticClass()->FindFunctionByName(Node.FunctionName);
+        if (Function == nullptr || Function->HasAnyFunctionFlags(FUNC_Native) == false ||
+            Function->HasAnyFunctionFlags(FUNC_Static) ||
+            Function->GetReturnProperty() != nullptr)
+        {
+            return false;
+        }
+        FBPResolvedFunctionSignature Signature;
+        TArray<FString> Diagnostics;
+        return FBPFunctionSignatureResolver::Resolve(Function, Signature, Diagnostics) &&
+            Signature.ParameterNames.IsEmpty() && Signature.ReturnType.Kind == EBPSemanticTypeKind::Void;
+    };
     // ネストBranchはExecの木構造に限定して先に解析する。
     // 共有ノード・循環・未接続ノードはC++のスコープを一意に復元できないため拒否する。
     int32 BranchCount = 0;
@@ -1313,22 +1338,46 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
                 }
                 return true;
             }
-            if (Current.ClassPath != TEXT("/Script/BlueprintGraph.K2Node_CallFunction") ||
-                Current.FunctionName != TEXT("PrintString"))
+            if (IsSupportedNestedCall(Current) == false)
             {
                 return false;
             }
-            FBPPrintStringCall Values;
-            if (AnalyzeBranchPrint(GraphIR, Graph, *BeginPlay, Current, Values, OutIR) == false)
+            FBPSemanticStatement CallStatement;
+            CallStatement.Kind = EBPSemanticStatementKind::Expression;
+            CallStatement.SourceNodeId = Current.Id;
+            if (Current.FunctionName == TEXT("PrintString"))
             {
-                return false;
+                FBPPrintStringCall Values;
+                if (AnalyzeBranchPrint(GraphIR, Graph, *BeginPlay, Current, Values, OutIR) == false)
+                {
+                    return false;
+                }
+                CallStatement.Expression = MakePrintStringExpression(
+                    Values, Current, GraphIR.ParentClassPath);
             }
-            FBPSemanticStatement PrintStatement;
-            PrintStatement.Kind = EBPSemanticStatementKind::Expression;
-            PrintStatement.SourceNodeId = Current.Id;
-            PrintStatement.Expression = MakePrintStringExpression(
-                Values, Current, GraphIR.ParentClassPath);
-            Statements.Add(MoveTemp(PrintStatement));
+            else
+            {
+                const UFunction* Function = AActor::StaticClass()->FindFunctionByName(Current.FunctionName);
+                FBPResolvedFunctionSignature Signature;
+                TArray<FString> Diagnostics;
+                if (FBPFunctionSignatureResolver::Resolve(Function, Signature, Diagnostics) == false)
+                {
+                    return false;
+                }
+                FBPSemanticExpression& Call = CallStatement.Expression;
+                Call.Kind = EBPSemanticExpressionKind::FunctionCall;
+                Call.Type = Signature.ReturnType;
+                Call.SourceNodeId = Current.Id;
+                Call.FunctionName = Signature.FunctionName;
+                Call.FunctionOwnerPath = Signature.OwnerClassPath;
+                FBPSemanticExpression Self;
+                Self.Kind = EBPSemanticExpressionKind::VariableReference;
+                Self.Type.Kind = EBPSemanticTypeKind::Object;
+                Self.Type.TypePath = GraphIR.ParentClassPath;
+                Self.VariableName = TEXT("this");
+                Call.Arguments.Add(MoveTemp(Self));
+            }
+            Statements.Add(MoveTemp(CallStatement));
             const FBPIRPin* ThenPin = FindPin(Current, UEdGraphSchema_K2::PN_Then, EGPD_Output);
             const FBPIRNode* Next = nullptr;
             if (ThenPin == nullptr || FindSuccessor(Current, *ThenPin, Next) == false)
@@ -1377,7 +1426,7 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         ++ConsumedEdges;
         if (Walk(*Root, FGuid(), 0, Block.Statements) == false ||
             ConsumedEdges != Graph.ExecEdges.Num() ||
-            Visited.Num() != BranchCount + Prints.Num())
+            Visited.Num() != Graph.Nodes.Num() - 1)
         {
             AddDiagnostic(OutIR, Graph.Name, FGuid(),
                 TEXT("Nested Branch contains a shared, cyclic, disconnected or unsupported Exec path"));
