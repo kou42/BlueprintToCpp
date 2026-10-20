@@ -297,7 +297,7 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
         for (int32 Index = 0; Index < Arguments.Num(); ++Index)
         {
             const FString LocalName = FString::Printf(TEXT("BPArg%d"), Index);
-            Preparation += FString::Printf(TEXT("const auto %s = %s;\\n"),
+            Preparation += FString::Printf(TEXT("const auto %s = %s;\n"),
                 *LocalName, *Arguments[Index]);
             LocalArguments.Add(LocalName);
         }
@@ -312,7 +312,7 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
         const FString TargetCall = FString::Printf(TEXT("BPTarget->%s(%s)"),
             *Name, *InvocationArguments);
         OutCpp = FString::Printf(
-            TEXT("([&]() { auto* BPTarget = %s; if (BPTarget == nullptr) { return %s; }\\n%sreturn %s; }())"),
+            TEXT("([&]() { auto* BPTarget = %s; if (BPTarget == nullptr) { return %s; }\n%sreturn %s; }())"),
             *PropertyName, *Fallback, *Preparation, *TargetCall);
     }
     else if (bHasNestedCall)
