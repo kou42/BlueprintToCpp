@@ -3,6 +3,8 @@
 #include "BPNumericArithmeticResolver.h"
 #include "BPNumericComparisonResolver.h"
 #include "BPParentClassResolver.h"
+#include "UObject/Class.h"
+#include "UObject/UObjectGlobals.h"
 
 namespace
 {
@@ -1213,7 +1215,18 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     }
     // Actorのネイティブ関数呼び出しは、Loweringで検証済みのリテラルのみを
     // C++引数へ変換する。任意の式や参照引数を文字列として出力しない。
-    if (Expression.FunctionOwnerPath == TEXT("/Script/Engine.Actor") &&
+    const UClass* OwnerClass = FindObject<UClass>(
+        nullptr, *Expression.FunctionOwnerPath);
+    const UClass* ParentClass = FindObject<UClass>(
+        nullptr, *ParentClassPath);
+    const UFunction* ReflectedFunction = OwnerClass != nullptr
+        ? OwnerClass->FindFunctionByName(Expression.FunctionName) : nullptr;
+    if (OwnerClass != nullptr && ParentClass != nullptr &&
+        ParentClass->IsChildOf(OwnerClass) &&
+        ReflectedFunction != nullptr &&
+        ReflectedFunction->HasAnyFunctionFlags(FUNC_Native) &&
+        ReflectedFunction->HasAnyFunctionFlags(FUNC_Static) == false &&
+        ReflectedFunction->GetReturnProperty() == nullptr &&
         Expression.Type.Kind == EBPSemanticTypeKind::Void &&
         Expression.Arguments.Num() >= 1 &&
         Expression.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
