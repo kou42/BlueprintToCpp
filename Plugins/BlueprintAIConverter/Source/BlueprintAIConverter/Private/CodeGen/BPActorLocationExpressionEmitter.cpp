@@ -1,4 +1,6 @@
 #include "BPActorLocationExpressionEmitter.h"
+#include "UObject/Class.h"
+#include "UObject/UObjectGlobals.h"
 
 bool FBPActorLocationExpressionEmitter::Emit(const FBPSemanticExpression& Expression,
     FString& OutCpp, TArray<FString>& OutDiagnostics)
@@ -20,9 +22,7 @@ bool FBPActorLocationExpressionEmitter::Emit(const FBPSemanticExpression& Expres
 
     const FBPSemanticExpression& Target = Expression.Arguments[0];
     if (Target.Kind != EBPSemanticExpressionKind::VariableReference ||
-        Target.VariableName != TEXT("this") ||
         Target.Type.Kind != EBPSemanticTypeKind::Object ||
-        Target.Type.TypePath != TEXT("/Script/Engine.Actor") ||
         Target.Type.bIsReference ||
         Target.Arguments.IsEmpty() == false)
     {
@@ -30,6 +30,40 @@ bool FBPActorLocationExpressionEmitter::Emit(const FBPSemanticExpression& Expres
         return false;
     }
 
-    OutCpp = TEXT("GetActorLocation()");
+    const UClass* TargetClass = FindObject<UClass>(nullptr, *Target.Type.TypePath);
+    const UClass* ActorClass = FindObject<UClass>(nullptr, TEXT("/Script/Engine.Actor"));
+    if (TargetClass == nullptr || ActorClass == nullptr ||
+        TargetClass->IsChildOf(ActorClass) == false)
+    {
+        OutDiagnostics.Add(TEXT("Target must be a reflected Actor class"));
+        return false;
+    }
+    if (Target.VariableName == TEXT("this"))
+    {
+        OutCpp = TEXT("GetActorLocation()");
+        return true;
+    }
+    // 対象変数のC++識別子を検証し、未検証の文字列をコードへ挿入しない。
+    const FString Name = Target.VariableName.ToString();
+    if (Name.IsEmpty())
+    {
+        OutDiagnostics.Add(TEXT("Empty target variable name"));
+        return false;
+    }
+    for (int32 Index = 0; Index < Name.Len(); ++Index)
+    {
+        const TCHAR Ch = Name[Index];
+        const bool bAlpha = (Ch >= TEXT('A') && Ch <= TEXT('Z')) ||
+            (Ch >= TEXT('a') && Ch <= TEXT('z'));
+        const bool bDigit = Ch >= TEXT('0') && Ch <= TEXT('9');
+        if (bAlpha == false && Ch != TEXT('_') && (Index == 0 || bDigit == false))
+        {
+            OutDiagnostics.Add(TEXT("Invalid target variable identifier"));
+            return false;
+        }
+    }
+    // nullの可能性がある外部オブジェクトはゼロベクトルへフォールバックする。
+    OutCpp = FString::Printf(TEXT("(%s != nullptr ? %s->GetActorLocation() : FVector::ZeroVector)"),
+        *Name, *Name);
     return true;
 }
