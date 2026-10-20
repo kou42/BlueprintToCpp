@@ -502,5 +502,13 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     {
         OutStatement += TEXT("\n") + ConsumerStatement;
     }
+    // 外部Targetがnullの場合は呼び出しを行わない。
+    // 出力引数の宣言と後続Consumerも同じ条件内に閉じ込め、未実行時の
+    // 未初期化値を後続処理に流さない。
+    if (TargetPrefix.IsEmpty() == false)
+    {
+        OutStatement = FString::Printf(TEXT("if (%s != nullptr)\\n{\\n%s\\n}"),
+            *CallTarget.VariableName.ToString(), *OutStatement);
+    }
     return true;
 }
