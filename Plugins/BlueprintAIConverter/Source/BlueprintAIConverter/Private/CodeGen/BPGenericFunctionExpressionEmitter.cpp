@@ -1,112 +1,11 @@
 #include "BPGenericFunctionExpressionEmitter.h"
 #include "BPFunctionSignatureResolver.h"
+#include "BPTypedLiteralEmitter.h"
 #include "Misc/LexFromString.h"
 #include "Misc/LexToString.h"
 #include "UObject/Class.h"
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectGlobals.h"
-
-namespace
-{
-// Semanticリテラルを数値として再解析し、任意の文字列をC++へ挿入しない。
-bool EmitLiteral(const FBPSemanticExpression& Expression, FString& Out)
-{
-    if (Expression.Kind != EBPSemanticExpressionKind::Literal ||
-        Expression.Type.ContainerKind != TEXT("none") ||
-        Expression.Type.bIsReference)
-    {
-        return false;
-    }
-    if (Expression.Type.Kind == EBPSemanticTypeKind::Bool)
-    {
-        if (Expression.LiteralValue.Equals(TEXT("true"), ESearchCase::IgnoreCase))
-        {
-            Out = TEXT("true");
-            return true;
-        }
-        if (Expression.LiteralValue.Equals(TEXT("false"), ESearchCase::IgnoreCase))
-        {
-            Out = TEXT("false");
-            return true;
-        }
-        return false;
-    }
-    if (Expression.Type.Kind == EBPSemanticTypeKind::Int32)
-    {
-        int32 Value = 0;
-        if (LexTryParseString(Value, *Expression.LiteralValue) == false)
-        {
-            return false;
-        }
-        Out = LexToString(Value);
-        return true;
-    }
-    if (Expression.Type.Kind == EBPSemanticTypeKind::Int64)
-    {
-        int64 Value = 0;
-        if (LexTryParseString(Value, *Expression.LiteralValue) == false)
-        {
-            return false;
-        }
-        Out = FString::Printf(TEXT("static_cast<int64>(%s)"), *LexToString(Value));
-        return true;
-    }
-    if (Expression.Type.Kind == EBPSemanticTypeKind::Float ||
-        Expression.Type.Kind == EBPSemanticTypeKind::Double)
-    {
-        double Value = 0.0;
-        if (LexTryParseString(Value, *Expression.LiteralValue) == false ||
-            FMath::IsFinite(Value) == false)
-        {
-            return false;
-        }
-        if (Expression.Type.Kind == EBPSemanticTypeKind::Float)
-        {
-            const float Narrowed = static_cast<float>(Value);
-            if (FMath::IsFinite(Narrowed) == false)
-            {
-                return false;
-            }
-            Out = FString::Printf(TEXT("static_cast<float>(%s)"), *LexToString(Narrowed));
-        }
-        else
-        {
-            Out = LexToString(Value);
-        }
-        return true;
-    }
-    if (Expression.Type.Kind == EBPSemanticTypeKind::String ||
-        Expression.Type.Kind == EBPSemanticTypeKind::Name)
-    {
-        // 文字列をそのままC++に埋め込まず、制御文字と引用符をエスケープする。
-        FString Escaped;
-        for (const TCHAR Character : Expression.LiteralValue)
-        {
-            switch (Character)
-            {
-            case TEXT('\\'): Escaped += TEXT("\\\\"); break;
-            case TEXT('"'): Escaped += TEXT("\\\""); break;
-            case TEXT('\n'): Escaped += TEXT("\\n"); break;
-            case TEXT('\r'): Escaped += TEXT("\\r"); break;
-            case TEXT('\t'): Escaped += TEXT("\\t"); break;
-            default:
-                if (Character < 0x20)
-                {
-                    return false;
-                }
-                Escaped.AppendChar(Character);
-                break;
-            }
-        }
-        const FString Literal = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
-            Out = Expression.Type.Kind == EBPSemanticTypeKind::String
-            ? FString::Printf(TEXT("FString(%s)"), *Literal)
-            : FString::Printf(TEXT("FName(%s)"), *Literal);
-        return true;
-    }
-    return false;
-}
-}
 
 namespace
 {
@@ -271,7 +170,8 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
         FString CppArgument;
         const bool bEmitted = Argument.Kind == EBPSemanticExpressionKind::FunctionCall
             ? EmitRecursive(Argument, OwnerClass, CppArgument, OutDiagnostics, Depth + 1)
-            : EmitLiteral(Argument, CppArgument);
+            : (Argument.Kind == EBPSemanticExpressionKind::Literal &&
+                FBPTypedLiteralEmitter::Emit(Argument.Type, Argument.LiteralValue, CppArgument));
         if (bEmitted == false)
         {
             OutDiagnostics.Add(TEXT("Unsupported pure function argument literal"));
