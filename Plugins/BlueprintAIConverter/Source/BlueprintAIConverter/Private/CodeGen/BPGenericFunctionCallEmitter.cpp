@@ -265,31 +265,33 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         if (bConnected)
         {
             // 接続済みVector式は既存のGraph IR -> Semantic -> C++経路を再利用する。
-            bool bEmitted = false;
-            if (Signature.ParameterTypes[Index].Kind == EBPSemanticTypeKind::Struct &&
+            // 接続元ノードを先に解決し、Actor専用式と汎用式を排他的に選ぶ。
+            const FBPIRNode* SourceNode = nullptr;
+            const FBPIRPin* SourcePin = nullptr;
+            TArray<FString> LinkMessages;
+            if (FBPDataLinkResolver::ResolveInput(*Graph, CallNodeId, Pin->Id,
+                SourceNode, SourcePin, LinkMessages) == false ||
+                SourceNode == nullptr || SourcePin == nullptr ||
+                SourcePin->Name != TEXT("ReturnValue"))
+            {
+                Report(OutDiagnostics, CallNodeId, TEXT("Unsupported generic input link"));
+                return false;
+            }
+            if (SourceNode->FunctionName == TEXT("K2_GetActorLocation") &&
+                Signature.ParameterTypes[Index].Kind == EBPSemanticTypeKind::Struct &&
                 Signature.ParameterTypes[Index].TypePath == TEXT("/Script/CoreUObject.Vector"))
             {
-                bEmitted = FBPConnectedActorLocationLowering::EmitInputCpp(
-                    GraphIR, CallNodeId, Pin->Id, Value, OutDiagnostics);
-            }
-            if (bEmitted == false)
-            {
-                // 純粋関数の戻り値を、反射署名とデータリンクの両方を検証して式にする。
-                // 既存のVector経路の診断がある場合は、別の候補へフォールバックしない。
-                if (OutDiagnostics.IsEmpty() == false)
+                if (FBPConnectedActorLocationLowering::EmitInputCpp(
+                    GraphIR, CallNodeId, Pin->Id, Value, OutDiagnostics) == false)
                 {
                     return false;
                 }
-                const FBPIRNode* SourceNode = nullptr;
-                const FBPIRPin* SourcePin = nullptr;
-                TArray<FString> LinkMessages;
-                if (FBPDataLinkResolver::ResolveInput(*Graph, CallNodeId, Pin->Id,
-                    SourceNode, SourcePin, LinkMessages) == false ||
-                    SourceNode == nullptr || SourcePin == nullptr ||
-                    SourcePin->Name != TEXT("ReturnValue") ||
-                    SourceNode->FunctionOwnerPath.IsEmpty())
+            }
+            else
+            {
+                if (SourceNode->FunctionOwnerPath.IsEmpty())
                 {
-                    Report(OutDiagnostics, CallNodeId, TEXT("Unsupported generic input link"));
+                    Report(OutDiagnostics, CallNodeId, TEXT("Unresolved generic expression owner"));
                     return false;
                 }
                 const UClass* SourceOwner = FindObject<UClass>(
