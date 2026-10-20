@@ -305,33 +305,24 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
     }
     const FString CallCpp = FString::Printf(TEXT("%s%s(%s)"), *Prefix, *Name,
         *InvocationArguments);
-    FString ResultCpp = CallCpp;
     if (Target.VariableName != TEXT("this"))
     {
+        // Targetプロパティを一度だけ読み取り、検査した同じポインタで呼び出す。
         const FString PropertyName = Target.VariableName.ToString();
-        ResultCpp = FString::Printf(TEXT("(%s != nullptr ? %s : %s)"),
-            *PropertyName, *CallCpp, *Fallback);
+        const FString TargetCall = FString::Printf(TEXT("BPTarget->%s(%s)"),
+            *Name, *InvocationArguments);
+        OutCpp = FString::Printf(
+            TEXT("([&]() { auto* BPTarget = %s; if (BPTarget == nullptr) { return %s; }\\n%sreturn %s; }())"),
+            *PropertyName, *Fallback, *Preparation, *TargetCall);
     }
-    if (bHasNestedCall)
+    else if (bHasNestedCall)
     {
-        // null判定を引数の評価より先に実行するため、外部Targetのときは
-        // ラムダの内部でnullを検査し、必要な場合だけ引数を評価する。
-        if (Target.VariableName != TEXT("this"))
-        {
-            const FString PropertyName = Target.VariableName.ToString();
-            OutCpp = FString::Printf(
-                TEXT("([&]() { if (%s == nullptr) { return %s; }\\n%sreturn %s; }())"),
-                *PropertyName, *Fallback, *Preparation, *CallCpp);
-        }
-        else
-        {
-            OutCpp = FString::Printf(TEXT("([&]() { %sreturn %s; }())"),
-                *Preparation, *CallCpp);
-        }
+        OutCpp = FString::Printf(TEXT("([&]() { %sreturn %s; }())"),
+            *Preparation, *CallCpp);
     }
     else
     {
-        OutCpp = ResultCpp;
+        OutCpp = CallCpp;
     }
     return true;
 }
