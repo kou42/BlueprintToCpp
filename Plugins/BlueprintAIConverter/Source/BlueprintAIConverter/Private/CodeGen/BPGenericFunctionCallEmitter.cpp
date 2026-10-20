@@ -2,7 +2,7 @@
 
 #include "BPCallTargetResolver.h"
 #include "BPFunctionCallValidator.h"
-#include "BPBooleanPinDefaultEmitter.h"
+#include "BPTypedLiteralEmitter.h"
 #include "BPConnectedActorLocationLowering.h"
 #include "BPGenericFunctionExpressionLowering.h"
 #include "BPGenericFunctionExpressionEmitter.h"
@@ -24,100 +24,6 @@ void Report(TArray<FBPSemanticDiagnostic>& Diagnostics, const FGuid& NodeId,
     Diagnostic.NodeId = NodeId;
     Diagnostic.Message = Message;
     Diagnostics.Add(MoveTemp(Diagnostic));
-}
-
-// Blueprintの数値既定値は一度数値型に解析し、正規化して出力する。
-// 入力文字列を直接C++式として連結するとコード注入や型不一致につながる。
-bool EmitNumericDefault(const FBPIRPin& Pin, const FBPSemanticType& Type, FString& Out)
-{
-    if (Type.bIsReference || Type.ContainerKind != TEXT("none"))
-    {
-        return false;
-    }
-    if (Type.Kind == EBPSemanticTypeKind::Int32)
-    {
-        int32 Value = 0;
-        if (LexTryParseString(Value, *Pin.DefaultValue) == false)
-        {
-            return false;
-        }
-        Out = LexToString(Value);
-        return true;
-    }
-    if (Type.Kind == EBPSemanticTypeKind::Int64)
-    {
-        int64 Value = 0;
-        if (LexTryParseString(Value, *Pin.DefaultValue) == false)
-        {
-            return false;
-        }
-        Out = FString::Printf(TEXT("static_cast<int64>(%s)"), *LexToString(Value));
-        return true;
-    }
-    if (Type.Kind == EBPSemanticTypeKind::Float)
-    {
-        float Value = 0.0f;
-        if (LexTryParseString(Value, *Pin.DefaultValue) == false ||
-            FMath::IsFinite(Value) == false)
-        {
-            return false;
-        }
-        Out = FString::Printf(TEXT("static_cast<float>(%s)"), *LexToString(Value));
-        return true;
-    }
-    if (Type.Kind == EBPSemanticTypeKind::Double)
-    {
-        double Value = 0.0;
-        if (LexTryParseString(Value, *Pin.DefaultValue) == false ||
-            FMath::IsFinite(Value) == false)
-        {
-            return false;
-        }
-        Out = LexToString(Value);
-        return true;
-    }
-    return false;
-}
-
-// 文字列はC++リテラルに安全にエスケープしてから型付きで生成する。
-bool EmitTextDefault(const FBPIRPin& Pin, const FBPSemanticType& Type, FString& Out)
-{
-    if (Type.bIsReference || Type.ContainerKind != TEXT("none") ||
-        (Type.Kind != EBPSemanticTypeKind::String &&
-         Type.Kind != EBPSemanticTypeKind::Name &&
-         Type.Kind != EBPSemanticTypeKind::Text))
-    {
-        return false;
-    }
-    // FTextはDefaultTextのローカライズ識別子を復元できないため、未対応とする。
-    if (Type.Kind == EBPSemanticTypeKind::Text)
-    {
-        return false;
-    }
-    FString Escaped;
-    for (const TCHAR Character : Pin.DefaultValue)
-    {
-        switch (Character)
-        {
-        case TEXT('\\'): Escaped += TEXT("\\\\"); break;
-        case TEXT('"'): Escaped += TEXT("\\\""); break;
-        case TEXT('\n'): Escaped += TEXT("\n"); break;
-        case TEXT('\r'): Escaped += TEXT("\\r"); break;
-        case TEXT('\t'): Escaped += TEXT("\\t"); break;
-        default:
-            if (Character < 0x20)
-            {
-                return false;
-            }
-            Escaped.AppendChar(Character);
-            break;
-        }
-    }
-    const FString Literal = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
-    Out = Type.Kind == EBPSemanticTypeKind::String
-        ? FString::Printf(TEXT("FString(%s)"), *Literal)
-        : FString::Printf(TEXT("FName(%s)"), *Literal);
-    return true;
 }
 
 bool IsIdentifier(const FString& Name)
@@ -326,16 +232,7 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
                 }
             }
         }
-        else if (Signature.ParameterTypes[Index].Kind == EBPSemanticTypeKind::Bool)
-        {
-            if (FBPBooleanPinDefaultEmitter::Emit(*Pin, Value) == false)
-            {
-                Report(OutDiagnostics, CallNodeId, TEXT("Invalid bool default"));
-                return false;
-            }
-        }
-        else if (EmitNumericDefault(*Pin, Signature.ParameterTypes[Index], Value) == false &&
-            EmitTextDefault(*Pin, Signature.ParameterTypes[Index], Value) == false)
+        else if (FBPTypedLiteralEmitter::Emit(Signature.ParameterTypes[Index], Pin->DefaultValue, Value) == false)
         {
             Report(OutDiagnostics, CallNodeId, TEXT("Unsupported generic argument default"));
             return false;
