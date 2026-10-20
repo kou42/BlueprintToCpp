@@ -2,6 +2,8 @@
 
 #include "BPCallTargetResolver.h"
 #include "BPFunctionCallValidator.h"
+#include "BPDataLinkResolver.h"
+#include "UObject/UObjectGlobals.h"
 #include "EdGraphSchema_K2.h"
 #include "UObject/Class.h"
 
@@ -119,8 +121,7 @@ bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
     {
         return false;
     }
-    // 接続のない入力引数を型付きリテラルとして保持する。
-    // 接続された式や出力引数は、この段階では推測せず拒否する。
+    // 引数の式ツリーを型付きで保持する。接続された純粋関数は循環を検出して再帰的に解決する。
     TArray<FBPSemanticExpression> Parameters;
     for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
     {
@@ -141,20 +142,64 @@ bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
             Report(OutDiagnostics, CallNodeId, TEXT("Pure function input pin missing"));
             return false;
         }
+        const FBPIRLink* InputLink = nullptr;
         for (const FBPIRLink& Edge : Graph->DataEdges)
         {
             if (Edge.TargetNode == CallNodeId && Edge.TargetPin == Pin->Id)
             {
-                Report(OutDiagnostics, CallNodeId, TEXT("Connected pure function parameter is unsupported"));
-                return false;
+                if (InputLink != nullptr)
+                {
+                    Report(OutDiagnostics, CallNodeId, TEXT("Ambiguous pure function input"));
+                    return false;
+                }
+                InputLink = &Edge;
             }
         }
         FBPSemanticExpression Argument;
-        Argument.Kind = EBPSemanticExpressionKind::Literal;
-        Argument.Type = Signature.ParameterTypes[Index];
-        Argument.LiteralValue = Pin->DefaultValue;
-        Argument.SourceNodeId = CallNodeId;
-        Argument.SourcePinId = Pin->Id;
+        if (InputLink == nullptr)
+        {
+            Argument.Kind = EBPSemanticExpressionKind::Literal;
+            Argument.Type = Signature.ParameterTypes[Index];
+            Argument.LiteralValue = Pin->DefaultValue;
+            Argument.SourceNodeId = CallNodeId;
+            Argument.SourcePinId = Pin->Id;
+        }
+        else
+        {
+            const FBPIRNode* SourceNode = nullptr;
+            const FBPIRPin* SourcePin = nullptr;
+            TArray<FString> LinkMessages;
+            if (FBPDataLinkResolver::ResolveInput(*Graph, CallNodeId, Pin->Id,
+                SourceNode, SourcePin, LinkMessages) == false ||
+                SourceNode == nullptr || SourcePin == nullptr ||
+                SourcePin->Name != TEXT("ReturnValue"))
+            {
+                Report(OutDiagnostics, CallNodeId, TEXT("Invalid connected pure function argument"));
+                return false;
+            }
+            const UClass* SourceOwner = FindObject<UClass>(
+                nullptr, *SourceNode->FunctionOwnerPath);
+            const UFunction* SourceFunction = SourceOwner != nullptr
+                ? SourceOwner->FindFunctionByName(SourceNode->FunctionName) : nullptr;
+            if (SourceNode->Id == CallNodeId ||
+                FBPGenericFunctionExpressionLowering::Lower(
+                    GraphIR, SourceNode->Id, SourceFunction,
+                    Argument, OutDiagnostics) == false)
+            {
+                Report(OutDiagnostics, CallNodeId, TEXT("Unsupported nested pure function"));
+                return false;
+            }
+            const FBPSemanticType& Expected = Signature.ParameterTypes[Index];
+            if (Argument.SourcePinId != SourcePin->Id ||
+                Argument.Type.Kind != Expected.Kind ||
+                Argument.Type.TypePath != Expected.TypePath ||
+                Argument.Type.ContainerKind != Expected.ContainerKind ||
+                Argument.Type.bIsReference != Expected.bIsReference)
+            {
+                Report(OutDiagnostics, CallNodeId, TEXT("Nested pure function type mismatch"));
+                return false;
+            }
+        }
         Parameters.Add(MoveTemp(Argument));
     }
     FBPSemanticExpression Result;
