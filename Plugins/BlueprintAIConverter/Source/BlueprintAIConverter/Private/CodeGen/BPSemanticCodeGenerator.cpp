@@ -1499,7 +1499,17 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     {
         const FBPSemanticStatement& LeadingStatement = Statements[Index];
         FString Part;
-        if (LeadingStatement.Kind != EBPSemanticStatementKind::Expression ||
+        // 合流後の処理はBranchと同じBasicBlockの後続文として保持する。
+        // Branchを先行文として生成し、後続の式文がifの外へ出るようにする。
+        if (LeadingStatement.Kind == EBPSemanticStatementKind::Branch)
+        {
+            if (EmitForLoopBodyStatement(LeadingStatement, IR.ParentClassPath,
+                    IR.Variables, NAME_None, TEXT("    "), 0, Part, OutDiagnostics) == false)
+            {
+                return false;
+            }
+        }
+        else if (LeadingStatement.Kind != EBPSemanticStatementKind::Expression ||
             EmitExpressionStatement(LeadingStatement.Expression, IR.ParentClassPath,
                 TEXT("    "), Part, OutDiagnostics) == false)
         {
