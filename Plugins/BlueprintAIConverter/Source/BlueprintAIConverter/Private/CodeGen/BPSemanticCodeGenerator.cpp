@@ -6,6 +6,7 @@
 #include "BPReflectedCallResolver.h"
 #include "UObject/Class.h"
 #include "UObject/UObjectGlobals.h"
+#include "UObject/UnrealType.h"
 
 namespace
 {
@@ -1218,14 +1219,40 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     // C++引数へ変換する。任意の式や参照引数を文字列として出力しない。
     // Semantic IRの所有クラスを共通Resolverで検証する。
     // static/selfの区別は先頭引数のthis参照から判断し、反射結果と照合する。
-    const bool bSelfCall = Expression.Arguments.IsEmpty() == false &&
-        Expression.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
+    const bool bHasTarget = Expression.Arguments.IsEmpty() == false &&
+        Expression.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference;
+    const bool bSelfCall = bHasTarget &&
         Expression.Arguments[0].VariableName == TEXT("this");
+    const UClass* ParentClass = FindObject<UClass>(nullptr, *ParentClassPath);
+    const FObjectPropertyBase* TargetProperty = nullptr;
+    const UClass* TargetClass = ParentClass;
+    if (bHasTarget && bSelfCall == false && ParentClass != nullptr)
+    {
+        // self以外のTargetは、親クラスに実在する公開C++オブジェクトプロパティのみ。
+        // 未検証のBlueprint変数や複雑な式をC++識別子として出力しない。
+        const FProperty* Property = ParentClass->FindPropertyByName(
+            Expression.Arguments[0].VariableName);
+        TargetProperty = CastField<FObjectPropertyBase>(Property);
+        if (TargetProperty != nullptr &&
+            CastField<FObjectProperty>(Property) != nullptr &&
+            TargetProperty->PropertyClass != nullptr &&
+            Property->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic) &&
+            IsIdentifier(Expression.Arguments[0].VariableName.ToString()))
+        {
+            TargetClass = TargetProperty->PropertyClass;
+        }
+        else
+        {
+            TargetClass = nullptr;
+        }
+    }
     FBPReflectedCall ResolvedCall;
     TArray<FString> ResolveDiagnostics;
-    const bool bResolved = FBPReflectedCallResolver::Resolve(
-        Expression.FunctionOwnerPath, Expression.FunctionName,
-        ParentClassPath, bSelfCall == false, ResolvedCall, ResolveDiagnostics);
+    const bool bResolved = TargetClass != nullptr &&
+        FBPReflectedCallResolver::ResolveForTarget(
+            Expression.FunctionOwnerPath, Expression.FunctionName,
+            TargetClass->GetPathName(), bHasTarget == false,
+            ResolvedCall, ResolveDiagnostics);
     const UClass* OwnerClass = ResolvedCall.Owner;
     const UFunction* ReflectedFunction = ResolvedCall.Function;
     if (bResolved && ReflectedFunction != nullptr &&
@@ -1304,7 +1331,8 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
         }
         const FString Target = bStatic
             ? OwnerClass->GetPrefixCPP() + OwnerClass->GetName() + TEXT("::")
-            : TEXT("this->");
+            : bSelfCall ? TEXT("this->")
+            : TEXT("this->") + Expression.Arguments[0].VariableName.ToString() + TEXT("->");
         OutStatement = FString::Printf(TEXT("%s%s%s(%s);\n"),
             *Indent, *Target, *Expression.FunctionName.ToString(), *Arguments);
         return true;
