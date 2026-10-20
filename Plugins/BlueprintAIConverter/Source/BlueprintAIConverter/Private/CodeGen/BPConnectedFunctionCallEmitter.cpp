@@ -12,6 +12,7 @@
 #include "BPBooleanPinDefaultEmitter.h"
 #include "BPParentClassResolver.h"
 #include "BPCallTargetResolver.h"
+#include "BPGenericFunctionCallEmitter.h"
 #include "UObject/UnrealType.h"
 #include "GameFramework/Actor.h"
 #include "EdGraphSchema_K2.h"
@@ -42,16 +43,21 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         return false;
     }
 
-    // 任意の反射名をそのままC++へ出力せず、変換規約が確認済みのAPIに限定する。
-    if (Function == nullptr ||
-        Function->GetOwnerClass() != AActor::StaticClass() ||
-        Function->GetFName() != TEXT("K2_SetActorLocation"))
+    if (Function == nullptr)
     {
         FBPSemanticDiagnostic Diagnostic;
         Diagnostic.NodeId = CallNodeId;
-        Diagnostic.Message = TEXT("Unsupported function for C++ statement emission");
+        Diagnostic.Message = TEXT("Function is null");
         OutDiagnostics.Add(MoveTemp(Diagnostic));
         return false;
+    }
+    // 既存の特殊な出力引数を持つActor関数は専用経路を維持する。
+    // その他の関数は反射署名を検証する汎用経路へ委譲する。
+    if (Function->GetOwnerClass() != AActor::StaticClass() ||
+        Function->GetFName() != TEXT("K2_SetActorLocation"))
+    {
+        return FBPGenericFunctionCallEmitter::Emit(
+            GraphIR, CallNodeId, Function, OwnerClass, OutStatement, OutDiagnostics);
     }
 
     FBPResolvedFunctionSignature Signature;
@@ -507,7 +513,7 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     // 未初期化値を後続処理に流さない。
     if (TargetPrefix.IsEmpty() == false)
     {
-        OutStatement = FString::Printf(TEXT("if (%s != nullptr)\\n{\\n%s\\n}"),
+        OutStatement = FString::Printf(TEXT("if (%s != nullptr)\n{\n%s\n}"),
             *CallTarget.VariableName.ToString(), *OutStatement);
     }
     return true;
