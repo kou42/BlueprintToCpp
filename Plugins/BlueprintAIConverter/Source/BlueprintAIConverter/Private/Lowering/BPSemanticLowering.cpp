@@ -5,6 +5,7 @@
 #include "BPConnectedActorLocationLowering.h"
 #include "BPConnectedFunctionCallEmitter.h"
 #include "BPFunctionSignatureResolver.h"
+#include "BPReflectedCallResolver.h"
 #include "BPNumericArithmeticResolver.h"
 #include "BPNumericComparisonResolver.h"
 #include "BPOutputParameterStorage.h"
@@ -1041,31 +1042,25 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     // ネイティブ関数か確認する。コンポーネントTargetや静的関数は別途扱う。
     auto ResolveNestedFunction = [&](const FBPIRNode& Node) -> const UFunction*
     {
-        if (Node.FunctionOwnerPath.IsEmpty() || Node.FunctionName.IsNone() ||
-            Node.bFunctionResolved == false || Node.bFunctionNative == false)
+        if (Node.bFunctionResolved == false || Node.bFunctionNative == false)
         {
             return nullptr;
         }
-        const UClass* Owner = FindObject<UClass>(nullptr, *Node.FunctionOwnerPath);
-        const UClass* Parent = FindObject<UClass>(nullptr, *GraphIR.ParentClassPath);
-        if (Owner == nullptr || Parent == nullptr ||
-            (Node.bFunctionStatic == false && Parent->IsChildOf(Owner) == false))
+        FBPReflectedCall Call;
+        TArray<FString> Diagnostics;
+        if (FBPReflectedCallResolver::Resolve(Node.FunctionOwnerPath,
+            Node.FunctionName, GraphIR.ParentClassPath, Node.bFunctionStatic,
+            Call, Diagnostics) == false)
         {
             return nullptr;
         }
-        const UFunction* Function = Owner->FindFunctionByName(Node.FunctionName);
-        if (Function == nullptr || Function->HasAnyFunctionFlags(FUNC_Native) == false ||
-            Function->HasAnyFunctionFlags(FUNC_Static) != Node.bFunctionStatic)
-        {
-            return nullptr;
-        }
-        // Blueprintノードの参照と反射結果が食い違う場合は拒否する。
+        // IRが記録した関数参照と実際のリフレクションを照合する。
         if (Node.FunctionPath.IsEmpty() == false &&
-            Function->GetPathName() != Node.FunctionPath)
+            Call.Function->GetPathName() != Node.FunctionPath)
         {
             return nullptr;
         }
-        return Function;
+        return Call.Function;
     };
     auto IsSupportedNestedCall = [&](const FBPIRNode& Node) -> bool
     {
