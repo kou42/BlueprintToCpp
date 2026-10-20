@@ -1,6 +1,7 @@
 #include "BPActorLocationLowering.h"
 
 #include "BPFunctionCallValidator.h"
+#include "BPCallTargetResolver.h"
 #include "BPParentClassResolver.h"
 #include "GameFramework/Actor.h"
 
@@ -100,9 +101,13 @@ bool FBPActorLocationLowering::LowerGetActorLocation(const FBPGraphIR& GraphIR,
     }
     for (const FBPIRLink& Link : OwnerGraph->DataEdges)
     {
-        if (Link.TargetNode == CallNodeId)
+        if (Link.TargetNode == CallNodeId &&
+            Target->Pins.ContainsByPredicate([&Link](const FBPIRPin& Pin)
+            {
+                return Pin.Id == Link.TargetPin && Pin.Name != TEXT("self") && Pin.Name != TEXT("Target");
+            }))
         {
-            Report(OutDiagnostics, OwnerGraph->Name, CallNodeId, TEXT("Connected call input is not supported"));
+            Report(OutDiagnostics, OwnerGraph->Name, CallNodeId, TEXT("Unsupported connected call input"));
             return false;
         }
     }
@@ -124,13 +129,13 @@ bool FBPActorLocationLowering::LowerGetActorLocation(const FBPGraphIR& GraphIR,
             Result.FunctionName = Signature.FunctionName;
             Result.FunctionOwnerPath = Signature.OwnerClassPath;
 
-            // 呼び出し対象のActorは明示的にthisで表す。
+            // 接続されたTargetを型付き式として保持し、後段のEmitterで検証する。
             FBPSemanticExpression Self;
-            Self.Kind = EBPSemanticExpressionKind::VariableReference;
-            Self.Type.Kind = EBPSemanticTypeKind::Object;
-            Self.Type.TypePath = GraphIR.ParentClassPath;
-            Self.VariableName = TEXT("this");
-            Self.SourceNodeId = CallNodeId;
+            if (FBPCallTargetResolver::Resolve(GraphIR, CallNodeId,
+                Self, OutDiagnostics) == false)
+            {
+                return false;
+            }
             Result.Arguments.Add(MoveTemp(Self));
             OutExpression = MoveTemp(Result);
             return true;
