@@ -1042,20 +1042,20 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     auto ResolveNestedFunction = [&](const FBPIRNode& Node) -> const UFunction*
     {
         if (Node.FunctionOwnerPath.IsEmpty() || Node.FunctionName.IsNone() ||
-            Node.bFunctionResolved == false || Node.bFunctionNative == false ||
-            Node.bFunctionStatic)
+            Node.bFunctionResolved == false || Node.bFunctionNative == false)
         {
             return nullptr;
         }
         const UClass* Owner = FindObject<UClass>(nullptr, *Node.FunctionOwnerPath);
         const UClass* Parent = FindObject<UClass>(nullptr, *GraphIR.ParentClassPath);
-        if (Owner == nullptr || Parent == nullptr || Parent->IsChildOf(Owner) == false)
+        if (Owner == nullptr || Parent == nullptr ||
+            (Node.bFunctionStatic == false && Parent->IsChildOf(Owner) == false))
         {
             return nullptr;
         }
         const UFunction* Function = Owner->FindFunctionByName(Node.FunctionName);
         if (Function == nullptr || Function->HasAnyFunctionFlags(FUNC_Native) == false ||
-            Function->HasAnyFunctionFlags(FUNC_Static))
+            Function->HasAnyFunctionFlags(FUNC_Static) != Node.bFunctionStatic)
         {
             return nullptr;
         }
@@ -1089,6 +1089,14 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
             (Graph.DataEdges.ContainsByPredicate(
                 [SelfPin](const FBPIRLink& Edge) { return Edge.TargetPin == SelfPin->Id; }) ||
              (SelfPin->DefaultObjectPath.IsEmpty() == false)))
+        {
+            return false;
+        }
+        // 静的関数はselfピンを持たない。C++ヘッダーが反射メタデータから
+        // 特定できる関数だけ生成し、未解決の所有クラスは拒否する。
+        if (Node.bFunctionStatic &&
+            (SelfPin != nullptr || Function->GetOwnerClass() == nullptr ||
+             Function->GetOwnerClass()->GetMetaData(TEXT("IncludePath")).IsEmpty()))
         {
             return false;
         }
@@ -1436,7 +1444,10 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
                 Self.Type.Kind = EBPSemanticTypeKind::Object;
                 Self.Type.TypePath = GraphIR.ParentClassPath;
                 Self.VariableName = TEXT("this");
-                Call.Arguments.Add(MoveTemp(Self));
+                if (Signature.bStatic == false)
+                {
+                    Call.Arguments.Add(MoveTemp(Self));
+                }
                 // 数値・真偽値の未接続リテラル引数を反射済みの型で構築する。
                 // データ接続と参照引数は別の式Loweringが必要なため受理しない。
                 for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
