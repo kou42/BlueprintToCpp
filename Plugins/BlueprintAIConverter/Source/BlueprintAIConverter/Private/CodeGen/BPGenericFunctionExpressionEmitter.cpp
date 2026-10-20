@@ -279,17 +279,59 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
         }
         Arguments.Add(MoveTemp(CppArgument));
     }
-    const FString CallCpp = FString::Printf(TEXT("%s%s(%s)"), *Prefix, *Name,
-        *FString::Join(Arguments, TEXT(", ")));
-    if (Target.VariableName == TEXT("this"))
+    // C++の関数実引数の評価順序はBlueprintのピン順と一致するとは限らない。
+    // 関数呼び出しを含む場合は即時実行ラムダ内で引数を順番に確定させる。
+    FString InvocationArguments = FString::Join(Arguments, TEXT(", "));
+    FString Preparation;
+    bool bHasNestedCall = false;
+    for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
     {
-        OutCpp = CallCpp;
+        if (Expression.Arguments[Index + 1].Kind == EBPSemanticExpressionKind::FunctionCall)
+        {
+            bHasNestedCall = true;
+        }
+    }
+    if (bHasNestedCall)
+    {
+        TArray<FString> LocalArguments;
+        for (int32 Index = 0; Index < Arguments.Num(); ++Index)
+        {
+            const FString LocalName = FString::Printf(TEXT("BPArg%d"), Index);
+            Preparation += FString::Printf(TEXT("const auto %s = %s;\\n"),
+                *LocalName, *Arguments[Index]);
+            LocalArguments.Add(LocalName);
+        }
+        InvocationArguments = FString::Join(LocalArguments, TEXT(", "));
+    }
+    const FString CallCpp = FString::Printf(TEXT("%s%s(%s)"), *Prefix, *Name,
+        *InvocationArguments);
+    FString ResultCpp = CallCpp;
+    if (Target.VariableName != TEXT("this"))
+    {
+        const FString PropertyName = Target.VariableName.ToString();
+        ResultCpp = FString::Printf(TEXT("(%s != nullptr ? %s : %s)"),
+            *PropertyName, *CallCpp, *Fallback);
+    }
+    if (bHasNestedCall)
+    {
+        // null判定を引数の評価より先に実行するため、外部Targetのときは
+        // ラムダの内部でnullを検査し、必要な場合だけ引数を評価する。
+        if (Target.VariableName != TEXT("this"))
+        {
+            const FString PropertyName = Target.VariableName.ToString();
+            OutCpp = FString::Printf(
+                TEXT("([&]() { if (%s == nullptr) { return %s; }\\n%sreturn %s; }())"),
+                *PropertyName, *Fallback, *Preparation, *CallCpp);
+        }
+        else
+        {
+            OutCpp = FString::Printf(TEXT("([&]() { %sreturn %s; }())"),
+                *Preparation, *CallCpp);
+        }
     }
     else
     {
-        const FString PropertyName = Target.VariableName.ToString();
-        OutCpp = FString::Printf(TEXT("(%s != nullptr ? %s : %s)"),
-            *PropertyName, *CallCpp, *Fallback);
+        OutCpp = ResultCpp;
     }
     return true;
 }
