@@ -236,6 +236,7 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     }
 
     TArray<FString> Args;
+    bool bHasConnectedArgument = false;
     for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
     {
         if (Signature.OutputParameters[Index])
@@ -264,6 +265,7 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         FString Value;
         if (bConnected)
         {
+            bHasConnectedArgument = true;
             // 接続済みVector式は既存のGraph IR -> Semantic -> C++経路を再利用する。
             // 接続元ノードを先に解決し、Actor専用式と汎用式を排他的に選ぶ。
             const FBPIRNode* SourceNode = nullptr;
@@ -368,16 +370,33 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         Report(OutDiagnostics, CallNodeId, TEXT("Invalid reflected function identifier"));
         return false;
     }
-    const FString Invocation = FString::Printf(TEXT("%s%s(%s);"),
-        *Prefix, *FunctionName, *FString::Join(Args, TEXT(", ")));
+    // C++の関数引数評価順序に依存しないよう、接続式を含む場合は
+    // 引数をピンの宣言順で一時変数へ評価してから呼び出す。
+    FString Preparation;
+    FString ArgumentList = FString::Join(Args, TEXT(", "));
+    if (bHasConnectedArgument)
+    {
+        TArray<FString> Locals;
+        for (int32 Index = 0; Index < Args.Num(); ++Index)
+        {
+            const FString LocalName = FString::Printf(TEXT("BPArg%d"), Index);
+            Preparation += FString::Printf(TEXT("const auto %s = %s;\\n"),
+                *LocalName, *Args[Index]);
+            Locals.Add(LocalName);
+        }
+        ArgumentList = FString::Join(Locals, TEXT(", "));
+    }
     if (Prefix.IsEmpty())
     {
-        OutStatement = Invocation;
+        OutStatement = Preparation + FString::Printf(TEXT("%s(%s);"),
+            *FunctionName, *ArgumentList);
     }
     else
     {
-        OutStatement = FString::Printf(TEXT("if (%s != nullptr)\n{\n%s\n}"),
-            *Target.VariableName.ToString(), *Invocation);
+        // Targetを一度だけ読み取り、null時には引数式を評価しない。
+        OutStatement = FString::Printf(
+            TEXT("{\\nauto* BPTarget = %s;\\nif (BPTarget != nullptr)\\n{\\n%sBPTarget->%s(%s);\\n}\\n}"),
+            *Target.VariableName.ToString(), *Preparation, *FunctionName, *ArgumentList);
     }
     return true;
 }
