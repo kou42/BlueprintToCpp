@@ -3,6 +3,9 @@
 #include "BPCallTargetResolver.h"
 #include "BPFunctionCallValidator.h"
 #include "BPBooleanPinDefaultEmitter.h"
+#include "BPConnectedActorLocationLowering.h"
+#include "Misc/LexFromString.h"
+#include "Misc/LexToString.h"
 #include "BPFunctionSignatureResolver.h"
 #include "EdGraphSchema_K2.h"
 #include "UObject/Class.h"
@@ -17,6 +20,59 @@ void Report(TArray<FBPSemanticDiagnostic>& Diagnostics, const FGuid& NodeId,
     Diagnostic.NodeId = NodeId;
     Diagnostic.Message = Message;
     Diagnostics.Add(MoveTemp(Diagnostic));
+}
+
+// Blueprintの数値既定値は一度数値型に解析し、正規化して出力する。
+// 入力文字列を直接C++式として連結するとコード注入や型不一致につながる。
+bool EmitNumericDefault(const FBPIRPin& Pin, const FBPSemanticType& Type, FString& Out)
+{
+    if (Type.bIsReference || Type.ContainerKind != TEXT("none"))
+    {
+        return false;
+    }
+    if (Type.Kind == EBPSemanticTypeKind::Int32)
+    {
+        int32 Value = 0;
+        if (LexTryParseString(Value, *Pin.DefaultValue) == false)
+        {
+            return false;
+        }
+        Out = LexToString(Value);
+        return true;
+    }
+    if (Type.Kind == EBPSemanticTypeKind::Int64)
+    {
+        int64 Value = 0;
+        if (LexTryParseString(Value, *Pin.DefaultValue) == false)
+        {
+            return false;
+        }
+        Out = FString::Printf(TEXT("static_cast<int64>(%s)"), *LexToString(Value));
+        return true;
+    }
+    if (Type.Kind == EBPSemanticTypeKind::Float)
+    {
+        float Value = 0.0f;
+        if (LexTryParseString(Value, *Pin.DefaultValue) == false ||
+            FMath::IsFinite(Value) == false)
+        {
+            return false;
+        }
+        Out = FString::Printf(TEXT("static_cast<float>(%s)"), *LexToString(Value));
+        return true;
+    }
+    if (Type.Kind == EBPSemanticTypeKind::Double)
+    {
+        double Value = 0.0;
+        if (LexTryParseString(Value, *Pin.DefaultValue) == false ||
+            FMath::IsFinite(Value) == false)
+        {
+            return false;
+        }
+        Out = LexToString(Value);
+        return true;
+    }
+    return false;
 }
 
 bool IsIdentifier(const FString& Name)
@@ -151,21 +207,38 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             Report(OutDiagnostics, CallNodeId, TEXT("Missing input parameter"));
             return false;
         }
+        bool bConnected = false;
         for (const FBPIRLink& Edge : Graph->DataEdges)
         {
             if (Edge.TargetNode == CallNodeId && Edge.TargetPin == Pin->Id)
             {
-                Report(OutDiagnostics, CallNodeId, TEXT("Connected generic parameters are not yet supported"));
+                bConnected = true;
+            }
+        }
+        FString Value;
+        if (bConnected)
+        {
+            // 接続済みVector式は既存のGraph IR -> Semantic -> C++経路を再利用する。
+            if (Signature.ParameterTypes[Index].Kind != EBPSemanticTypeKind::Struct ||
+                Signature.ParameterTypes[Index].TypePath != TEXT("/Script/CoreUObject.Vector") ||
+                FBPConnectedActorLocationLowering::EmitInputCpp(
+                    GraphIR, CallNodeId, Pin->Id, Value, OutDiagnostics) == false)
+            {
+                Report(OutDiagnostics, CallNodeId, TEXT("Unsupported connected generic argument"));
                 return false;
             }
         }
-        // 最初の汎用対応は正規化済みbool既定値に限定する。
-        // 他型の既定値を未検証のC++リテラルとして埋め込まない。
-        FString Value;
-        if (Signature.ParameterTypes[Index].Kind != EBPSemanticTypeKind::Bool ||
-            FBPBooleanPinDefaultEmitter::Emit(*Pin, Value) == false)
+        else if (Signature.ParameterTypes[Index].Kind == EBPSemanticTypeKind::Bool)
         {
-            Report(OutDiagnostics, CallNodeId, TEXT("Unsupported generic parameter default"));
+            if (FBPBooleanPinDefaultEmitter::Emit(*Pin, Value) == false)
+            {
+                Report(OutDiagnostics, CallNodeId, TEXT("Invalid bool default"));
+                return false;
+            }
+        }
+        else if (EmitNumericDefault(*Pin, Signature.ParameterTypes[Index], Value) == false)
+        {
+            Report(OutDiagnostics, CallNodeId, TEXT("Unsupported generic argument default"));
             return false;
         }
         Args.Add(MoveTemp(Value));
@@ -183,7 +256,8 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             Call->Pins.ContainsByPredicate([&Edge](const FBPIRPin& Pin)
             {
                 return Pin.Id == Edge.TargetPin &&
-                    (Pin.Name == TEXT("self") || Pin.Name == TEXT("Target"));
+                    ((Pin.Name == TEXT("self") || Pin.Name == TEXT("Target")) ||
+                        Signature.ParameterNames.Contains(Pin.Name));
             }) == false)
         {
             Report(OutDiagnostics, CallNodeId, TEXT("Unsupported generic call input edge"));
