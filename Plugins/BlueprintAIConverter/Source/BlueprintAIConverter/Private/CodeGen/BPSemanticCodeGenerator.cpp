@@ -1211,6 +1211,19 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
         return EmitActorLocationStatement(Expression, ParentClassPath,
             Indent, OutStatement, Diagnostics);
     }
+    // 引数なしActorメンバー関数は、LoweringでUFunction署名を確認した
+    // FunctionCall IRのみ受理する。文字列連結で未知の引数を捏造しない。
+    if (Expression.FunctionOwnerPath == TEXT("/Script/Engine.Actor") &&
+        Expression.Type.Kind == EBPSemanticTypeKind::Void &&
+        Expression.Arguments.Num() == 1 &&
+        Expression.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
+        Expression.Arguments[0].VariableName == TEXT("this") &&
+        IsIdentifier(Expression.FunctionName.ToString()))
+    {
+        OutStatement = FString::Printf(TEXT("%sthis->%s();\n"),
+            *Indent, *Expression.FunctionName.ToString());
+        return true;
+    }
     Diagnostics.Add(FString::Printf(TEXT("Unsupported semantic expression statement: %s::%s"),
         *Expression.FunctionOwnerPath, *Expression.FunctionName.ToString()));
     return false;
