@@ -101,7 +101,7 @@ bool EmitTextDefault(const FBPIRPin& Pin, const FBPSemanticType& Type, FString& 
         {
         case TEXT('\\'): Escaped += TEXT("\\\\"); break;
         case TEXT('"'): Escaped += TEXT("\\\""); break;
-        case TEXT('\n'): Escaped += TEXT("\\n"); break;
+        case TEXT('\n'): Escaped += TEXT("\n"); break;
         case TEXT('\r'): Escaped += TEXT("\\r"); break;
         case TEXT('\t'): Escaped += TEXT("\\t"); break;
         default:
@@ -381,7 +381,7 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         for (int32 Index = 0; Index < Args.Num(); ++Index)
         {
             const FString LocalName = FString::Printf(TEXT("BPArg%d"), Index);
-            Preparation += FString::Printf(TEXT("const auto %s = %s;\\n"),
+            Preparation += FString::Printf(TEXT("const auto %s = %s;\n"),
                 *LocalName, *Args[Index]);
             Locals.Add(LocalName);
         }
@@ -396,7 +396,7 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     {
         // Targetを一度だけ読み取り、null時には引数式を評価しない。
         OutStatement = FString::Printf(
-            TEXT("{\\nauto* BPTarget = %s;\\nif (BPTarget != nullptr)\\n{\\n%sBPTarget->%s(%s);\\n}\\n}"),
+            TEXT("{\nauto* BPTarget = %s;\nif (BPTarget != nullptr)\n{\n%sBPTarget->%s(%s);\n}\n}"),
             *Target.VariableName.ToString(), *Preparation, *FunctionName, *ArgumentList);
     }
     return true;
