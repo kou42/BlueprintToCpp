@@ -1,7 +1,82 @@
 #include "BPGenericFunctionExpressionEmitter.h"
 #include "BPFunctionSignatureResolver.h"
+#include "Misc/LexFromString.h"
+#include "Misc/LexToString.h"
 #include "UObject/Class.h"
 #include "UObject/UObjectGlobals.h"
+
+namespace
+{
+// Semanticリテラルを数値として再解析し、任意の文字列をC++へ挿入しない。
+bool EmitLiteral(const FBPSemanticExpression& Expression, FString& Out)
+{
+    if (Expression.Kind != EBPSemanticExpressionKind::Literal ||
+        Expression.Type.ContainerKind != TEXT("none") ||
+        Expression.Type.bIsReference)
+    {
+        return false;
+    }
+    if (Expression.Type.Kind == EBPSemanticTypeKind::Bool)
+    {
+        if (Expression.LiteralValue.Equals(TEXT("true"), ESearchCase::IgnoreCase))
+        {
+            Out = TEXT("true");
+            return true;
+        }
+        if (Expression.LiteralValue.Equals(TEXT("false"), ESearchCase::IgnoreCase))
+        {
+            Out = TEXT("false");
+            return true;
+        }
+        return false;
+    }
+    if (Expression.Type.Kind == EBPSemanticTypeKind::Int32)
+    {
+        int32 Value = 0;
+        if (LexTryParseString(Value, *Expression.LiteralValue) == false)
+        {
+            return false;
+        }
+        Out = LexToString(Value);
+        return true;
+    }
+    if (Expression.Type.Kind == EBPSemanticTypeKind::Int64)
+    {
+        int64 Value = 0;
+        if (LexTryParseString(Value, *Expression.LiteralValue) == false)
+        {
+            return false;
+        }
+        Out = FString::Printf(TEXT("static_cast<int64>(%s)"), *LexToString(Value));
+        return true;
+    }
+    if (Expression.Type.Kind == EBPSemanticTypeKind::Float ||
+        Expression.Type.Kind == EBPSemanticTypeKind::Double)
+    {
+        double Value = 0.0;
+        if (LexTryParseString(Value, *Expression.LiteralValue) == false ||
+            FMath::IsFinite(Value) == false)
+        {
+            return false;
+        }
+        if (Expression.Type.Kind == EBPSemanticTypeKind::Float)
+        {
+            const float Narrowed = static_cast<float>(Value);
+            if (FMath::IsFinite(Narrowed) == false)
+            {
+                return false;
+            }
+            Out = FString::Printf(TEXT("static_cast<float>(%s)"), *LexToString(Narrowed));
+        }
+        else
+        {
+            Out = LexToString(Value);
+        }
+        return true;
+    }
+    return false;
+}
+}
 
 bool FBPGenericFunctionExpressionEmitter::Emit(
     const FBPSemanticExpression& Expression, const UClass* OwnerClass,
@@ -10,7 +85,7 @@ bool FBPGenericFunctionExpressionEmitter::Emit(
     OutCpp.Reset();
     if (OwnerClass == nullptr ||
         Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
-        Expression.Arguments.Num() != 1)
+        Expression.Arguments.IsEmpty())
     {
         OutDiagnostics.Add(TEXT("Invalid function expression"));
         return false;
@@ -31,7 +106,8 @@ bool FBPGenericFunctionExpressionEmitter::Emit(
 
     FBPResolvedFunctionSignature Signature;
     if (FBPFunctionSignatureResolver::Resolve(Function, Signature, OutDiagnostics) == false ||
-        Signature.ParameterNames.IsEmpty() == false ||
+        Signature.ParameterNames.Num() + 1 != Expression.Arguments.Num() ||
+        Signature.ParameterNames.Num() != Signature.ParameterTypes.Num() ||
         Signature.ReturnType.Kind == EBPSemanticTypeKind::Void ||
         Signature.ReturnType.Kind != Expression.Type.Kind ||
         Signature.ReturnType.TypePath != Expression.Type.TypePath ||
@@ -70,6 +146,28 @@ bool FBPGenericFunctionExpressionEmitter::Emit(
             return false;
         }
     }
-    OutCpp = FString::Printf(TEXT("%s()"), *Name);
+    TArray<FString> Arguments;
+    for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
+    {
+        const FBPSemanticExpression& Argument = Expression.Arguments[Index + 1];
+        const FBPSemanticType& Expected = Signature.ParameterTypes[Index];
+        if (Argument.Type.Kind != Expected.Kind ||
+            Argument.Type.TypePath != Expected.TypePath ||
+            Argument.Type.ContainerKind != Expected.ContainerKind ||
+            Argument.Type.bIsReference != Expected.bIsReference)
+        {
+            OutDiagnostics.Add(TEXT("Pure function argument type mismatch"));
+            return false;
+        }
+        FString CppArgument;
+        if (EmitLiteral(Argument, CppArgument) == false)
+        {
+            OutDiagnostics.Add(TEXT("Unsupported pure function argument literal"));
+            return false;
+        }
+        Arguments.Add(MoveTemp(CppArgument));
+    }
+    OutCpp = FString::Printf(TEXT("%s(%s)"), *Name,
+        *FString::Join(Arguments, TEXT(", ")));
     return true;
 }
