@@ -293,9 +293,12 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
     else
     {
         // Targetを一度だけ読み取り、null時には引数式を評価しない。
+        const FString TargetLocal = FString::Printf(TEXT("BPGeneratedTarget_%s"),
+            *CallNodeId.ToString(EGuidFormats::Digits));
         OutStatement = FString::Printf(
-            TEXT("{\nauto* BPTarget = %s;\nif (BPTarget != nullptr)\n{\n%sBPTarget->%s(%s);\n}\n}"),
-            *Target.VariableName.ToString(), *Preparation, *FunctionName, *ArgumentList);
+            TEXT("{\nauto* %s = this->%s;\nif (%s != nullptr)\n{\n%s%s->%s(%s);\n}\n}"),
+            *TargetLocal, *Target.VariableName.ToString(), *TargetLocal,
+            *Preparation, *TargetLocal, *FunctionName, *ArgumentList);
     }
     return true;
 }
