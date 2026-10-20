@@ -3,6 +3,7 @@
 #include "Misc/LexFromString.h"
 #include "Misc/LexToString.h"
 #include "UObject/Class.h"
+#include "UObject/UnrealType.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace
@@ -158,14 +159,77 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
 
     const FBPSemanticExpression& Target = Expression.Arguments[0];
     if (Target.Kind != EBPSemanticExpressionKind::VariableReference ||
-        Target.VariableName != TEXT("this") ||
         Target.Type.Kind != EBPSemanticTypeKind::Object ||
-        Target.Type.TypePath.IsEmpty() ||
-        OwnerClass->IsChildOf(FunctionOwner) == false)
+        Target.Type.TypePath.IsEmpty())
     {
         // 外部Targetはnull時の戻り値を推測できないため、現段階では拒否する。
         OutDiagnostics.Add(TEXT("Pure function expression requires self target"));
         return false;
+    }
+    // 外部Targetは三項演算子でnullを検査する。戻り値の既定値が
+    // 型安全に構築できる場合だけ対応し、評価時のnull参照を防ぐ。
+    FString Prefix;
+    FString Fallback;
+    if (Target.VariableName == TEXT("this"))
+    {
+        if (OwnerClass->IsChildOf(FunctionOwner) == false)
+        {
+            OutDiagnostics.Add(TEXT("Self cannot call pure function"));
+            return false;
+        }
+    }
+    else
+    {
+        const FProperty* Property = OwnerClass->FindPropertyByName(Target.VariableName);
+        const FObjectProperty* Object = CastField<FObjectProperty>(Property);
+        const UClass* TargetClass = FindObject<UClass>(nullptr, *Target.Type.TypePath);
+        if (Object == nullptr || Object->PropertyClass == nullptr ||
+            TargetClass == nullptr ||
+            Object->PropertyClass->GetPathName() != Target.Type.TypePath ||
+            TargetClass->IsChildOf(FunctionOwner) == false)
+        {
+            OutDiagnostics.Add(TEXT("Unsupported external pure function target"));
+            return false;
+        }
+        const FString PropertyName = Target.VariableName.ToString();
+        if (PropertyName.IsEmpty())
+        {
+            return false;
+        }
+        for (int32 Index = 0; Index < PropertyName.Len(); ++Index)
+        {
+            const TCHAR Character = PropertyName[Index];
+            const bool bAlpha = (Character >= TEXT('a') && Character <= TEXT('z')) ||
+                (Character >= TEXT('A') && Character <= TEXT('Z'));
+            const bool bDigit = Character >= TEXT('0') && Character <= TEXT('9');
+            if (bAlpha == false && Character != TEXT('_') &&
+                (Index == 0 || bDigit == false))
+            {
+                OutDiagnostics.Add(TEXT("Invalid target property identifier"));
+                return false;
+            }
+        }
+        // 参照戻り値や複雑な型はnull時の安全な代替値を定義できない。
+        if (Signature.ReturnType.bIsReference ||
+            Signature.ReturnType.ContainerKind != TEXT("none"))
+        {
+            OutDiagnostics.Add(TEXT("External target return type is unsupported"));
+            return false;
+        }
+        switch (Signature.ReturnType.Kind)
+        {
+        case EBPSemanticTypeKind::Bool: Fallback = TEXT("false"); break;
+        case EBPSemanticTypeKind::Int32: Fallback = TEXT("int32{}"); break;
+        case EBPSemanticTypeKind::Int64: Fallback = TEXT("int64{}"); break;
+        case EBPSemanticTypeKind::Float: Fallback = TEXT("float{}"); break;
+        case EBPSemanticTypeKind::Double: Fallback = TEXT("double{}"); break;
+        case EBPSemanticTypeKind::String: Fallback = TEXT("FString{}"); break;
+        case EBPSemanticTypeKind::Name: Fallback = TEXT("FName{}"); break;
+        default:
+            OutDiagnostics.Add(TEXT("External target return type has no safe fallback"));
+            return false;
+        }
+        Prefix = PropertyName + TEXT("->");
     }
     const FString Name = Function->GetName();
     if (Name.IsEmpty())
@@ -215,8 +279,18 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
         }
         Arguments.Add(MoveTemp(CppArgument));
     }
-    OutCpp = FString::Printf(TEXT("%s(%s)"), *Name,
+    const FString CallCpp = FString::Printf(TEXT("%s%s(%s)"), *Prefix, *Name,
         *FString::Join(Arguments, TEXT(", ")));
+    if (Target.VariableName == TEXT("this"))
+    {
+        OutCpp = CallCpp;
+    }
+    else
+    {
+        const FString PropertyName = Target.VariableName.ToString();
+        OutCpp = FString::Printf(TEXT("(%s != nullptr ? %s : %s)"),
+            *PropertyName, *CallCpp, *Fallback);
+    }
     return true;
 }
 
