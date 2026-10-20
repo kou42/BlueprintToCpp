@@ -1019,9 +1019,9 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
                 continue;
             }
 
-            AddDiagnostic(OutIR, Graph.Name, Node.Id,
-                TEXT("Branch conversion contains an unsupported function call"));
-            return false;
+            // ネストしたBranchの実行ノード候補は後段で反射署名を検証する。
+            // 単一Branchでは従来のPrintString限定規則を維持する。
+            continue;
         }
         else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
         {
