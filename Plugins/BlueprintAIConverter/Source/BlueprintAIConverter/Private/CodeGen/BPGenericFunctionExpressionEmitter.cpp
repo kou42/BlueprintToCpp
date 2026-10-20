@@ -131,6 +131,7 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
     if (Target.Kind != EBPSemanticExpressionKind::VariableReference ||
         Target.VariableName != TEXT("this") ||
         Target.Type.Kind != EBPSemanticTypeKind::Object ||
+        Target.Type.TypePath != OwnerClass->GetPathName() ||
         OwnerClass->IsChildOf(FunctionOwner) == false)
     {
         // 外部Targetはnull時の戻り値を推測できないため、現段階では拒否する。
@@ -168,7 +169,8 @@ bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerC
         if (Argument.Type.Kind != Expected.Kind ||
             Argument.Type.TypePath != Expected.TypePath ||
             Argument.Type.ContainerKind != Expected.ContainerKind ||
-            Argument.Type.bIsReference != Expected.bIsReference)
+            Argument.Type.bIsReference != Expected.bIsReference ||
+            Argument.Type.bIsConst != Expected.bIsConst)
         {
             OutDiagnostics.Add(TEXT("Pure function argument type mismatch"));
             return false;
