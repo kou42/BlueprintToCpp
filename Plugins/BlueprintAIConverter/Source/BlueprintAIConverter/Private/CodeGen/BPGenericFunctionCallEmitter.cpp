@@ -179,7 +179,12 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             Report(OutDiagnostics, CallNodeId, TEXT("Generic call output data edge is unsupported"));
             return false;
         }
-        if (Edge.TargetNode == CallNodeId && Edge.TargetPin != Target.SourcePinId)
+        if (Edge.TargetNode == CallNodeId &&
+            Call->Pins.ContainsByPredicate([&Edge](const FBPIRPin& Pin)
+            {
+                return Pin.Id == Edge.TargetPin &&
+                    (Pin.Name == TEXT("self") || Pin.Name == TEXT("Target"));
+            }) == false)
         {
             Report(OutDiagnostics, CallNodeId, TEXT("Unsupported generic call input edge"));
             return false;
