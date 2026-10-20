@@ -25,7 +25,6 @@ bool LowerRecursive(const FBPGraphIR& GraphIR, const FGuid& CallNodeId,
     const UFunction* Function, FBPSemanticExpression& OutExpression,
     TArray<FBPSemanticDiagnostic>& OutDiagnostics, TSet<FGuid>& ActiveNodes,
     int32 Depth)
-
 {
     OutExpression = FBPSemanticExpression();
     // グラフの循環と異常に深い式ツリーを、再帰呼び出し前に検出する。
@@ -210,7 +209,8 @@ bool LowerRecursive(const FBPGraphIR& GraphIR, const FGuid& CallNodeId,
                 Argument.Type.Kind != Expected.Kind ||
                 Argument.Type.TypePath != Expected.TypePath ||
                 Argument.Type.ContainerKind != Expected.ContainerKind ||
-                Argument.Type.bIsReference != Expected.bIsReference)
+                Argument.Type.bIsReference != Expected.bIsReference ||
+                Argument.Type.bIsConst != Expected.bIsConst)
             {
                 Report(OutDiagnostics, CallNodeId, TEXT("Nested pure function type mismatch"));
                 return false;
