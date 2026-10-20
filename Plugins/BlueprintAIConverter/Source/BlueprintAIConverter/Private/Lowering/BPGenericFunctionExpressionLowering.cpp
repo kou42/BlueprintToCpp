@@ -19,12 +19,28 @@ void Report(TArray<FBPSemanticDiagnostic>& Diagnostics, const FGuid& NodeId,
 }
 }
 
-bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
-    const FGuid& CallNodeId, const UFunction* Function,
-    FBPSemanticExpression& OutExpression,
-    TArray<FBPSemanticDiagnostic>& OutDiagnostics)
+namespace
+{
+bool LowerRecursive(const FBPGraphIR& GraphIR, const FGuid& CallNodeId,
+    const UFunction* Function, FBPSemanticExpression& OutExpression,
+    TArray<FBPSemanticDiagnostic>& OutDiagnostics, TSet<FGuid>& ActiveNodes,
+    int32 Depth)
+
 {
     OutExpression = FBPSemanticExpression();
+    // グラフの循環と異常に深い式ツリーを、再帰呼び出し前に検出する。
+    if (Depth >= 32 || ActiveNodes.Contains(CallNodeId))
+    {
+        Report(OutDiagnostics, CallNodeId, TEXT("Pure expression cycle or depth limit"));
+        return false;
+    }
+    ActiveNodes.Add(CallNodeId);
+    struct FActiveNodeGuard
+    {
+        TSet<FGuid>& Nodes;
+        FGuid NodeId;
+        ~FActiveNodeGuard() { Nodes.Remove(NodeId); }
+    } Guard{ActiveNodes, CallNodeId};
     if (Function == nullptr || GraphIR.Diagnostics.IsEmpty() == false ||
         Function->HasAnyFunctionFlags(FUNC_Native) == false ||
         Function->HasAnyFunctionFlags(FUNC_BlueprintPure) == false ||
@@ -182,9 +198,9 @@ bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
             const UFunction* SourceFunction = SourceOwner != nullptr
                 ? SourceOwner->FindFunctionByName(SourceNode->FunctionName) : nullptr;
             if (SourceNode->Id == CallNodeId ||
-                FBPGenericFunctionExpressionLowering::Lower(
+                LowerRecursive(
                     GraphIR, SourceNode->Id, SourceFunction,
-                    Argument, OutDiagnostics) == false)
+                    Argument, OutDiagnostics, ActiveNodes, Depth + 1) == false)
             {
                 Report(OutDiagnostics, CallNodeId, TEXT("Unsupported nested pure function"));
                 return false;
@@ -213,4 +229,16 @@ bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
     Result.Arguments.Append(MoveTemp(Parameters));
     OutExpression = MoveTemp(Result);
     return true;
+}
+
+}
+
+bool FBPGenericFunctionExpressionLowering::Lower(const FBPGraphIR& GraphIR,
+    const FGuid& CallNodeId, const UFunction* Function,
+    FBPSemanticExpression& OutExpression,
+    TArray<FBPSemanticDiagnostic>& OutDiagnostics)
+{
+    TSet<FGuid> ActiveNodes;
+    return LowerRecursive(GraphIR, CallNodeId, Function,
+        OutExpression, OutDiagnostics, ActiveNodes, 0);
 }
