@@ -1211,17 +1211,70 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
         return EmitActorLocationStatement(Expression, ParentClassPath,
             Indent, OutStatement, Diagnostics);
     }
-    // 引数なしActorメンバー関数は、LoweringでUFunction署名を確認した
-    // FunctionCall IRのみ受理する。文字列連結で未知の引数を捏造しない。
+    // Actorのネイティブ関数呼び出しは、Loweringで検証済みのリテラルのみを
+    // C++引数へ変換する。任意の式や参照引数を文字列として出力しない。
     if (Expression.FunctionOwnerPath == TEXT("/Script/Engine.Actor") &&
         Expression.Type.Kind == EBPSemanticTypeKind::Void &&
-        Expression.Arguments.Num() == 1 &&
+        Expression.Arguments.Num() >= 1 &&
         Expression.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
         Expression.Arguments[0].VariableName == TEXT("this") &&
         IsIdentifier(Expression.FunctionName.ToString()))
     {
-        OutStatement = FString::Printf(TEXT("%sthis->%s();\n"),
-            *Indent, *Expression.FunctionName.ToString());
+        FString Arguments;
+        for (int32 Index = 1; Index < Expression.Arguments.Num(); ++Index)
+        {
+            const FBPSemanticExpression& Argument = Expression.Arguments[Index];
+            if (Argument.Kind != EBPSemanticExpressionKind::Literal ||
+                Argument.Type.bIsReference || Argument.Type.bIsConst)
+            {
+                Diagnostics.Add(TEXT("Actor call contains an unsupported argument expression"));
+                return false;
+            }
+            FString Value;
+            if (Argument.Type.Kind == EBPSemanticTypeKind::Bool)
+            {
+                if (ReadBoolLiteral(Argument, Value) == false)
+                {
+                    return false;
+                }
+            }
+            else if (Argument.Type.Kind == EBPSemanticTypeKind::Int32)
+            {
+                int32 Parsed = 0;
+                if (LexTryParseString(Parsed, *Argument.LiteralValue) == false)
+                {
+                    return false;
+                }
+                Value = LexToString(Parsed);
+            }
+            else if (Argument.Type.Kind == EBPSemanticTypeKind::Float ||
+                Argument.Type.Kind == EBPSemanticTypeKind::Double)
+            {
+                double Parsed = 0.0;
+                if (LexTryParseString(Parsed, *Argument.LiteralValue) == false ||
+                    FMath::IsFinite(Parsed) == false)
+                {
+                    return false;
+                }
+                Value = Argument.LiteralValue;
+                if (Argument.Type.Kind == EBPSemanticTypeKind::Float)
+                {
+                    Value += TEXT("f");
+                }
+            }
+            else
+            {
+                Diagnostics.Add(TEXT("Actor call argument type is unsupported"));
+                return false;
+            }
+            if (Index > 1)
+            {
+                Arguments += TEXT(", ");
+            }
+            Arguments += Value;
+        }
+        OutStatement = FString::Printf(TEXT("%sthis->%s(%s);\n"),
+            *Indent, *Expression.FunctionName.ToString(), *Arguments);
         return true;
     }
     Diagnostics.Add(FString::Printf(TEXT("Unsupported semantic expression statement: %s::%s"),
