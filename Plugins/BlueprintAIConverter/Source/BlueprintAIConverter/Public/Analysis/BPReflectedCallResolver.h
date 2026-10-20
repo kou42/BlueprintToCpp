@@ -19,6 +19,15 @@ struct FBPReflectedCall
 class FBPReflectedCallResolver
 {
 public:
+    // Targetの実際のUClassを渡せば、特定のクラス名を列挙せず継承関係を検証できる。
+    static bool ResolveForTarget(const FString& OwnerPath, const FName FunctionName,
+        const FString& TargetClassPath, const bool bStatic,
+        FBPReflectedCall& Out, TArray<FString>& Diagnostics)
+    {
+        return Resolve(OwnerPath, FunctionName, TargetClassPath,
+            bStatic, Out, Diagnostics);
+    }
+
     static bool Resolve(const FString& OwnerPath, const FName FunctionName,
         const FString& BlueprintParentPath, const bool bExpectStatic,
         FBPReflectedCall& Out, TArray<FString>& Diagnostics)
