@@ -1222,19 +1222,25 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     const UFunction* ReflectedFunction = OwnerClass != nullptr
         ? OwnerClass->FindFunctionByName(Expression.FunctionName) : nullptr;
     if (OwnerClass != nullptr && ParentClass != nullptr &&
-        ParentClass->IsChildOf(OwnerClass) &&
+        (ReflectedFunction != nullptr && ReflectedFunction->HasAnyFunctionFlags(FUNC_Static) ||
+         ParentClass->IsChildOf(OwnerClass)) &&
         ReflectedFunction != nullptr &&
         ReflectedFunction->HasAnyFunctionFlags(FUNC_Native) &&
-        ReflectedFunction->HasAnyFunctionFlags(FUNC_Static) == false &&
+
         ReflectedFunction->GetReturnProperty() == nullptr &&
         Expression.Type.Kind == EBPSemanticTypeKind::Void &&
-        Expression.Arguments.Num() >= 1 &&
-        Expression.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
-        Expression.Arguments[0].VariableName == TEXT("this") &&
+        (ReflectedFunction->HasAnyFunctionFlags(FUNC_Static)
+            ? Expression.Arguments.IsEmpty() == false ||
+              OwnerClass->GetMetaData(TEXT("IncludePath")).IsEmpty() == false
+            : Expression.Arguments.Num() >= 1 &&
+              Expression.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
+              Expression.Arguments[0].VariableName == TEXT("this")) &&
         IsIdentifier(Expression.FunctionName.ToString()))
     {
         FString Arguments;
-        for (int32 Index = 1; Index < Expression.Arguments.Num(); ++Index)
+        const bool bStatic = ReflectedFunction->HasAnyFunctionFlags(FUNC_Static);
+        const int32 FirstArgument = bStatic ? 0 : 1;
+        for (int32 Index = FirstArgument; Index < Expression.Arguments.Num(); ++Index)
         {
             const FBPSemanticExpression& Argument = Expression.Arguments[Index];
             if (Argument.Kind != EBPSemanticExpressionKind::Literal ||
@@ -1280,14 +1286,17 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 Diagnostics.Add(TEXT("Actor call argument type is unsupported"));
                 return false;
             }
-            if (Index > 1)
+            if (Index > FirstArgument)
             {
                 Arguments += TEXT(", ");
             }
             Arguments += Value;
         }
-        OutStatement = FString::Printf(TEXT("%sthis->%s(%s);\n"),
-            *Indent, *Expression.FunctionName.ToString(), *Arguments);
+        const FString Target = bStatic
+            ? OwnerClass->GetPrefixCPP() + OwnerClass->GetName() + TEXT("::")
+            : TEXT("this->");
+        OutStatement = FString::Printf(TEXT("%s%s%s(%s);\n"),
+            *Indent, *Target, *Expression.FunctionName.ToString(), *Arguments);
         return true;
     }
     Diagnostics.Add(FString::Printf(TEXT("Unsupported semantic expression statement: %s::%s"),
@@ -1299,6 +1308,22 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
 // 新しい式Emitterを追加するときは、共通ディスパッチと依存ヘッダーだけを登録する。
 void AppendExpressionIncludes(const FBPSemanticExpression& Expression, FString& OutIncludes)
 {
+    // 静的関数のC++所有クラスはIncludePathを反射情報から取得する。
+    const UClass* Owner = FindObject<UClass>(nullptr, *Expression.FunctionOwnerPath);
+    const UFunction* Function = Owner != nullptr
+        ? Owner->FindFunctionByName(Expression.FunctionName) : nullptr;
+    if (Function != nullptr && Function->HasAnyFunctionFlags(FUNC_Static))
+    {
+        const FString IncludePath = Owner->GetMetaData(TEXT("IncludePath"));
+        if (IncludePath.IsEmpty() == false)
+        {
+            const FString IncludeLine = FString::Printf(TEXT("#include \"%s\"\n"), *IncludePath);
+            if (OutIncludes.Contains(IncludeLine) == false)
+            {
+                OutIncludes += IncludeLine;
+            }
+        }
+    }
     if (Expression.FunctionOwnerPath == TEXT("/Script/Engine.Actor") &&
         Expression.FunctionName == TEXT("K2_SetActorLocation") &&
         OutIncludes.Contains(TEXT("#include \"Engine/HitResult.h\"")) == false)
