@@ -277,7 +277,8 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         TArray<FString> Locals;
         for (int32 Index = 0; Index < Args.Num(); ++Index)
         {
-            const FString LocalName = FString::Printf(TEXT("BPArg%d"), Index);
+            const FString LocalName = FString::Printf(TEXT("BPGeneratedArg_%s_%d"),
+                *CallNodeId.ToString(EGuidFormats::Digits), Index);
             Preparation += FString::Printf(TEXT("const auto %s = %s;\n"),
                 *LocalName, *Args[Index]);
             Locals.Add(LocalName);
