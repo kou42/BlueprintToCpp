@@ -1063,10 +1063,151 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         }
         TSet<FGuid> Visited;
         int32 ConsumedEdges = 0;
-        TFunction<bool(const FBPIRNode&, int32, TArray<FBPSemanticStatement>&)> Walk;
-        Walk = [&](const FBPIRNode& Current, int32 Depth,
+        // 出力ピンごとの後続は一意でなければならない。Exec入力への複数接続は
+        // 合流点としてのみ認め、共有ノードの二重出力を防ぐ。
+        auto FindSuccessor = [&](const FBPIRNode& Node, const FBPIRPin& Output,
+            const FBPIRNode*& NextNode) -> bool
+        {
+            NextNode = nullptr;
+            for (const FBPIRLink& Edge : Graph.ExecEdges)
+            {
+                if (Edge.SourceNode == Node.Id && Edge.SourcePin == Output.Id)
+                {
+                    if (NextNode != nullptr)
+                    {
+                        return false;
+                    }
+                    NextNode = Graph.Nodes.FindByPredicate(
+                        [&Edge](const FBPIRNode& Candidate)
+                        {
+                            return Candidate.Id == Edge.TargetNode;
+                        });
+                    const FBPIRPin* Input = NextNode != nullptr
+                        ? FindPin(*NextNode, UEdGraphSchema_K2::PN_Execute, EGPD_Input)
+                        : nullptr;
+                    if (Input == nullptr || Input->Id != Edge.TargetPin)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        // 各枝から到達可能なノードを列挙する。閉路や未対応Exec出力は拒否する。
+        TFunction<bool(const FBPIRNode*, TSet<FGuid>&, TSet<FGuid>&)> CollectReachable;
+        CollectReachable = [&](const FBPIRNode* Current, TSet<FGuid>& Reachable,
+            TSet<FGuid>& Active) -> bool
+        {
+            if (Current == nullptr)
+            {
+                return true;
+            }
+            if (Active.Contains(Current->Id))
+            {
+                return false;
+            }
+            if (Reachable.Contains(Current->Id))
+            {
+                return true;
+            }
+            Active.Add(Current->Id);
+            Reachable.Add(Current->Id);
+            for (const FBPIRLink& Edge : Graph.ExecEdges)
+            {
+                if (Edge.SourceNode != Current->Id)
+                {
+                    continue;
+                }
+                const FBPIRPin* Output = Current->Pins.FindByPredicate(
+                    [&Edge](const FBPIRPin& Pin)
+                    {
+                        return Pin.Id == Edge.SourcePin && Pin.Direction == EGPD_Output;
+                    });
+                const FBPIRNode* Child = nullptr;
+                if (Output == nullptr || FindSuccessor(*Current, *Output, Child) == false ||
+                    CollectReachable(Child, Reachable, Active) == false)
+                {
+                    return false;
+                }
+            }
+            Active.Remove(Current->Id);
+            return true;
+        };
+        // 共通到達点のうち最も手前の候補を選ぶ。
+        // 候補が複数の独立した合流点を持つ場合は安全に構造化できないため拒否する。
+        auto FindJoin = [&](const FBPIRNode* TrueStart, const FBPIRNode* FalseStart,
+            const FBPIRNode*& Join) -> bool
+        {
+            Join = nullptr;
+            if (TrueStart == nullptr || FalseStart == nullptr)
+            {
+                return true;
+            }
+            TSet<FGuid> TrueReachable;
+            TSet<FGuid> FalseReachable;
+            TSet<FGuid> Active;
+            if (CollectReachable(TrueStart, TrueReachable, Active) == false ||
+                CollectReachable(FalseStart, FalseReachable, Active) == false)
+            {
+                return false;
+            }
+            TSet<FGuid> Common;
+            for (const FGuid& Id : TrueReachable)
+            {
+                if (FalseReachable.Contains(Id))
+                {
+                    Common.Add(Id);
+                }
+            }
+            if (Common.IsEmpty())
+            {
+                return true;
+            }
+            // 他の共通候補から到達できない唯一の候補が最初の合流点。
+            for (const FGuid& Id : Common)
+            {
+                bool bHasCommonPredecessor = false;
+                for (const FGuid& Other : Common)
+                {
+                    if (Id == Other)
+                    {
+                        continue;
+                    }
+                    const FBPIRNode* OtherNode = Graph.Nodes.FindByPredicate(
+                        [&Other](const FBPIRNode& Node) { return Node.Id == Other; });
+                    TSet<FGuid> Reachable;
+                    TSet<FGuid> Visiting;
+                    if (CollectReachable(OtherNode, Reachable, Visiting) == false)
+                    {
+                        return false;
+                    }
+                    if (Reachable.Contains(Id))
+                    {
+                        bHasCommonPredecessor = true;
+                        break;
+                    }
+                }
+                if (bHasCommonPredecessor == false)
+                {
+                    if (Join != nullptr)
+                    {
+                        return false;
+                    }
+                    Join = Graph.Nodes.FindByPredicate(
+                        [&Id](const FBPIRNode& Node) { return Node.Id == Id; });
+                }
+            }
+            return Join != nullptr;
+        };
+        TFunction<bool(const FBPIRNode&, const FGuid&, int32,
+            TArray<FBPSemanticStatement>&)> Walk;
+        Walk = [&](const FBPIRNode& Current, const FGuid& Stop, int32 Depth,
             TArray<FBPSemanticStatement>& Statements) -> bool
         {
+            if (Current.Id == Stop)
+            {
+                return true;
+            }
             if (Depth > 32 || Visited.Contains(Current.Id))
             {
                 return false;
@@ -1086,46 +1227,91 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
                 {
                     return false;
                 }
+                const FBPIRNode* TrueNext = nullptr;
+                const FBPIRNode* FalseNext = nullptr;
+                if (FindSuccessor(Current, *TruePin, TrueNext) == false ||
+                    FindSuccessor(Current, *FalsePin, FalseNext) == false)
+                {
+                    return false;
+                }
+                const FBPIRNode* Join = nullptr;
+                if (FindJoin(TrueNext, FalseNext, Join) == false)
+                {
+                    return false;
+                }
+                // 合流点に至らず終了する枝があれば、共通後続を無条件実行すると
+                // Blueprintと動作が変わるため、そのグラフは拒否する。
+                if (Join != nullptr)
+                {
+                    TFunction<bool(const FBPIRNode*, TSet<FGuid>&)> ReachesJoin;
+                    ReachesJoin = [&](const FBPIRNode* Node, TSet<FGuid>& Active) -> bool
+                    {
+                        if (Node == nullptr)
+                        {
+                            return false;
+                        }
+                        if (Node->Id == Join->Id)
+                        {
+                            return true;
+                        }
+                        if (Active.Contains(Node->Id))
+                        {
+                            return false;
+                        }
+                        Active.Add(Node->Id);
+                        bool bHasSuccessor = false;
+                        for (const FBPIRLink& Edge : Graph.ExecEdges)
+                        {
+                            if (Edge.SourceNode == Node->Id)
+                            {
+                                bHasSuccessor = true;
+                                const FBPIRNode* Child = Graph.Nodes.FindByPredicate(
+                                    [&Edge](const FBPIRNode& Candidate)
+                                    {
+                                        return Candidate.Id == Edge.TargetNode;
+                                    });
+                                if (ReachesJoin(Child, Active) == false)
+                                {
+                                    return false;
+                                }
+                            }
+                        }
+                        Active.Remove(Node->Id);
+                        return bHasSuccessor;
+                    };
+                    TSet<FGuid> Active;
+                    if (ReachesJoin(TrueNext, Active) == false ||
+                        ReachesJoin(FalseNext, Active) == false)
+                    {
+                        return false;
+                    }
+                }
                 FBPSemanticStatement Statement;
                 Statement.Kind = EBPSemanticStatementKind::Branch;
                 Statement.SourceNodeId = Current.Id;
                 Statement.Expression = Literal(EBPSemanticTypeKind::Bool,
                     ConditionValue, Current, TEXT("Condition"));
-                for (int32 OutputIndex = 0; OutputIndex < 2; ++OutputIndex)
+                const FBPIRNode* Children[2] = { TrueNext, FalseNext };
+                const FBPIRPin* Outputs[2] = { TruePin, FalsePin };
+                for (int32 Index = 0; Index < 2; ++Index)
                 {
-                    const FBPIRPin* Output = OutputIndex == 0 ? TruePin : FalsePin;
-                    const FBPIRLink* Next = nullptr;
-                    for (const FBPIRLink& Edge : Graph.ExecEdges)
+                    if (Children[Index] != nullptr)
                     {
-                        if (Edge.SourceNode == Current.Id && Edge.SourcePin == Output->Id)
-                        {
-                            if (Next != nullptr)
-                            {
-                                return false;
-                            }
-                            Next = &Edge;
-                        }
-                    }
-                    if (Next != nullptr)
-                    {
-                        const FBPIRNode* Child = Graph.Nodes.FindByPredicate(
-                            [Next](const FBPIRNode& Node) { return Node.Id == Next->TargetNode; });
-                        const FBPIRPin* ExecutePin = Child != nullptr
-                            ? FindPin(*Child, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr;
-                        if (ExecutePin == nullptr || ExecutePin->Id != Next->TargetPin)
-                        {
-                            return false;
-                        }
                         ++ConsumedEdges;
-                        TArray<FBPSemanticStatement>& Target = OutputIndex == 0
+                        TArray<FBPSemanticStatement>& Target = Index == 0
                             ? Statement.ThenStatements : Statement.ElseStatements;
-                        if (Walk(*Child, Depth + 1, Target) == false)
+                        if (Walk(*Children[Index], Join != nullptr ? Join->Id : Stop,
+                                Depth + 1, Target) == false)
                         {
                             return false;
                         }
                     }
                 }
                 Statements.Add(MoveTemp(Statement));
+                if (Join != nullptr && Join->Id != Stop)
+                {
+                    return Walk(*Join, Stop, Depth + 1, Statements);
+                }
                 return true;
             }
             if (Current.ClassPath != TEXT("/Script/BlueprintGraph.K2Node_CallFunction") ||
@@ -1145,30 +1331,15 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
                 Values, Current, GraphIR.ParentClassPath);
             Statements.Add(MoveTemp(PrintStatement));
             const FBPIRPin* ThenPin = FindPin(Current, UEdGraphSchema_K2::PN_Then, EGPD_Output);
-            const FBPIRLink* Next = nullptr;
-            for (const FBPIRLink& Edge : Graph.ExecEdges)
+            const FBPIRNode* Next = nullptr;
+            if (ThenPin == nullptr || FindSuccessor(Current, *ThenPin, Next) == false)
             {
-                if (Edge.SourceNode == Current.Id)
-                {
-                    if (ThenPin == nullptr || Edge.SourcePin != ThenPin->Id || Next != nullptr)
-                    {
-                        return false;
-                    }
-                    Next = &Edge;
-                }
+                return false;
             }
             if (Next != nullptr)
             {
-                const FBPIRNode* Child = Graph.Nodes.FindByPredicate(
-                    [Next](const FBPIRNode& Node) { return Node.Id == Next->TargetNode; });
-                const FBPIRPin* ExecutePin = Child != nullptr
-                    ? FindPin(*Child, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr;
-                if (ExecutePin == nullptr || ExecutePin->Id != Next->TargetPin)
-                {
-                    return false;
-                }
                 ++ConsumedEdges;
-                return Walk(*Child, Depth + 1, Statements);
+                return Walk(*Next, Stop, Depth + 1, Statements);
             }
             return true;
         };
@@ -1205,7 +1376,7 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticBasicBlock Block;
         Block.SourceEntryNodeId = BeginPlay->Id;
         ++ConsumedEdges;
-        if (Walk(*Root, 0, Block.Statements) == false ||
+        if (Walk(*Root, FGuid(), 0, Block.Statements) == false ||
             ConsumedEdges != Graph.ExecEdges.Num() ||
             Visited.Num() != BranchCount + Prints.Num())
         {
