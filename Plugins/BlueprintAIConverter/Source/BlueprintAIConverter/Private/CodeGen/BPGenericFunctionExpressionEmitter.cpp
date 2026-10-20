@@ -74,6 +74,35 @@ bool EmitLiteral(const FBPSemanticExpression& Expression, FString& Out)
         }
         return true;
     }
+    if (Expression.Type.Kind == EBPSemanticTypeKind::String ||
+        Expression.Type.Kind == EBPSemanticTypeKind::Name)
+    {
+        // 文字列をそのままC++に埋め込まず、制御文字と引用符をエスケープする。
+        FString Escaped;
+        for (const TCHAR Character : Expression.LiteralValue)
+        {
+            switch (Character)
+            {
+            case TEXT('\\\\'): Escaped += TEXT("\\\\\\\\"); break;
+            case TEXT('"'): Escaped += TEXT("\\\\\""); break;
+            case TEXT('\\n'): Escaped += TEXT("\\\\n"); break;
+            case TEXT('\\r'): Escaped += TEXT("\\\\r"); break;
+            case TEXT('\\t'): Escaped += TEXT("\\\\t"); break;
+            default:
+                if (Character < 0x20)
+                {
+                    return false;
+                }
+                Escaped.AppendChar(Character);
+                break;
+            }
+        }
+        const FString Literal = FString::Printf(TEXT("TEXT(\\\"%s\\\")"), *Escaped);
+        Out = Expression.Type.Kind == EBPSemanticTypeKind::String
+            ? FString::Printf(TEXT("FString(%s)"), *Literal)
+            : FString::Printf(TEXT("FName(%s)"), *Literal);
+        return true;
+    }
     return false;
 }
 }
