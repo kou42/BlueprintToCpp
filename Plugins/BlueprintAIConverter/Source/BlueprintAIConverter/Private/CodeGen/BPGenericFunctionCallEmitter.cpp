@@ -308,7 +308,8 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
                     SourceExpression.Type.Kind != Signature.ParameterTypes[Index].Kind ||
                     SourceExpression.Type.TypePath != Signature.ParameterTypes[Index].TypePath ||
                     SourceExpression.Type.ContainerKind != Signature.ParameterTypes[Index].ContainerKind ||
-                    SourceExpression.Type.bIsReference != Signature.ParameterTypes[Index].bIsReference)
+                    SourceExpression.Type.bIsReference != Signature.ParameterTypes[Index].bIsReference ||
+                    SourceExpression.Type.bIsConst != Signature.ParameterTypes[Index].bIsConst)
                 {
                     Report(OutDiagnostics, CallNodeId, TEXT("Generic expression type mismatch"));
                     return false;
