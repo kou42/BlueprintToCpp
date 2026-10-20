@@ -14,6 +14,8 @@
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "GameFramework/Actor.h"
+#include "UObject/UObjectGlobals.h"
+#include "UObject/Class.h"
 
 namespace
 {
@@ -1034,9 +1036,37 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
             return false;
         }
     }
-    // ネストした実行列では、引数なしのネイティブActor関数を
-    // PrintStringと同様に葉ノードとして扱う。引数・戻り値の接続が必要な
-    // 関数は専用の型付きLoweringが必要なので推測で変換しない。
+    // Graph IRの関数所有クラスを反射で解決する共通経路。
+    // self呼び出しのみを対象に、Blueprintの親クラスから実際に呼び出せる
+    // ネイティブ関数か確認する。コンポーネントTargetや静的関数は別途扱う。
+    auto ResolveNestedFunction = [&](const FBPIRNode& Node) -> const UFunction*
+    {
+        if (Node.FunctionOwnerPath.IsEmpty() || Node.FunctionName.IsNone() ||
+            Node.bFunctionResolved == false || Node.bFunctionNative == false ||
+            Node.bFunctionStatic)
+        {
+            return nullptr;
+        }
+        const UClass* Owner = FindObject<UClass>(nullptr, *Node.FunctionOwnerPath);
+        const UClass* Parent = FindObject<UClass>(nullptr, *GraphIR.ParentClassPath);
+        if (Owner == nullptr || Parent == nullptr || Parent->IsChildOf(Owner) == false)
+        {
+            return nullptr;
+        }
+        const UFunction* Function = Owner->FindFunctionByName(Node.FunctionName);
+        if (Function == nullptr || Function->HasAnyFunctionFlags(FUNC_Native) == false ||
+            Function->HasAnyFunctionFlags(FUNC_Static))
+        {
+            return nullptr;
+        }
+        // Blueprintノードの参照と反射結果が食い違う場合は拒否する。
+        if (Node.FunctionPath.IsEmpty() == false &&
+            Function->GetPathName() != Node.FunctionPath)
+        {
+            return nullptr;
+        }
+        return Function;
+    };
     auto IsSupportedNestedCall = [&](const FBPIRNode& Node) -> bool
     {
         if (Node.ClassPath != TEXT("/Script/BlueprintGraph.K2Node_CallFunction"))
@@ -1047,9 +1077,8 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         {
             return true;
         }
-        const UFunction* Function = AActor::StaticClass()->FindFunctionByName(Node.FunctionName);
-        if (Node.FunctionOwnerPath != TEXT("/Script/Engine.Actor") || Function == nullptr || Function->HasAnyFunctionFlags(FUNC_Native) == false ||
-            Function->HasAnyFunctionFlags(FUNC_Static) ||
+        const UFunction* Function = ResolveNestedFunction(Node);
+        if (Function == nullptr ||
             Function->GetReturnProperty() != nullptr)
         {
             return false;
@@ -1380,7 +1409,7 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
             }
             else
             {
-                const UFunction* Function = AActor::StaticClass()->FindFunctionByName(Current.FunctionName);
+                const UFunction* Function = ResolveNestedFunction(Current);
                 FBPResolvedFunctionSignature Signature;
                 TArray<FString> Diagnostics;
                 if (FBPFunctionSignatureResolver::Resolve(Function, Signature, Diagnostics) == false)
