@@ -1056,8 +1056,29 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         }
         FBPResolvedFunctionSignature Signature;
         TArray<FString> Diagnostics;
-        return FBPFunctionSignatureResolver::Resolve(Function, Signature, Diagnostics) &&
-            Signature.ParameterNames.IsEmpty() && Signature.ReturnType.Kind == EBPSemanticTypeKind::Void;
+        if (FBPFunctionSignatureResolver::Resolve(Function, Signature, Diagnostics) == false ||
+            Signature.ReturnType.Kind != EBPSemanticTypeKind::Void)
+        {
+            return false;
+        }
+        for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
+        {
+            const EBPSemanticTypeKind Kind = Signature.ParameterTypes[Index].Kind;
+            if (Signature.OutputParameters[Index] ||
+                (Kind != EBPSemanticTypeKind::Bool &&
+                 Kind != EBPSemanticTypeKind::Int32 &&
+                 Kind != EBPSemanticTypeKind::Float &&
+                 Kind != EBPSemanticTypeKind::Double))
+            {
+                return false;
+            }
+            const FBPIRPin* Pin = FindPin(Node, Signature.ParameterNames[Index], EGPD_Input);
+            if (Pin == nullptr || Pin->DefaultValue.IsEmpty())
+            {
+                return false;
+            }
+        }
+        return true;
     };
     // ネストBranchはExecの木構造に限定して先に解析する。
     // 共有ノード・循環・未接続ノードはC++のスコープを一意に復元できないため拒否する。
@@ -1376,6 +1397,56 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
                 Self.Type.TypePath = GraphIR.ParentClassPath;
                 Self.VariableName = TEXT("this");
                 Call.Arguments.Add(MoveTemp(Self));
+                // 数値・真偽値の未接続リテラル引数を反射済みの型で構築する。
+                // データ接続と参照引数は別の式Loweringが必要なため受理しない。
+                for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
+                {
+                    const FBPIRPin* Pin = FindPin(Current,
+                        Signature.ParameterNames[Index], EGPD_Input);
+                    if (Pin == nullptr || Signature.OutputParameters[Index] ||
+                        Signature.ParameterTypes[Index].bIsReference)
+                    {
+                        return false;
+                    }
+                    FBPSemanticExpression Argument;
+                    Argument.Kind = EBPSemanticExpressionKind::Literal;
+                    Argument.Type = Signature.ParameterTypes[Index];
+                    Argument.SourceNodeId = Current.Id;
+                    Argument.SourcePinId = Pin->Id;
+                    const EBPSemanticTypeKind Kind = Argument.Type.Kind;
+                    if (Kind == EBPSemanticTypeKind::Bool)
+                    {
+                        if (FBPBooleanPinDefaultEmitter::Emit(*Pin, Argument.LiteralValue) == false)
+                        {
+                            return false;
+                        }
+                    }
+                    else if (Kind == EBPSemanticTypeKind::Int32)
+                    {
+                        int32 Parsed = 0;
+                        if (LexTryParseString(Parsed, *Pin->DefaultValue) == false)
+                        {
+                            return false;
+                        }
+                        Argument.LiteralValue = LexToString(Parsed);
+                    }
+                    else if (Kind == EBPSemanticTypeKind::Float ||
+                        Kind == EBPSemanticTypeKind::Double)
+                    {
+                        double Parsed = 0.0;
+                        if (LexTryParseString(Parsed, *Pin->DefaultValue) == false ||
+                            FMath::IsFinite(Parsed) == false)
+                        {
+                            return false;
+                        }
+                        Argument.LiteralValue = Pin->DefaultValue;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                    Call.Arguments.Add(MoveTemp(Argument));
+                }
             }
             Statements.Add(MoveTemp(CallStatement));
             const FBPIRPin* ThenPin = FindPin(Current, UEdGraphSchema_K2::PN_Then, EGPD_Output);
