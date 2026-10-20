@@ -108,11 +108,13 @@ bool FBPGenericFunctionExpressionEmitter::Emit(
     if (FBPFunctionSignatureResolver::Resolve(Function, Signature, OutDiagnostics) == false ||
         Signature.ParameterNames.Num() + 1 != Expression.Arguments.Num() ||
         Signature.ParameterNames.Num() != Signature.ParameterTypes.Num() ||
+        Signature.ParameterNames.Num() != Signature.OutputParameters.Num() ||
         Signature.ReturnType.Kind == EBPSemanticTypeKind::Void ||
         Signature.ReturnType.Kind != Expression.Type.Kind ||
         Signature.ReturnType.TypePath != Expression.Type.TypePath ||
         Signature.ReturnType.ContainerKind != Expression.Type.ContainerKind ||
-        Signature.ReturnType.bIsReference != Expression.Type.bIsReference)
+        Signature.ReturnType.bIsReference != Expression.Type.bIsReference ||
+        Signature.ReturnType.bIsConst != Expression.Type.bIsConst)
     {
         OutDiagnostics.Add(TEXT("Pure function signature mismatch"));
         return false;
@@ -149,6 +151,11 @@ bool FBPGenericFunctionExpressionEmitter::Emit(
     TArray<FString> Arguments;
     for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
     {
+        if (Signature.OutputParameters[Index])
+        {
+            OutDiagnostics.Add(TEXT("Output parameters cannot be expression arguments"));
+            return false;
+        }
         const FBPSemanticExpression& Argument = Expression.Arguments[Index + 1];
         const FBPSemanticType& Expected = Signature.ParameterTypes[Index];
         if (Argument.Type.Kind != Expected.Kind ||
