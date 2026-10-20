@@ -78,11 +78,18 @@ bool EmitLiteral(const FBPSemanticExpression& Expression, FString& Out)
 }
 }
 
-bool FBPGenericFunctionExpressionEmitter::Emit(
-    const FBPSemanticExpression& Expression, const UClass* OwnerClass,
-    FString& OutCpp, TArray<FString>& OutDiagnostics)
+namespace
+{
+bool EmitRecursive(const FBPSemanticExpression& Expression, const UClass* OwnerClass,
+    FString& OutCpp, TArray<FString>& OutDiagnostics, int32 Depth)
 {
     OutCpp.Reset();
+    // 深い式ツリーを出力しない。Lowering側と同じ上限を適用する。
+    if (Depth >= 32)
+    {
+        OutDiagnostics.Add(TEXT("Pure expression depth limit"));
+        return false;
+    }
     if (OwnerClass == nullptr ||
         Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
         Expression.Arguments.IsEmpty())
@@ -167,7 +174,10 @@ bool FBPGenericFunctionExpressionEmitter::Emit(
             return false;
         }
         FString CppArgument;
-        if (EmitLiteral(Argument, CppArgument) == false)
+        const bool bEmitted = Argument.Kind == EBPSemanticExpressionKind::FunctionCall
+            ? EmitRecursive(Argument, OwnerClass, CppArgument, OutDiagnostics, Depth + 1)
+            : EmitLiteral(Argument, CppArgument);
+        if (bEmitted == false)
         {
             OutDiagnostics.Add(TEXT("Unsupported pure function argument literal"));
             return false;
@@ -177,4 +187,13 @@ bool FBPGenericFunctionExpressionEmitter::Emit(
     OutCpp = FString::Printf(TEXT("%s(%s)"), *Name,
         *FString::Join(Arguments, TEXT(", ")));
     return true;
+}
+
+}
+
+bool FBPGenericFunctionExpressionEmitter::Emit(
+    const FBPSemanticExpression& Expression, const UClass* OwnerClass,
+    FString& OutCpp, TArray<FString>& OutDiagnostics)
+{
+    return EmitRecursive(Expression, OwnerClass, OutCpp, OutDiagnostics, 0);
 }
