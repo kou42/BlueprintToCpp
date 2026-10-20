@@ -3,6 +3,20 @@
 対象: Unreal Engine 5.7.4 / BlueprintAIConverter / PythonServer  
 更新日: 2026-10-19（既存の検証記録とCJトラックの進捗を照合。新たなUE実機テストは未実施）
 
+## 2026-10-20: クラス非依存の汎用関数呼び出し（設計方針）
+
+**原則: Actor / Component / Widgetなどクラスごとに関数変換器を増やさない。** 通常の `K2Node_CallFunction` は、Graph IRの関数参照とTarget/Dataピンを起点に、`UClass / UFunction / FProperty` を使って解決する。専用処理は通常の関数呼び出しで表現できない特殊ノード・特殊呼び出し規約に限定する。
+
+- [x] `FBPReflectedCallResolver` を導入し、関数所有クラス・静的属性・親クラスとの継承関係・署名の検証を共通化する（PR #105、UEビルド未検証）。
+- [ ] **Target式の共通Lowering:** self、型付きメンバー変数、コンポーネント、別オブジェクト、他ノードの戻り値をSemantic IRへ変換し、所有クラスとの代入互換性を検証する。クラス名による分岐を増やさない。
+- [ ] **引数式の共通Lowering:** 未接続リテラル、変数、接続された純粋関数、戻り値、参照/出力引数を`FProperty`に基づき型検証し、評価順と副作用を保存する。
+- [ ] **関数呼び出しEmitter統合:** `this->`、`Target->`、`UClass::` をTarget種別から決定し、関数所有クラスに依存しないヘッダー収集・戻り値処理を行う。
+- [ ] **Blueprint定義関数:** FunctionGraphの本体を生成したうえで、通常の呼び出しと同じIRで接続する。
+- [ ] **特殊規約:** WorldContext、Latent、CustomThunk、Interface、RPCなどは共通検証で検出し、意味を保てる専用Loweringが整うまでは診断付きで拒否する。
+- [ ] **縦断検証:** Actor / Component / 任意のネイティブUObject派生クラス / 独自C++クラスの代表例を、実Blueprint→Semantic IR→C++→UHT/UBT→実行時比較まで確認する。
+
+**注意:** 「任意のクラスを解決できる設計」と「任意の関数が変換可能」は別。現在はネイティブな静的関数・self呼び出しの一部のみ。クラス別に変換器を追加して見かけの対応範囲を広げるのではなく、Target式・引数式・戻り値・特殊規約を順次汎用化する。
+
 ## 2026-10-19: 関数生成の汎用化（着手）
 
 - [x] Native派生クラスのBeginPlay/Tick専用生成処理を、検証済み関数情報の配列を受け取る共通Emitterに集約する。
