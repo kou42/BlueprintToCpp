@@ -351,6 +351,29 @@ bool FBPSemanticGeneratorActorNoArgBranchTest::RunTest(const FString& Parameters
     }
     TestTrue(TEXT("Actor関数をif内部に出力"),
         Files.SourceContent.Contains(TEXT("this->K2_DestroyActor();")));
+
+    // リテラル引数を持つActor関数のC++呼び出しを検証する。
+    FBPSemanticStatement& ActorCall = Outer.ThenStatements[0];
+    ActorCall.Expression.FunctionName = TEXT("SetActorTickEnabled");
+    FBPSemanticExpression Enabled;
+    Enabled.Kind = EBPSemanticExpressionKind::Literal;
+    Enabled.Type.Kind = EBPSemanticTypeKind::Bool;
+    Enabled.LiteralValue = TEXT("false");
+    ActorCall.Expression.Arguments.Add(MoveTemp(Enabled));
+    FBPGeneratedActorFiles WithArgument;
+    TArray<FString> ArgumentDiagnostics;
+    if (TestTrue(TEXT("bool引数付きActor関数の生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AActorNoArgBranch"),
+            FString(), WithArgument, ArgumentDiagnostics)) == false)
+    {
+        for (const FString& Diagnostic : ArgumentDiagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("bool引数を生成"),
+        WithArgument.SourceContent.Contains(TEXT("this->SetActorTickEnabled(false);")));
     return true;
 }
 
