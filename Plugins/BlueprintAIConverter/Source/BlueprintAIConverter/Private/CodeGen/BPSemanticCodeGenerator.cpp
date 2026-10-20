@@ -1222,16 +1222,14 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     const UFunction* ReflectedFunction = OwnerClass != nullptr
         ? OwnerClass->FindFunctionByName(Expression.FunctionName) : nullptr;
     if (OwnerClass != nullptr && ParentClass != nullptr &&
-        (ReflectedFunction != nullptr && ReflectedFunction->HasAnyFunctionFlags(FUNC_Static) ||
+        ((ReflectedFunction != nullptr && ReflectedFunction->HasAnyFunctionFlags(FUNC_Static)) ||
          ParentClass->IsChildOf(OwnerClass)) &&
         ReflectedFunction != nullptr &&
         ReflectedFunction->HasAnyFunctionFlags(FUNC_Native) &&
-
         ReflectedFunction->GetReturnProperty() == nullptr &&
         Expression.Type.Kind == EBPSemanticTypeKind::Void &&
         (ReflectedFunction->HasAnyFunctionFlags(FUNC_Static)
-            ? Expression.Arguments.IsEmpty() == false ||
-              OwnerClass->GetMetaData(TEXT("IncludePath")).IsEmpty() == false
+            ? OwnerClass->GetMetaData(TEXT("IncludePath")).IsEmpty() == false
             : Expression.Arguments.Num() >= 1 &&
               Expression.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
               Expression.Arguments[0].VariableName == TEXT("this")) &&
