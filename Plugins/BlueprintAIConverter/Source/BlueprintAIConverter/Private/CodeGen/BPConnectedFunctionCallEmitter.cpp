@@ -11,6 +11,8 @@
 #include "BPConnectedActorLocationLowering.h"
 #include "BPBooleanPinDefaultEmitter.h"
 #include "BPParentClassResolver.h"
+#include "BPCallTargetResolver.h"
+#include "UObject/UnrealType.h"
 #include "GameFramework/Actor.h"
 #include "EdGraphSchema_K2.h"
 #include "UObject/Class.h"
@@ -354,22 +356,49 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             }
         }
     }
-    for (const FBPIRPin& Pin : CallNode->Pins)
+    FBPSemanticExpression CallTarget;
+    if (FBPCallTargetResolver::Resolve(GraphIR, CallNodeId,
+        CallTarget, OutDiagnostics) == false)
     {
-        if (Pin.Name == TEXT("self"))
+        return false;
+    }
+    FString TargetPrefix;
+    if (CallTarget.VariableName != TEXT("this"))
+    {
+        // 変数名の一致だけでは不十分。生成先の反射プロパティとActor型を照合する。
+        const FProperty* Property = OwnerClass->FindPropertyByName(CallTarget.VariableName);
+        const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property);
+        if (ObjectProperty == nullptr || ObjectProperty->PropertyClass == nullptr ||
+            ObjectProperty->PropertyClass->IsChildOf(AActor::StaticClass()) == false ||
+            ObjectProperty->PropertyClass->GetPathName() != CallTarget.Type.TypePath)
         {
-            for (const FBPIRLink& Edge : CallGraph->DataEdges)
+            FBPSemanticDiagnostic Diagnostic;
+            Diagnostic.NodeId = CallNodeId;
+            Diagnostic.Message = TEXT("Target variable is not a matching Actor object property");
+            OutDiagnostics.Add(MoveTemp(Diagnostic));
+            return false;
+        }
+        const FString TargetName = CallTarget.VariableName.ToString();
+        if (TargetName.IsEmpty())
+        {
+            return false;
+        }
+        for (int32 Index = 0; Index < TargetName.Len(); ++Index)
+        {
+            const TCHAR Ch = TargetName[Index];
+            const bool bAlpha = (Ch >= TEXT('A') && Ch <= TEXT('Z')) ||
+                (Ch >= TEXT('a') && Ch <= TEXT('z'));
+            const bool bDigit = Ch >= TEXT('0') && Ch <= TEXT('9');
+            if (bAlpha == false && Ch != TEXT('_') && (Index == 0 || bDigit == false))
             {
-                if (Edge.TargetNode == CallNodeId && Edge.TargetPin == Pin.Id)
-                {
-                    FBPSemanticDiagnostic Diagnostic;
-                    Diagnostic.NodeId = CallNodeId;
-                    Diagnostic.Message = TEXT("Connected self target is unsupported");
-                    OutDiagnostics.Add(MoveTemp(Diagnostic));
-                    return false;
-                }
+                FBPSemanticDiagnostic Diagnostic;
+                Diagnostic.NodeId = CallNodeId;
+                Diagnostic.Message = TEXT("Invalid C++ target identifier");
+                OutDiagnostics.Add(MoveTemp(Diagnostic));
+                return false;
             }
         }
+        TargetPrefix = TargetName + TEXT("->");
     }
 
     FString Location;
@@ -466,8 +495,8 @@ bool FBPConnectedFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         return false;
     }
     // 変数宣言と呼び出しを同じ文スコープにまとめる。
-    OutStatement = FString::Printf(TEXT("%s\nK2_SetActorLocation(%s);"),
-        *StorageDeclaration, *Arguments);
+    OutStatement = FString::Printf(TEXT("%s\n%sK2_SetActorLocation(%s);"),
+        *StorageDeclaration, *TargetPrefix, *Arguments);
     // 宣言・呼び出し・後続代入を同一スコープで順番に出力する。
     for (const FString& ConsumerStatement : DeferredConsumerStatements)
     {
