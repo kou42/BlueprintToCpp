@@ -303,6 +303,57 @@ bool FBPSemanticGeneratorNestedBranchStatementsTest::RunTest(const FString& Para
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorActorNoArgBranchTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ActorNoArgBranch",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorActorNoArgBranchTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("テスト用Semantic IRを生成"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
+    Outer.Kind = EBPSemanticStatementKind::Branch;
+    Outer.Expression = FBPSemanticExpression();
+    Outer.Expression.Kind = EBPSemanticExpressionKind::Literal;
+    Outer.Expression.Type.Kind = EBPSemanticTypeKind::Bool;
+    Outer.Expression.LiteralValue = TEXT("true");
+
+    // PrintString以外のActor関数をBranch内部に配置できることを確認する。
+    FBPSemanticStatement Call;
+    Call.Kind = EBPSemanticStatementKind::Expression;
+    Call.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Call.Expression.Type.Kind = EBPSemanticTypeKind::Void;
+    Call.Expression.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Call.Expression.FunctionName = TEXT("K2_DestroyActor");
+    FBPSemanticExpression Self;
+    Self.Kind = EBPSemanticExpressionKind::VariableReference;
+    Self.Type.Kind = EBPSemanticTypeKind::Object;
+    Self.Type.TypePath = Semantic.ParentClassPath;
+    Self.VariableName = TEXT("this");
+    Call.Expression.Arguments.Add(MoveTemp(Self));
+    Outer.ThenStatements.Add(MoveTemp(Call));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("引数なしActor関数の生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AActorNoArgBranch"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("Actor関数をif内部に出力"),
+        Files.SourceContent.Contains(TEXT("this->K2_DestroyActor();")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorOptionsParityTest,
     "BlueprintAIConverter.SemanticIR.Generator.OptionsParity",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
