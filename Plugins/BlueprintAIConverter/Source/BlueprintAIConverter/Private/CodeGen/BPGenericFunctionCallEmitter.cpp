@@ -4,6 +4,9 @@
 #include "BPFunctionCallValidator.h"
 #include "BPBooleanPinDefaultEmitter.h"
 #include "BPConnectedActorLocationLowering.h"
+#include "BPGenericFunctionExpressionLowering.h"
+#include "BPGenericFunctionExpressionEmitter.h"
+#include "BPDataLinkResolver.h"
 #include "Misc/LexFromString.h"
 #include "Misc/LexToString.h"
 #include "BPFunctionSignatureResolver.h"
@@ -262,13 +265,60 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
         if (bConnected)
         {
             // 接続済みVector式は既存のGraph IR -> Semantic -> C++経路を再利用する。
-            if (Signature.ParameterTypes[Index].Kind != EBPSemanticTypeKind::Struct ||
-                Signature.ParameterTypes[Index].TypePath != TEXT("/Script/CoreUObject.Vector") ||
-                FBPConnectedActorLocationLowering::EmitInputCpp(
-                    GraphIR, CallNodeId, Pin->Id, Value, OutDiagnostics) == false)
+            bool bEmitted = false;
+            if (Signature.ParameterTypes[Index].Kind == EBPSemanticTypeKind::Struct &&
+                Signature.ParameterTypes[Index].TypePath == TEXT("/Script/CoreUObject.Vector"))
             {
-                Report(OutDiagnostics, CallNodeId, TEXT("Unsupported connected generic argument"));
-                return false;
+                bEmitted = FBPConnectedActorLocationLowering::EmitInputCpp(
+                    GraphIR, CallNodeId, Pin->Id, Value, OutDiagnostics);
+            }
+            if (bEmitted == false)
+            {
+                // 純粋関数の戻り値を、反射署名とデータリンクの両方を検証して式にする。
+                // 既存のVector経路の診断がある場合は、別の候補へフォールバックしない。
+                if (OutDiagnostics.IsEmpty() == false)
+                {
+                    return false;
+                }
+                const FBPIRNode* SourceNode = nullptr;
+                const FBPIRPin* SourcePin = nullptr;
+                TArray<FString> LinkMessages;
+                if (FBPDataLinkResolver::ResolveInput(*Graph, CallNodeId, Pin->Id,
+                    SourceNode, SourcePin, LinkMessages) == false ||
+                    SourceNode == nullptr || SourcePin == nullptr ||
+                    SourcePin->Name != TEXT("ReturnValue") ||
+                    SourceNode->FunctionOwnerPath.IsEmpty())
+                {
+                    Report(OutDiagnostics, CallNodeId, TEXT("Unsupported generic input link"));
+                    return false;
+                }
+                const UClass* SourceOwner = FindObject<UClass>(
+                    nullptr, *SourceNode->FunctionOwnerPath);
+                const UFunction* SourceFunction = SourceOwner != nullptr
+                    ? SourceOwner->FindFunctionByName(SourceNode->FunctionName) : nullptr;
+                FBPSemanticExpression SourceExpression;
+                if (FBPGenericFunctionExpressionLowering::Lower(
+                    GraphIR, SourceNode->Id, SourceFunction,
+                    SourceExpression, OutDiagnostics) == false ||
+                    SourceExpression.SourcePinId != SourcePin->Id ||
+                    SourceExpression.Type.Kind != Signature.ParameterTypes[Index].Kind ||
+                    SourceExpression.Type.TypePath != Signature.ParameterTypes[Index].TypePath ||
+                    SourceExpression.Type.ContainerKind != Signature.ParameterTypes[Index].ContainerKind ||
+                    SourceExpression.Type.bIsReference != Signature.ParameterTypes[Index].bIsReference)
+                {
+                    Report(OutDiagnostics, CallNodeId, TEXT("Generic expression type mismatch"));
+                    return false;
+                }
+                TArray<FString> EmitMessages;
+                if (FBPGenericFunctionExpressionEmitter::Emit(
+                    SourceExpression, OwnerClass, Value, EmitMessages) == false)
+                {
+                    for (const FString& Message : EmitMessages)
+                    {
+                        Report(OutDiagnostics, CallNodeId, Message);
+                    }
+                    return false;
+                }
             }
         }
         else if (Signature.ParameterTypes[Index].Kind == EBPSemanticTypeKind::Bool)
