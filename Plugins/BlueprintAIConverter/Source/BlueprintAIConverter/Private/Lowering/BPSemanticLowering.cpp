@@ -5,6 +5,7 @@
 #include "BPConnectedActorLocationLowering.h"
 #include "BPConnectedFunctionCallEmitter.h"
 #include "BPFunctionSignatureResolver.h"
+#include "BPReflectedCallResolver.h"
 #include "BPNumericArithmeticResolver.h"
 #include "BPNumericComparisonResolver.h"
 #include "BPOutputParameterStorage.h"
@@ -14,6 +15,8 @@
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "GameFramework/Actor.h"
+#include "UObject/UObjectGlobals.h"
+#include "UObject/Class.h"
 
 namespace
 {
@@ -980,12 +983,12 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         }
         else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse"))
         {
-            if (Branch != nullptr)
+            // ネストしたBranchは複数存在するため、最初の候補のみ保持する。
+            // 単一Branchの既存検証は後続のExec接続検証で行う。
+            if (Branch == nullptr)
             {
-                AddDiagnostic(OutIR, Graph.Name, Node.Id, TEXT("Duplicate Branch node"));
-                return false;
+                Branch = &Node;
             }
-            Branch = &Node;
         }
         else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
             Node.FunctionName == TEXT("PrintString"))
@@ -1019,9 +1022,9 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
                 continue;
             }
 
-            AddDiagnostic(OutIR, Graph.Name, Node.Id,
-                TEXT("Branch conversion contains an unsupported function call"));
-            return false;
+            // ネストしたBranchの実行ノード候補は後段で反射署名を検証する。
+            // 単一Branchでは従来のPrintString限定規則を維持する。
+            continue;
         }
         else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_VariableGet"))
         {
@@ -1033,6 +1036,522 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
                 TEXT("Branch conversion contains an unsupported node"));
             return false;
         }
+    }
+    // Graph IRの関数所有クラスを反射で解決する共通経路。
+    // self呼び出しのみを対象に、Blueprintの親クラスから実際に呼び出せる
+    // ネイティブ関数か確認する。コンポーネントTargetや静的関数は別途扱う。
+    auto ResolveNestedFunction = [&](const FBPIRNode& Node) -> const UFunction*
+    {
+        if (Node.bFunctionResolved == false || Node.bFunctionNative == false)
+        {
+            return nullptr;
+        }
+        FBPReflectedCall Call;
+        TArray<FString> Diagnostics;
+        if (FBPReflectedCallResolver::Resolve(Node.FunctionOwnerPath,
+            Node.FunctionName, GraphIR.ParentClassPath, Node.bFunctionStatic,
+            Call, Diagnostics) == false)
+        {
+            return nullptr;
+        }
+        // IRが記録した関数参照と実際のリフレクションを照合する。
+        if (Node.FunctionPath.IsEmpty() == false &&
+            Call.Function->GetPathName() != Node.FunctionPath)
+        {
+            return nullptr;
+        }
+        return Call.Function;
+    };
+    auto IsSupportedNestedCall = [&](const FBPIRNode& Node) -> bool
+    {
+        if (Node.ClassPath != TEXT("/Script/BlueprintGraph.K2Node_CallFunction"))
+        {
+            return false;
+        }
+        if (Node.FunctionName == TEXT("PrintString"))
+        {
+            return true;
+        }
+        const UFunction* Function = ResolveNestedFunction(Node);
+        if (Function == nullptr ||
+            Function->GetReturnProperty() != nullptr)
+        {
+            return false;
+        }
+        // Target(self)が別オブジェクトに接続されている場合はthis呼び出しにできない。
+        const FBPIRPin* SelfPin = FindPin(Node, TEXT("self"), EGPD_Input);
+        if (SelfPin != nullptr &&
+            (Graph.DataEdges.ContainsByPredicate(
+                [SelfPin](const FBPIRLink& Edge) { return Edge.TargetPin == SelfPin->Id; }) ||
+             (SelfPin->DefaultObjectPath.IsEmpty() == false)))
+        {
+            return false;
+        }
+        // 静的関数はselfピンを持たない。C++ヘッダーが反射メタデータから
+        // 特定できる関数だけ生成し、未解決の所有クラスは拒否する。
+        if (Node.bFunctionStatic &&
+            (SelfPin != nullptr || Function->GetOwnerClass() == nullptr ||
+             Function->GetOwnerClass()->GetMetaData(TEXT("IncludePath")).IsEmpty()))
+        {
+            return false;
+        }
+        FBPResolvedFunctionSignature Signature;
+        TArray<FString> Diagnostics;
+        if (FBPFunctionSignatureResolver::Resolve(Function, Signature, Diagnostics) == false ||
+            Signature.ReturnType.Kind != EBPSemanticTypeKind::Void)
+        {
+            return false;
+        }
+        for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
+        {
+            const EBPSemanticTypeKind Kind = Signature.ParameterTypes[Index].Kind;
+            if (Signature.OutputParameters[Index] ||
+                (Kind != EBPSemanticTypeKind::Bool &&
+                 Kind != EBPSemanticTypeKind::Int32 &&
+                 Kind != EBPSemanticTypeKind::Float &&
+                 Kind != EBPSemanticTypeKind::Double))
+            {
+                return false;
+            }
+            const FBPIRPin* Pin = FindPin(Node, Signature.ParameterNames[Index], EGPD_Input);
+            if (Pin == nullptr || Pin->DefaultValue.IsEmpty() ||
+                Graph.DataEdges.ContainsByPredicate(
+                    [Pin](const FBPIRLink& Edge) { return Edge.TargetPin == Pin->Id; }))
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+    // ネストBranchはExecの木構造に限定して先に解析する。
+    // 共有ノード・循環・未接続ノードはC++のスコープを一意に復元できないため拒否する。
+    int32 BranchCount = 0;
+    for (const FBPIRNode& Node : Graph.Nodes)
+    {
+        if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse"))
+        {
+            ++BranchCount;
+        }
+    }
+    if (BranchCount > 1)
+    {
+        if (BeginPlay == nullptr || Branch == nullptr || Comparison != nullptr ||
+            VariableGets.IsEmpty() == false || ArithmeticNodes.IsEmpty() == false ||
+            BranchCount > 16)
+        {
+            AddDiagnostic(OutIR, Graph.Name, FGuid(),
+                TEXT("Nested Branch requires bool literal conditions and supported PrintString nodes"));
+            return false;
+        }
+        const FBPIRPin* EntryThen = FindPin(*BeginPlay, UEdGraphSchema_K2::PN_Then, EGPD_Output);
+        if (EntryThen == nullptr || Graph.DataEdges.IsEmpty() == false)
+        {
+            AddDiagnostic(OutIR, Graph.Name, BeginPlay->Id,
+                TEXT("Nested Branch does not support linked data inputs"));
+            return false;
+        }
+        TSet<FGuid> Visited;
+        int32 ConsumedEdges = 0;
+        // 出力ピンごとの後続は一意でなければならない。Exec入力への複数接続は
+        // 合流点としてのみ認め、共有ノードの二重出力を防ぐ。
+        auto FindSuccessor = [&](const FBPIRNode& Node, const FBPIRPin& Output,
+            const FBPIRNode*& NextNode) -> bool
+        {
+            NextNode = nullptr;
+            for (const FBPIRLink& Edge : Graph.ExecEdges)
+            {
+                if (Edge.SourceNode == Node.Id && Edge.SourcePin == Output.Id)
+                {
+                    if (NextNode != nullptr)
+                    {
+                        return false;
+                    }
+                    NextNode = Graph.Nodes.FindByPredicate(
+                        [&Edge](const FBPIRNode& Candidate)
+                        {
+                            return Candidate.Id == Edge.TargetNode;
+                        });
+                    const FBPIRPin* Input = NextNode != nullptr
+                        ? FindPin(*NextNode, UEdGraphSchema_K2::PN_Execute, EGPD_Input)
+                        : nullptr;
+                    if (Input == nullptr || Input->Id != Edge.TargetPin)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        // 各枝から到達可能なノードを列挙する。閉路や未対応Exec出力は拒否する。
+        TFunction<bool(const FBPIRNode*, TSet<FGuid>&, TSet<FGuid>&)> CollectReachable;
+        CollectReachable = [&](const FBPIRNode* Current, TSet<FGuid>& Reachable,
+            TSet<FGuid>& Active) -> bool
+        {
+            if (Current == nullptr)
+            {
+                return true;
+            }
+            if (Active.Contains(Current->Id))
+            {
+                return false;
+            }
+            if (Reachable.Contains(Current->Id))
+            {
+                return true;
+            }
+            Active.Add(Current->Id);
+            Reachable.Add(Current->Id);
+            for (const FBPIRLink& Edge : Graph.ExecEdges)
+            {
+                if (Edge.SourceNode != Current->Id)
+                {
+                    continue;
+                }
+                const FBPIRPin* Output = Current->Pins.FindByPredicate(
+                    [&Edge](const FBPIRPin& Pin)
+                    {
+                        return Pin.Id == Edge.SourcePin && Pin.Direction == EGPD_Output;
+                    });
+                const FBPIRNode* Child = nullptr;
+                if (Output == nullptr || FindSuccessor(*Current, *Output, Child) == false ||
+                    CollectReachable(Child, Reachable, Active) == false)
+                {
+                    return false;
+                }
+            }
+            Active.Remove(Current->Id);
+            return true;
+        };
+        // 共通到達点のうち最も手前の候補を選ぶ。
+        // 候補が複数の独立した合流点を持つ場合は安全に構造化できないため拒否する。
+        auto FindJoin = [&](const FBPIRNode* TrueStart, const FBPIRNode* FalseStart,
+            const FBPIRNode*& Join) -> bool
+        {
+            Join = nullptr;
+            if (TrueStart == nullptr || FalseStart == nullptr)
+            {
+                return true;
+            }
+            TSet<FGuid> TrueReachable;
+            TSet<FGuid> FalseReachable;
+            TSet<FGuid> Active;
+            if (CollectReachable(TrueStart, TrueReachable, Active) == false ||
+                CollectReachable(FalseStart, FalseReachable, Active) == false)
+            {
+                return false;
+            }
+            TSet<FGuid> Common;
+            for (const FGuid& Id : TrueReachable)
+            {
+                if (FalseReachable.Contains(Id))
+                {
+                    Common.Add(Id);
+                }
+            }
+            if (Common.IsEmpty())
+            {
+                return true;
+            }
+            // 他の共通候補から到達できない唯一の候補が最初の合流点。
+            for (const FGuid& Id : Common)
+            {
+                bool bHasCommonPredecessor = false;
+                for (const FGuid& Other : Common)
+                {
+                    if (Id == Other)
+                    {
+                        continue;
+                    }
+                    const FBPIRNode* OtherNode = Graph.Nodes.FindByPredicate(
+                        [&Other](const FBPIRNode& Node) { return Node.Id == Other; });
+                    TSet<FGuid> Reachable;
+                    TSet<FGuid> Visiting;
+                    if (CollectReachable(OtherNode, Reachable, Visiting) == false)
+                    {
+                        return false;
+                    }
+                    if (Reachable.Contains(Id))
+                    {
+                        bHasCommonPredecessor = true;
+                        break;
+                    }
+                }
+                if (bHasCommonPredecessor == false)
+                {
+                    if (Join != nullptr)
+                    {
+                        return false;
+                    }
+                    Join = Graph.Nodes.FindByPredicate(
+                        [&Id](const FBPIRNode& Node) { return Node.Id == Id; });
+                }
+            }
+            return Join != nullptr;
+        };
+        TFunction<bool(const FBPIRNode&, const FGuid&, int32,
+            TArray<FBPSemanticStatement>&)> Walk;
+        Walk = [&](const FBPIRNode& Current, const FGuid& Stop, int32 Depth,
+            TArray<FBPSemanticStatement>& Statements) -> bool
+        {
+            if (Current.Id == Stop)
+            {
+                return true;
+            }
+            if (Depth > 32 || Visited.Contains(Current.Id))
+            {
+                return false;
+            }
+            Visited.Add(Current.Id);
+            if (Current.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse"))
+            {
+                const FBPIRPin* ConditionPin = FindPin(Current, TEXT("Condition"), EGPD_Input);
+                const FBPIRPin* TruePin = FindPin(Current, UEdGraphSchema_K2::PN_Then, EGPD_Output);
+                const FBPIRPin* FalsePin = FindPin(Current, TEXT("else"), EGPD_Output);
+                if (ConditionPin == nullptr || TruePin == nullptr || FalsePin == nullptr)
+                {
+                    return false;
+                }
+                FString ConditionValue;
+                if (FBPBooleanPinDefaultEmitter::Emit(*ConditionPin, ConditionValue) == false)
+                {
+                    return false;
+                }
+                const FBPIRNode* TrueNext = nullptr;
+                const FBPIRNode* FalseNext = nullptr;
+                if (FindSuccessor(Current, *TruePin, TrueNext) == false ||
+                    FindSuccessor(Current, *FalsePin, FalseNext) == false)
+                {
+                    return false;
+                }
+                const FBPIRNode* Join = nullptr;
+                if (FindJoin(TrueNext, FalseNext, Join) == false)
+                {
+                    return false;
+                }
+                // 合流点に至らず終了する枝があれば、共通後続を無条件実行すると
+                // Blueprintと動作が変わるため、そのグラフは拒否する。
+                if (Join != nullptr)
+                {
+                    TFunction<bool(const FBPIRNode*, TSet<FGuid>&)> ReachesJoin;
+                    ReachesJoin = [&](const FBPIRNode* Node, TSet<FGuid>& Active) -> bool
+                    {
+                        if (Node == nullptr)
+                        {
+                            return false;
+                        }
+                        if (Node->Id == Join->Id)
+                        {
+                            return true;
+                        }
+                        if (Active.Contains(Node->Id))
+                        {
+                            return false;
+                        }
+                        Active.Add(Node->Id);
+                        bool bHasSuccessor = false;
+                        for (const FBPIRLink& Edge : Graph.ExecEdges)
+                        {
+                            if (Edge.SourceNode == Node->Id)
+                            {
+                                bHasSuccessor = true;
+                                const FBPIRNode* Child = Graph.Nodes.FindByPredicate(
+                                    [&Edge](const FBPIRNode& Candidate)
+                                    {
+                                        return Candidate.Id == Edge.TargetNode;
+                                    });
+                                if (ReachesJoin(Child, Active) == false)
+                                {
+                                    return false;
+                                }
+                            }
+                        }
+                        Active.Remove(Node->Id);
+                        return bHasSuccessor;
+                    };
+                    TSet<FGuid> Active;
+                    if (ReachesJoin(TrueNext, Active) == false ||
+                        ReachesJoin(FalseNext, Active) == false)
+                    {
+                        return false;
+                    }
+                }
+                FBPSemanticStatement Statement;
+                Statement.Kind = EBPSemanticStatementKind::Branch;
+                Statement.SourceNodeId = Current.Id;
+                Statement.Expression = Literal(EBPSemanticTypeKind::Bool,
+                    ConditionValue, Current, TEXT("Condition"));
+                const FBPIRNode* Children[2] = { TrueNext, FalseNext };
+                for (int32 Index = 0; Index < 2; ++Index)
+                {
+                    if (Children[Index] != nullptr)
+                    {
+                        ++ConsumedEdges;
+                        TArray<FBPSemanticStatement>& Target = Index == 0
+                            ? Statement.ThenStatements : Statement.ElseStatements;
+                        if (Walk(*Children[Index], Join != nullptr ? Join->Id : Stop,
+                                Depth + 1, Target) == false)
+                        {
+                            return false;
+                        }
+                    }
+                }
+                Statements.Add(MoveTemp(Statement));
+                if (Join != nullptr && Join->Id != Stop)
+                {
+                    return Walk(*Join, Stop, Depth + 1, Statements);
+                }
+                return true;
+            }
+            if (IsSupportedNestedCall(Current) == false)
+            {
+                return false;
+            }
+            FBPSemanticStatement CallStatement;
+            CallStatement.Kind = EBPSemanticStatementKind::Expression;
+            CallStatement.SourceNodeId = Current.Id;
+            if (Current.FunctionName == TEXT("PrintString"))
+            {
+                FBPPrintStringCall Values;
+                if (AnalyzeBranchPrint(GraphIR, Graph, *BeginPlay, Current, Values, OutIR) == false)
+                {
+                    return false;
+                }
+                CallStatement.Expression = MakePrintStringExpression(
+                    Values, Current, GraphIR.ParentClassPath);
+            }
+            else
+            {
+                const UFunction* Function = ResolveNestedFunction(Current);
+                FBPResolvedFunctionSignature Signature;
+                TArray<FString> Diagnostics;
+                if (FBPFunctionSignatureResolver::Resolve(Function, Signature, Diagnostics) == false)
+                {
+                    return false;
+                }
+                FBPSemanticExpression& Call = CallStatement.Expression;
+                Call.Kind = EBPSemanticExpressionKind::FunctionCall;
+                Call.Type = Signature.ReturnType;
+                Call.SourceNodeId = Current.Id;
+                Call.FunctionName = Signature.FunctionName;
+                Call.FunctionOwnerPath = Signature.OwnerClassPath;
+                FBPSemanticExpression Self;
+                Self.Kind = EBPSemanticExpressionKind::VariableReference;
+                Self.Type.Kind = EBPSemanticTypeKind::Object;
+                Self.Type.TypePath = GraphIR.ParentClassPath;
+                Self.VariableName = TEXT("this");
+                if (Signature.bStatic == false)
+                {
+                    Call.Arguments.Add(MoveTemp(Self));
+                }
+                // 数値・真偽値の未接続リテラル引数を反射済みの型で構築する。
+                // データ接続と参照引数は別の式Loweringが必要なため受理しない。
+                for (int32 Index = 0; Index < Signature.ParameterNames.Num(); ++Index)
+                {
+                    const FBPIRPin* Pin = FindPin(Current,
+                        Signature.ParameterNames[Index], EGPD_Input);
+                    if (Pin == nullptr || Signature.OutputParameters[Index] ||
+                        Signature.ParameterTypes[Index].bIsReference)
+                    {
+                        return false;
+                    }
+                    FBPSemanticExpression Argument;
+                    Argument.Kind = EBPSemanticExpressionKind::Literal;
+                    Argument.Type = Signature.ParameterTypes[Index];
+                    Argument.SourceNodeId = Current.Id;
+                    Argument.SourcePinId = Pin->Id;
+                    const EBPSemanticTypeKind Kind = Argument.Type.Kind;
+                    if (Kind == EBPSemanticTypeKind::Bool)
+                    {
+                        if (FBPBooleanPinDefaultEmitter::Emit(*Pin, Argument.LiteralValue) == false)
+                        {
+                            return false;
+                        }
+                    }
+                    else if (Kind == EBPSemanticTypeKind::Int32)
+                    {
+                        int32 Parsed = 0;
+                        if (LexTryParseString(Parsed, *Pin->DefaultValue) == false)
+                        {
+                            return false;
+                        }
+                        Argument.LiteralValue = LexToString(Parsed);
+                    }
+                    else if (Kind == EBPSemanticTypeKind::Float ||
+                        Kind == EBPSemanticTypeKind::Double)
+                    {
+                        double Parsed = 0.0;
+                        if (LexTryParseString(Parsed, *Pin->DefaultValue) == false ||
+                            FMath::IsFinite(Parsed) == false)
+                        {
+                            return false;
+                        }
+                        Argument.LiteralValue = Pin->DefaultValue;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                    Call.Arguments.Add(MoveTemp(Argument));
+                }
+            }
+            Statements.Add(MoveTemp(CallStatement));
+            const FBPIRPin* ThenPin = FindPin(Current, UEdGraphSchema_K2::PN_Then, EGPD_Output);
+            const FBPIRNode* Next = nullptr;
+            if (ThenPin == nullptr || FindSuccessor(Current, *ThenPin, Next) == false)
+            {
+                return false;
+            }
+            if (Next != nullptr)
+            {
+                ++ConsumedEdges;
+                return Walk(*Next, Stop, Depth + 1, Statements);
+            }
+            return true;
+        };
+        const FBPIRLink* Start = nullptr;
+        for (const FBPIRLink& Edge : Graph.ExecEdges)
+        {
+            if (Edge.SourceNode == BeginPlay->Id && Edge.SourcePin == EntryThen->Id)
+            {
+                if (Start != nullptr)
+                {
+                    AddDiagnostic(OutIR, Graph.Name, BeginPlay->Id,
+                        TEXT("Nested Branch has multiple entry successors"));
+                    return false;
+                }
+                Start = &Edge;
+            }
+        }
+        const FBPIRNode* Root = Start != nullptr
+            ? Graph.Nodes.FindByPredicate(
+                [Start](const FBPIRNode& Node) { return Node.Id == Start->TargetNode; })
+            : nullptr;
+        const FBPIRPin* RootExecute = Root != nullptr
+            ? FindPin(*Root, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr;
+        if (Root == nullptr || RootExecute == nullptr || Start->TargetPin != RootExecute->Id ||
+            Root->ClassPath != TEXT("/Script/BlueprintGraph.K2Node_IfThenElse"))
+        {
+            AddDiagnostic(OutIR, Graph.Name, BeginPlay->Id,
+                TEXT("Nested Branch entry Exec edge is invalid"));
+            return false;
+        }
+        FBPSemanticFunction Function;
+        Function.Name = TEXT("BeginPlay");
+        Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+        FBPSemanticBasicBlock Block;
+        Block.SourceEntryNodeId = BeginPlay->Id;
+        ++ConsumedEdges;
+        if (Walk(*Root, FGuid(), 0, Block.Statements) == false ||
+            ConsumedEdges != Graph.ExecEdges.Num() ||
+            Visited.Num() != Graph.Nodes.Num() - 1)
+        {
+            AddDiagnostic(OutIR, Graph.Name, FGuid(),
+                TEXT("Nested Branch contains a shared, cyclic, disconnected or unsupported Exec path"));
+            return false;
+        }
+        Function.Blocks.Add(MoveTemp(Block));
+        OutIR.Functions.Add(MoveTemp(Function));
+        return OutIR.HasErrors() == false;
     }
     if (BeginPlay == nullptr || Branch == nullptr || Prints.Num() != 2 ||
         Graph.ExecEdges.Num() != 3 ||

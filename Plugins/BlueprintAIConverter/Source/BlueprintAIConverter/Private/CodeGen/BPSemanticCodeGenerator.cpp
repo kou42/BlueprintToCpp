@@ -3,6 +3,10 @@
 #include "BPNumericArithmeticResolver.h"
 #include "BPNumericComparisonResolver.h"
 #include "BPParentClassResolver.h"
+#include "BPReflectedCallResolver.h"
+#include "UObject/Class.h"
+#include "UObject/UObjectGlobals.h"
+#include "UObject/UnrealType.h"
 
 namespace
 {
@@ -1211,6 +1215,128 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
         return EmitActorLocationStatement(Expression, ParentClassPath,
             Indent, OutStatement, Diagnostics);
     }
+    // Actorのネイティブ関数呼び出しは、Loweringで検証済みのリテラルのみを
+    // C++引数へ変換する。任意の式や参照引数を文字列として出力しない。
+    // Semantic IRの所有クラスを共通Resolverで検証する。
+    // static/selfの区別は先頭引数のthis参照から判断し、反射結果と照合する。
+    const bool bHasTarget = Expression.Arguments.IsEmpty() == false &&
+        Expression.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference;
+    const bool bSelfCall = bHasTarget &&
+        Expression.Arguments[0].VariableName == TEXT("this");
+    const UClass* ParentClass = FindObject<UClass>(nullptr, *ParentClassPath);
+    const FObjectPropertyBase* TargetProperty = nullptr;
+    const UClass* TargetClass = ParentClass;
+    if (bHasTarget && bSelfCall == false && ParentClass != nullptr)
+    {
+        // self以外のTargetは、親クラスに実在する公開C++オブジェクトプロパティのみ。
+        // 未検証のBlueprint変数や複雑な式をC++識別子として出力しない。
+        const FProperty* Property = ParentClass->FindPropertyByName(
+            Expression.Arguments[0].VariableName);
+        TargetProperty = CastField<FObjectPropertyBase>(Property);
+        if (TargetProperty != nullptr &&
+            CastField<FObjectProperty>(Property) != nullptr &&
+            TargetProperty->PropertyClass != nullptr &&
+            Property->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic) &&
+            IsIdentifier(Expression.Arguments[0].VariableName.ToString()))
+        {
+            TargetClass = TargetProperty->PropertyClass;
+        }
+        else
+        {
+            TargetClass = nullptr;
+        }
+    }
+    FBPReflectedCall ResolvedCall;
+    TArray<FString> ResolveDiagnostics;
+    const bool bResolved = TargetClass != nullptr &&
+        FBPReflectedCallResolver::ResolveForTarget(
+            Expression.FunctionOwnerPath, Expression.FunctionName,
+            TargetClass->GetPathName(), bHasTarget == false,
+            ResolvedCall, ResolveDiagnostics);
+    const UClass* OwnerClass = ResolvedCall.Owner;
+    const UFunction* ReflectedFunction = ResolvedCall.Function;
+    if (bResolved && ReflectedFunction != nullptr &&
+        ReflectedFunction->GetReturnProperty() == nullptr &&
+        Expression.Type.Kind == EBPSemanticTypeKind::Void &&
+        IsIdentifier(Expression.FunctionName.ToString()))
+    {
+        FString Arguments;
+        const bool bStatic = ReflectedFunction->HasAnyFunctionFlags(FUNC_Static);
+        const int32 FirstArgument = bStatic ? 0 : 1;
+        if (Expression.Arguments.Num() - FirstArgument !=
+            ResolvedCall.Signature.ParameterNames.Num())
+        {
+            Diagnostics.Add(TEXT("Reflected function parameter count does not match semantic call"));
+            return false;
+        }
+        for (int32 Index = FirstArgument; Index < Expression.Arguments.Num(); ++Index)
+        {
+            const FBPSemanticExpression& Argument = Expression.Arguments[Index];
+            const int32 ParameterIndex = Index - FirstArgument;
+            if (ResolvedCall.Signature.OutputParameters[ParameterIndex] ||
+                ResolvedCall.Signature.ParameterTypes[ParameterIndex].Kind != Argument.Type.Kind ||
+                ResolvedCall.Signature.ParameterTypes[ParameterIndex].bIsReference)
+            {
+                Diagnostics.Add(TEXT("Reflected parameter type or direction does not match semantic call"));
+                return false;
+            }
+            if (Argument.Kind != EBPSemanticExpressionKind::Literal ||
+                Argument.Type.bIsReference || Argument.Type.bIsConst)
+            {
+                Diagnostics.Add(TEXT("Actor call contains an unsupported argument expression"));
+                return false;
+            }
+            FString Value;
+            if (Argument.Type.Kind == EBPSemanticTypeKind::Bool)
+            {
+                if (ReadBoolLiteral(Argument, Value) == false)
+                {
+                    return false;
+                }
+            }
+            else if (Argument.Type.Kind == EBPSemanticTypeKind::Int32)
+            {
+                int32 Parsed = 0;
+                if (LexTryParseString(Parsed, *Argument.LiteralValue) == false)
+                {
+                    return false;
+                }
+                Value = LexToString(Parsed);
+            }
+            else if (Argument.Type.Kind == EBPSemanticTypeKind::Float ||
+                Argument.Type.Kind == EBPSemanticTypeKind::Double)
+            {
+                double Parsed = 0.0;
+                if (LexTryParseString(Parsed, *Argument.LiteralValue) == false ||
+                    FMath::IsFinite(Parsed) == false)
+                {
+                    return false;
+                }
+                Value = Argument.LiteralValue;
+                if (Argument.Type.Kind == EBPSemanticTypeKind::Float)
+                {
+                    Value += TEXT("f");
+                }
+            }
+            else
+            {
+                Diagnostics.Add(TEXT("Actor call argument type is unsupported"));
+                return false;
+            }
+            if (Index > FirstArgument)
+            {
+                Arguments += TEXT(", ");
+            }
+            Arguments += Value;
+        }
+        const FString Target = bStatic
+            ? OwnerClass->GetPrefixCPP() + OwnerClass->GetName() + TEXT("::")
+            : bSelfCall ? TEXT("this->")
+            : TEXT("this->") + Expression.Arguments[0].VariableName.ToString() + TEXT("->");
+        OutStatement = FString::Printf(TEXT("%s%s%s(%s);\n"),
+            *Indent, *Target, *Expression.FunctionName.ToString(), *Arguments);
+        return true;
+    }
     Diagnostics.Add(FString::Printf(TEXT("Unsupported semantic expression statement: %s::%s"),
         *Expression.FunctionOwnerPath, *Expression.FunctionName.ToString()));
     return false;
@@ -1220,6 +1346,22 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
 // 新しい式Emitterを追加するときは、共通ディスパッチと依存ヘッダーだけを登録する。
 void AppendExpressionIncludes(const FBPSemanticExpression& Expression, FString& OutIncludes)
 {
+    // 静的関数のC++所有クラスはIncludePathを反射情報から取得する。
+    const UClass* Owner = FindObject<UClass>(nullptr, *Expression.FunctionOwnerPath);
+    const UFunction* Function = Owner != nullptr
+        ? Owner->FindFunctionByName(Expression.FunctionName) : nullptr;
+    if (Function != nullptr && Function->HasAnyFunctionFlags(FUNC_Static))
+    {
+        const FString IncludePath = Owner->GetMetaData(TEXT("IncludePath"));
+        if (IncludePath.IsEmpty() == false)
+        {
+            const FString IncludeLine = FString::Printf(TEXT("#include \"%s\"\n"), *IncludePath);
+            if (OutIncludes.Contains(IncludeLine) == false)
+            {
+                OutIncludes += IncludeLine;
+            }
+        }
+    }
     if (Expression.FunctionOwnerPath == TEXT("/Script/Engine.Actor") &&
         Expression.FunctionName == TEXT("K2_SetActorLocation") &&
         OutIncludes.Contains(TEXT("#include \"Engine/HitResult.h\"")) == false)
@@ -1316,28 +1458,52 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
         }
         return true;
     }
-    if (Statement.Kind != EBPSemanticStatementKind::Branch ||
-        Statement.ThenStatements.Num() != 1 || Statement.ElseStatements.Num() != 1)
+    if (Statement.Kind != EBPSemanticStatementKind::Branch)
     {
-        Diagnostics.Add(TEXT("ForLoop Branch requires one statement per output"));
+        Diagnostics.Add(TEXT("Unsupported ForLoop body statement"));
         return false;
     }
     FString Condition;
     FString ThenCode;
     FString ElseCode;
-    if (EmitForLoopCondition(Statement.Expression, Variables, LocalIndex,
-            Condition, Diagnostics) == false ||
-        EmitForLoopBodyStatement(Statement.ThenStatements[0], ParentClassPath, Variables,
-            LocalIndex, Indent + TEXT("    "), Depth + 1, ThenCode, Diagnostics) == false ||
-        EmitForLoopBodyStatement(Statement.ElseStatements[0], ParentClassPath, Variables,
-            LocalIndex, Indent + TEXT("    "), Depth + 1, ElseCode, Diagnostics) == false)
+    // 通常Branchでは既存の条件式検証を維持し、ループ内ではIndex参照を許可する。
+    const bool bConditionValid = LocalIndex.IsNone()
+        ? EmitBranchCondition(Statement.Expression, Variables, Condition, Diagnostics)
+        : EmitForLoopCondition(Statement.Expression, Variables, LocalIndex, Condition, Diagnostics);
+    if (bConditionValid == false)
     {
         return false;
     }
+    // 各枝の文を順に生成する。内側のif終了後の文は同じ外側スコープに配置する。
+    for (const FBPSemanticStatement& Child : Statement.ThenStatements)
+    {
+        FString Part;
+        if (EmitForLoopBodyStatement(Child, ParentClassPath, Variables,
+                LocalIndex, Indent + TEXT("    "), Depth + 1, Part, Diagnostics) == false)
+        {
+            return false;
+        }
+        ThenCode += Part;
+    }
+    for (const FBPSemanticStatement& Child : Statement.ElseStatements)
+    {
+        FString Part;
+        if (EmitForLoopBodyStatement(Child, ParentClassPath, Variables,
+                LocalIndex, Indent + TEXT("    "), Depth + 1, Part, Diagnostics) == false)
+        {
+            return false;
+        }
+        ElseCode += Part;
+    }
     OutCode = FString::Printf(
-        TEXT("%sif (%s)\n%s{\n%s%s}\n%selse\n%s{\n%s%s}\n"),
-        *Indent, *Condition, *Indent, *ThenCode, *Indent,
-        *Indent, *Indent, *Indent, *ElseCode, *Indent);
+        TEXT("%sif (%s)\n%s{\n%s%s}\n"),
+        *Indent, *Condition, *Indent, *ThenCode, *Indent);
+    if (Statement.ElseStatements.IsEmpty() == false)
+    {
+        OutCode += FString::Printf(
+            TEXT("%selse\n%s{\n%s%s}\n"),
+            *Indent, *Indent, *ElseCode, *Indent);
+    }
     return true;
 }
 
@@ -1475,7 +1641,17 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     {
         const FBPSemanticStatement& LeadingStatement = Statements[Index];
         FString Part;
-        if (LeadingStatement.Kind != EBPSemanticStatementKind::Expression ||
+        // 合流後の処理はBranchと同じBasicBlockの後続文として保持する。
+        // Branchを先行文として生成し、後続の式文がifの外へ出るようにする。
+        if (LeadingStatement.Kind == EBPSemanticStatementKind::Branch)
+        {
+            if (EmitForLoopBodyStatement(LeadingStatement, IR.ParentClassPath,
+                    IR.Variables, NAME_None, TEXT("    "), 0, Part, OutDiagnostics) == false)
+            {
+                return false;
+            }
+        }
+        else if (LeadingStatement.Kind != EBPSemanticStatementKind::Expression ||
             EmitExpressionStatement(LeadingStatement.Expression, IR.ParentClassPath,
                 TEXT("    "), Part, OutDiagnostics) == false)
         {
@@ -1729,39 +1905,32 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     }
     if (Statement.Kind == EBPSemanticStatementKind::Branch)
     {
-        FString Condition;
-        if (EmitBranchCondition(Statement.Expression, IR.Variables,
-            Condition, OutDiagnostics) == false ||
-            Statement.ThenStatements.Num() != 1 || Statement.ElseStatements.Num() != 1)
-        {
-            OutDiagnostics.Add(TEXT("Branch requires one supported bool condition and one statement in each output"));
-            return false;
-        }
-        const FBPSemanticStatement& ThenStatement = Statement.ThenStatements[0];
-        const FBPSemanticStatement& ElseStatement = Statement.ElseStatements[0];
-        if (ThenStatement.Kind != EBPSemanticStatementKind::Expression ||
-            ElseStatement.Kind != EBPSemanticStatementKind::Expression ||
-            ThenStatement.ThenStatements.IsEmpty() == false ||
-            ThenStatement.ElseStatements.IsEmpty() == false ||
-            ElseStatement.ThenStatements.IsEmpty() == false ||
-            ElseStatement.ElseStatements.IsEmpty() == false)
-        {
-            OutDiagnostics.Add(TEXT("Branch outputs contain an unsupported semantic statement"));
-            return false;
-        }
-        FString ThenCode;
-        FString ElseCode;
-        if (EmitExpressionStatement(ThenStatement.Expression, IR.ParentClassPath,
-            TEXT("        "), ThenCode, OutDiagnostics) == false ||
-            EmitExpressionStatement(ElseStatement.Expression, IR.ParentClassPath,
-                TEXT("        "), ElseCode, OutDiagnostics) == false)
+        // 通常BranchもForLoopと同じ再帰Emitterを使い、複数文とネストを保持する。
+        // LoopIndexを参照しない通常Branchでは名前を空にして評価する。
+        FString BranchCode;
+        if (EmitForLoopBodyStatement(Statement, IR.ParentClassPath, IR.Variables,
+                NAME_None, TEXT("    "), 0, BranchCode, OutDiagnostics) == false)
         {
             return false;
         }
-
         FString BranchIncludes = TEXT("#include \"Kismet/KismetMathLibrary.h\"\n");
-        AppendExpressionIncludes(ThenStatement.Expression, BranchIncludes);
-        AppendExpressionIncludes(ElseStatement.Expression, BranchIncludes);
+        TFunction<void(const FBPSemanticStatement&)> CollectIncludes;
+        CollectIncludes = [&](const FBPSemanticStatement& Current)
+        {
+            if (Current.Kind == EBPSemanticStatementKind::Expression)
+            {
+                AppendExpressionIncludes(Current.Expression, BranchIncludes);
+            }
+            for (const FBPSemanticStatement& Child : Current.ThenStatements)
+            {
+                CollectIncludes(Child);
+            }
+            for (const FBPSemanticStatement& Child : Current.ElseStatements)
+            {
+                CollectIncludes(Child);
+            }
+        };
+        CollectIncludes(Statement);
 
         FString VariableDeclarations;
         FString ConstructorBody;
@@ -1790,9 +1959,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
             *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
-        const FString Body = FString::Printf(
-            TEXT("%s    if (%s)\n    {\n%s    }\n    else\n    {\n%s    }\n"),
-            *LeadingCode, *Condition, *ThenCode, *ElseCode);
+        const FString Body = LeadingCode + BranchCode;
         Files.SourceContent = FString::Printf(
             TEXT("#include \"%s.h\"\n%s%s%s%s"),
             *BaseName, *BranchIncludes, *LeadingIncludes,

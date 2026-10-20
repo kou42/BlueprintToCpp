@@ -4,6 +4,7 @@
 #include "BPActorCodeGenerator.h"
 #include "BPSemanticCodeGenerator.h"
 #include "BPSemanticLowering.h"
+#include "BPReflectedCallResolver.h"
 #include "Components/ActorComponent.h"
 #include "GameFramework/Pawn.h"
 
@@ -214,6 +215,207 @@ bool FBPSemanticGeneratorGenericBranchStatementsTest::RunTest(const FString& Par
         Files.SourceContent.Contains(TEXT("UKismetSystemLibrary::PrintString")));
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorNestedBranchStatementsTest,
+    "BlueprintAIConverter.SemanticIR.Generator.NestedBranchStatements",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorNestedBranchStatementsTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("テスト用Semantic IRを生成"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
+    Outer.Kind = EBPSemanticStatementKind::Branch;
+    Outer.Expression.Kind = EBPSemanticExpressionKind::Literal;
+    Outer.Expression.Type.Kind = EBPSemanticTypeKind::Bool;
+    Outer.Expression.LiteralValue = TEXT("true");
+
+    // 処理1、処理2、内側if、処理5、処理6の順序とスコープを確認する。
+    auto MakeCall = [&Semantic](const FName HitResultName)
+    {
+        FBPSemanticStatement Statement;
+        Statement.Kind = EBPSemanticStatementKind::Expression;
+        Statement.Expression = MakeActorLocationCall(Semantic.ParentClassPath, HitResultName);
+        return Statement;
+    };
+    Outer.ThenStatements.Add(MakeCall(TEXT("Step1")));
+    Outer.ThenStatements.Add(MakeCall(TEXT("Step2")));
+    FBPSemanticStatement Inner;
+    Inner.Kind = EBPSemanticStatementKind::Branch;
+    Inner.Expression.Kind = EBPSemanticExpressionKind::Literal;
+    Inner.Expression.Type.Kind = EBPSemanticTypeKind::Bool;
+    Inner.Expression.LiteralValue = TEXT("false");
+    Inner.ThenStatements.Add(MakeCall(TEXT("Step3")));
+    Inner.ThenStatements.Add(MakeCall(TEXT("Step4")));
+    Outer.ThenStatements.Add(MoveTemp(Inner));
+    Outer.ThenStatements.Add(MakeCall(TEXT("Step5")));
+    Outer.ThenStatements.Add(MakeCall(TEXT("Step6")));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ネストしたBranchのC++生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ANestedBranchActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    const FString& Source = Files.SourceContent;
+    const int32 Step1 = Source.Find(TEXT("FHitResult Step1{};"));
+    const int32 Step2 = Source.Find(TEXT("FHitResult Step2{};"));
+    const int32 Step3 = Source.Find(TEXT("FHitResult Step3{};"));
+    const int32 Step4 = Source.Find(TEXT("FHitResult Step4{};"));
+    const int32 Step5 = Source.Find(TEXT("FHitResult Step5{};"));
+    const int32 Step6 = Source.Find(TEXT("FHitResult Step6{};"));
+    TestTrue(TEXT("処理1から処理6の生成順を維持"),
+        Step1 != INDEX_NONE && Step1 < Step2 && Step2 < Step3 &&
+        Step3 < Step4 && Step4 < Step5 && Step5 < Step6);
+    TestTrue(TEXT("内側ifを出力"), Source.Contains(TEXT("if (false)")));
+    TestTrue(TEXT("外側ifを出力"), Source.Contains(TEXT("if (true)")));
+
+    // Branchの両枝が合流した後の文は、ifの外側へ一度だけ出力する。
+    Semantic.Functions[0].Blocks[0].Statements.Add(MakeCall(TEXT("AfterJoin")));
+    FBPGeneratedActorFiles JoinedFiles;
+    TArray<FString> JoinedDiagnostics;
+    if (TestTrue(TEXT("Branch後続文のC++生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ANestedBranchActor"),
+            FString(), JoinedFiles, JoinedDiagnostics)) == false)
+    {
+        for (const FString& Diagnostic : JoinedDiagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    const FString& JoinedSource = JoinedFiles.SourceContent;
+    const int32 JoinPosition = JoinedSource.Find(TEXT("FHitResult AfterJoin{};"));
+    TestTrue(TEXT("合流後の文は内側のifより後ろ"),
+        JoinPosition > JoinedSource.Find(TEXT("FHitResult Step6{};")));
+    TestTrue(TEXT("合流後の文を重複出力しない"),
+        JoinedSource.Contains(TEXT("FHitResult AfterJoin{};")) &&
+        JoinedSource.Find(TEXT("FHitResult AfterJoin{};"), ESearchCase::CaseSensitive,
+            ESearchDir::FromEnd) == JoinPosition);
+    return true;
+}
+
+// 関数名やクラス別の分岐ではなく、リフレクションと継承関係で解決する。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPReflectedCallResolverInheritanceTest,
+    "BlueprintAIConverter.SemanticIR.Resolver.Inheritance",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPReflectedCallResolverInheritanceTest::RunTest(const FString& Parameters)
+{
+    FBPReflectedCall Call;
+    TArray<FString> Diagnostics;
+    TestTrue(TEXT("Pawn派生のselfからActorの関数を解決"),
+        FBPReflectedCallResolver::Resolve(TEXT("/Script/Engine.Actor"),
+            TEXT("SetActorTickEnabled"), TEXT("/Script/Engine.Pawn"),
+            false, Call, Diagnostics));
+    TestNotNull(TEXT("反射で解決された関数"), Call.Function);
+    TestEqual(TEXT("所有クラス"), Call.Signature.OwnerClassPath,
+        FString(TEXT("/Script/Engine.Actor")));
+
+    // ActorはComponentの派生ではないためself呼び出しに変換してはいけない。
+    Diagnostics.Reset();
+    TestFalse(TEXT("継承関係のない所有クラスを拒否"),
+        FBPReflectedCallResolver::Resolve(TEXT("/Script/Engine.ActorComponent"),
+            TEXT("SetComponentTickEnabled"), TEXT("/Script/Engine.Actor"),
+            false, Call, Diagnostics));
+    TestNull(TEXT("失敗時に古い関数参照を残さない"), Call.Function);
+    Diagnostics.Reset();
+    TestTrue(TEXT("TargetがActor派生ならクラス名によらず関数を解決"),
+        FBPReflectedCallResolver::ResolveForTarget(TEXT("/Script/Engine.Actor"),
+            TEXT("SetActorTickEnabled"), TEXT("/Script/Engine.Pawn"),
+            false, Call, Diagnostics));
+    Diagnostics.Reset();
+    TestFalse(TEXT("Component型TargetにActor関数を適用しない"),
+        FBPReflectedCallResolver::ResolveForTarget(TEXT("/Script/Engine.Actor"),
+            TEXT("SetActorTickEnabled"), TEXT("/Script/Engine.ActorComponent"),
+            false, Call, Diagnostics));
+
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorActorNoArgBranchTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ActorNoArgBranch",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorActorNoArgBranchTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("テスト用Semantic IRを生成"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+    FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
+    Outer.Kind = EBPSemanticStatementKind::Branch;
+    Outer.Expression = FBPSemanticExpression();
+    Outer.Expression.Kind = EBPSemanticExpressionKind::Literal;
+    Outer.Expression.Type.Kind = EBPSemanticTypeKind::Bool;
+    Outer.Expression.LiteralValue = TEXT("true");
+
+    // PrintString以外のActor関数をBranch内部に配置できることを確認する。
+    FBPSemanticStatement Call;
+    Call.Kind = EBPSemanticStatementKind::Expression;
+    Call.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Call.Expression.Type.Kind = EBPSemanticTypeKind::Void;
+    Call.Expression.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Call.Expression.FunctionName = TEXT("K2_DestroyActor");
+    FBPSemanticExpression Self;
+    Self.Kind = EBPSemanticExpressionKind::VariableReference;
+    Self.Type.Kind = EBPSemanticTypeKind::Object;
+    Self.Type.TypePath = Semantic.ParentClassPath;
+    Self.VariableName = TEXT("this");
+    Call.Expression.Arguments.Add(MoveTemp(Self));
+    Outer.ThenStatements.Add(MoveTemp(Call));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("引数なしActor関数の生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AActorNoArgBranch"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("Actor関数をif内部に出力"),
+        Files.SourceContent.Contains(TEXT("this->K2_DestroyActor();")));
+
+    // リテラル引数を持つActor関数のC++呼び出しを検証する。
+    FBPSemanticStatement& ActorCall = Outer.ThenStatements[0];
+    ActorCall.Expression.FunctionName = TEXT("SetActorTickEnabled");
+    FBPSemanticExpression Enabled;
+    Enabled.Kind = EBPSemanticExpressionKind::Literal;
+    Enabled.Type.Kind = EBPSemanticTypeKind::Bool;
+    Enabled.LiteralValue = TEXT("false");
+    ActorCall.Expression.Arguments.Add(MoveTemp(Enabled));
+    FBPGeneratedActorFiles WithArgument;
+    TArray<FString> ArgumentDiagnostics;
+    if (TestTrue(TEXT("bool引数付きActor関数の生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AActorNoArgBranch"),
+            FString(), WithArgument, ArgumentDiagnostics)) == false)
+    {
+        for (const FString& Diagnostic : ArgumentDiagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("bool引数を生成"),
+        WithArgument.SourceContent.Contains(TEXT("this->SetActorTickEnabled(false);")));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorOptionsParityTest,
     "BlueprintAIConverter.SemanticIR.Generator.OptionsParity",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
