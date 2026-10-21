@@ -267,7 +267,7 @@ bool FBPRealArithmeticComparisonBranchConversionTest::RunTest(
         Files.HeaderContent.Contains(TEXT("int32 Score = 42")));
     TestTrue(TEXT("算術式を比較条件へ一度だけ生成"),
         Files.SourceContent.Contains(
-            TEXT("if (UKismetMathLibrary::Divide_IntInt(((((Score + 8) - 2) * 3)), 4) > 35)")));
+            TEXT("if (UKismetMathLibrary::Divide_IntInt((((Score + 8) - 2) * 3), 4) > 35)")));
 
     FBPGraphIR TamperedIR = GraphIR;
     TamperedIR.Graphs[EventGraphIndex].Nodes[ArithmeticNodeIndex]
