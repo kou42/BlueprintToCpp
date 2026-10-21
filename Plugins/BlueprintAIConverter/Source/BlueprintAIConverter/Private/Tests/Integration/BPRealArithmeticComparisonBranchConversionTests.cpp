@@ -322,6 +322,37 @@ bool FBPRealArithmeticComparisonBranchConversionTest::RunTest(
         }
     }
 
+    // 混合演算の最上位優先順位を確認する。
+    // (A * B + C) * D の加算を見落として括弧を外すと結果が変わる。
+    FBPSemanticIR MixedSemantic = SemanticIR;
+    FBPSemanticExpression& MixedCondition =
+        MixedSemantic.Functions[0].Blocks[0].Statements[0].Expression;
+    FBPSemanticExpression MixedAdd = Arithmetic.Arguments[0];
+    MixedAdd.FunctionName = TEXT("Add_IntInt");
+    MixedAdd.Arguments[0] = Arithmetic.Arguments[0].Arguments[0];
+    MixedAdd.Arguments[1].LiteralValue = TEXT("1");
+    FBPSemanticExpression MixedMultiply = Arithmetic.Arguments[0];
+    MixedMultiply.FunctionName = TEXT("Multiply_IntInt");
+    MixedMultiply.Arguments[0] = MixedAdd;
+    MixedMultiply.Arguments[1].LiteralValue = TEXT("2");
+    MixedCondition.Arguments[0] = MixedMultiply;
+    FBPGeneratedActorFiles MixedFiles;
+    TArray<FString> MixedDiagnostics;
+    if (TestTrue(TEXT("混合演算のC++生成"),
+        FBPSemanticCodeGenerator::Generate(MixedSemantic,
+            TEXT("ARealArithmeticComparisonBranch"), FString(),
+            MixedFiles, MixedDiagnostics)) == false)
+    {
+        for (const FString& Diagnostic : MixedDiagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("乗算より低優先順位の加算を括弧で保護"),
+        MixedFiles.SourceContent.Contains(
+            TEXT("if (((Score + 8 - 2) * 3 + 1) * 2 > 35)")));
+
     FBPGraphIR TamperedIR = GraphIR;
     TamperedIR.Graphs[EventGraphIndex].Nodes[ArithmeticNodeIndex]
         .FunctionOwnerPath = TEXT("/Script/Engine.Actor");
