@@ -740,7 +740,7 @@ int32 GetWrappedArithmeticPrecedence(const FString& Expression)
             {
                 Precedence = 1;
             }
-            else if (Character == TEXT('*'))
+            else if (Character == TEXT('*') || Character == TEXT('/'))
             {
                 Precedence = 2;
             }
@@ -779,12 +779,14 @@ bool FormatArithmeticOperator(const FName FunctionName,
     const FString Name = FunctionName.ToString();
     const TCHAR* Symbol = Name.StartsWith(TEXT("Add_")) ? TEXT("+")
         : Name.StartsWith(TEXT("Subtract_")) ? TEXT("-")
-        : Name.StartsWith(TEXT("Multiply_")) ? TEXT("*") : nullptr;
+        : Name.StartsWith(TEXT("Multiply_")) ? TEXT("*")
+        : Name.StartsWith(TEXT("Divide_")) ? TEXT("/") : nullptr;
     if (Symbol == nullptr)
     {
         return false;
     }
-    const int32 Precedence = Name.StartsWith(TEXT("Multiply_")) ? 2 : 1;
+    const int32 Precedence =
+        (Name.StartsWith(TEXT("Multiply_")) || Name.StartsWith(TEXT("Divide_"))) ? 2 : 1;
     const FString Left = FormatArithmeticChild(A, Precedence, true);
     const FString Right = FormatArithmeticChild(B, Precedence, false);
     Out = FString::Printf(TEXT("(%s %s %s)"), *Left, Symbol, *Right);
@@ -864,21 +866,24 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         {
             return false;
         }
-        // 整数除算のゼロ除算や実数除算の特殊値処理など、
-        // KismetMathLibrary固有の振る舞いを変えないため除算は関数形式を維持する。
-        // 他の演算はC++演算子を使用し、括弧でBlueprintの演算順序を保持する。
-        if (Operation.FunctionName.ToString().StartsWith(TEXT("Divide_")))
+        // 正の整数リテラルによる除算はゼロ除算・INT_MIN/-1を生じないため
+        // C++の除算演算子に変換する。それ以外はBlueprint固有の挙動を維持する。
+        const bool bDivision = Operation.FunctionName.ToString().StartsWith(TEXT("Divide_"));
+        int32 Divisor = 0;
+        const bool bSafeIntegerDivision = bDivision &&
+            OperandType == EBPSemanticTypeKind::Int32 &&
+            Expression.Arguments[1].Kind == EBPSemanticExpressionKind::Literal &&
+            LexTryParseString(Divisor, *Expression.Arguments[1].LiteralValue) &&
+            Divisor > 0;
+        if (bDivision && bSafeIntegerDivision == false)
         {
             OutOperand = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
                 *Operation.FunctionName.ToString(), *A, *B);
         }
-        else
+        else if (FormatArithmeticOperator(Operation.FunctionName, A, B, OutOperand) == false)
         {
-            if (FormatArithmeticOperator(Operation.FunctionName, A, B, OutOperand) == false)
-            {
-                Diagnostics.Add(TEXT("Unsupported numeric arithmetic operator"));
-                return false;
-            }
+            Diagnostics.Add(TEXT("Unsupported numeric arithmetic operator"));
+            return false;
         }
         return true;
     }
