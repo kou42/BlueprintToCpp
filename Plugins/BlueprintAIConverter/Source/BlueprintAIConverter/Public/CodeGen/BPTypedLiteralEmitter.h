@@ -2,8 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "BPSemanticIR.h"
-#include "Misc/LexFromString.h"
-#include "Misc/LexToString.h"
+//#include "Misc/LexFromString.h" UE5では使えないみたい
+//#include "Misc/LexToString.h" 
 
 // Blueprintの既定値を型検証したうえで安全なC++リテラルへ変換する。
 struct FBPTypedLiteralEmitter

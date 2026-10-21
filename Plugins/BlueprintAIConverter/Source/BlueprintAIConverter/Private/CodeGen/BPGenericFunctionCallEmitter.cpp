@@ -7,8 +7,8 @@
 #include "BPGenericFunctionExpressionLowering.h"
 #include "BPGenericFunctionExpressionEmitter.h"
 #include "BPDataLinkResolver.h"
-#include "Misc/LexFromString.h"
-#include "Misc/LexToString.h"
+//#include "Misc/LexFromString.h"
+//#include "Misc/LexToString.h"
 #include "BPFunctionSignatureResolver.h"
 #include "EdGraphSchema_K2.h"
 #include "UObject/Class.h"
@@ -249,7 +249,7 @@ bool FBPGenericFunctionCallEmitter::Emit(const FBPGraphIR& GraphIR,
             return false;
         }
         if (Edge.TargetNode == CallNodeId &&
-            Call->Pins.ContainsByPredicate([&Edge](const FBPIRPin& Pin)
+            Call->Pins.ContainsByPredicate([&Edge, &Signature](const FBPIRPin& Pin)
             {
                 return Pin.Id == Edge.TargetPin &&
                     ((Pin.Name == TEXT("self") || Pin.Name == TEXT("Target")) ||
