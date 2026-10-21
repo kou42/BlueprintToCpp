@@ -267,7 +267,7 @@ bool FBPRealArithmeticComparisonBranchConversionTest::RunTest(
         Files.HeaderContent.Contains(TEXT("int32 Score = 42")));
     TestTrue(TEXT("算術式を比較条件へ一度だけ生成"),
         Files.SourceContent.Contains(
-            TEXT("if (UKismetMathLibrary::Divide_IntInt(((Score + 8 - 2) * 3), 4) > 35)")));
+            TEXT("if ((Score + 8 - 2) * 3 / 4 > 35)")));
 
     // 加減乗は演算子に置換する一方、除算はBlueprintとの互換性を維持する。
     TestFalse(TEXT("加算のKismet呼び出しを生成しない"),
@@ -276,8 +276,11 @@ bool FBPRealArithmeticComparisonBranchConversionTest::RunTest(
         Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Subtract_IntInt(")));
     TestFalse(TEXT("乗算のKismet呼び出しを生成しない"),
         Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Multiply_IntInt(")));
-    TestTrue(TEXT("除算のKismet呼び出しは保持する"),
+    // 正の定数による整数除算は安全に演算子化できる。
+    TestFalse(TEXT("正の定数除算でKismet呼び出しを生成しない"),
         Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Divide_IntInt(")));
+    TestTrue(TEXT("正の定数除算を演算子で生成する"),
+        Files.SourceContent.Contains(TEXT(" * 3 / 4 > 35")));
 
     FBPGraphIR TamperedIR = GraphIR;
     TamperedIR.Graphs[EventGraphIndex].Nodes[ArithmeticNodeIndex]
