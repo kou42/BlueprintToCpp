@@ -738,9 +738,11 @@ int32 GetWrappedArithmeticPrecedence(const FString& Expression)
         {
             if (Character == TEXT('+') || Character == TEXT('-'))
             {
+                // 同じ階層に乗除があっても、加減が式全体の優先順位を決める。
                 Precedence = 1;
             }
-            else if (Character == TEXT('*') || Character == TEXT('/'))
+            else if ((Character == TEXT('*') || Character == TEXT('/')) &&
+                Precedence == 0)
             {
                 Precedence = 2;
             }
