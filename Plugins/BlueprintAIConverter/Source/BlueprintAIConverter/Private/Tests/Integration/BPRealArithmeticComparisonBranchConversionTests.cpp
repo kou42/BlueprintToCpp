@@ -282,6 +282,46 @@ bool FBPRealArithmeticComparisonBranchConversionTest::RunTest(
     TestTrue(TEXT("正の定数除算を演算子で生成する"),
         Files.SourceContent.Contains(TEXT(" * 3 / 4 > 35")));
 
+    // 除数だけを変えたSemantic IRで境界値の出力を検証する。
+    // -2は安全に演算子化できるが、0と-1はKismet関数を保持する。
+    for (const FString& DivisorText : { TEXT("-2"), TEXT("0"), TEXT("-1") })
+    {
+        FBPSemanticIR DivisionSemantic = SemanticIR;
+        FBPSemanticExpression& Division =
+            DivisionSemantic.Functions[0].Blocks[0].Statements[0].Expression.Arguments[0];
+        if (TestEqual(TEXT("除算引数数を保持"), Division.Arguments.Num(), 2) == false)
+        {
+            return false;
+        }
+        Division.Arguments[1].Kind = EBPSemanticExpressionKind::Literal;
+        Division.Arguments[1].Type.Kind = EBPSemanticTypeKind::Int32;
+        Division.Arguments[1].LiteralValue = DivisorText;
+        FBPGeneratedActorFiles DivisionFiles;
+        TArray<FString> DivisionDiagnostics;
+        if (TestTrue(TEXT("除数境界値のC++生成"),
+            FBPSemanticCodeGenerator::Generate(DivisionSemantic,
+                TEXT("ARealArithmeticComparisonBranch"), FString(),
+                DivisionFiles, DivisionDiagnostics)) == false)
+        {
+            for (const FString& Diagnostic : DivisionDiagnostics)
+            {
+                AddError(Diagnostic);
+            }
+            return false;
+        }
+        if (DivisorText == TEXT("-2"))
+        {
+            TestTrue(TEXT("負の安全な除数を演算子化"),
+                DivisionFiles.SourceContent.Contains(TEXT(" / -2 > 35")));
+        }
+        else
+        {
+            TestTrue(TEXT("危険な除数はKismet関数を維持"),
+                DivisionFiles.SourceContent.Contains(
+                    TEXT("UKismetMathLibrary::Divide_IntInt(")));
+        }
+    }
+
     FBPGraphIR TamperedIR = GraphIR;
     TamperedIR.Graphs[EventGraphIndex].Nodes[ArithmeticNodeIndex]
         .FunctionOwnerPath = TEXT("/Script/Engine.Actor");
