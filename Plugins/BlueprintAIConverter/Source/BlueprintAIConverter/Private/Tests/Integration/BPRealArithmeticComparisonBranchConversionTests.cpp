@@ -267,7 +267,7 @@ bool FBPRealArithmeticComparisonBranchConversionTest::RunTest(
         Files.HeaderContent.Contains(TEXT("int32 Score = 42")));
     TestTrue(TEXT("算術式を比較条件へ一度だけ生成"),
         Files.SourceContent.Contains(
-            TEXT("if (UKismetMathLibrary::Divide_IntInt((((Score + 8) - 2) * 3), 4) > 35)")));
+            TEXT("if (UKismetMathLibrary::Divide_IntInt(((Score + 8 - 2) * 3), 4) > 35)")));
 
     // 加減乗は演算子に置換する一方、除算はBlueprintとの互換性を維持する。
     TestFalse(TEXT("加算のKismet呼び出しを生成しない"),
