@@ -457,7 +457,7 @@ bool FBPForLoopNestedArithmeticTreeTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("外側と内側Indexの加算"),
         Files.SourceContent.Contains(TEXT(
-            "UKismetStringLibrary::Conv_IntToString(UKismetMathLibrary::Multiply_IntInt(UKismetMathLibrary::Add_IntInt(LoopIndex, InnerIndex), InnerIndex))")));
+            "UKismetStringLibrary::Conv_IntToString(((LoopIndex + InnerIndex) * InnerIndex))")));
     return true;
 }
 
