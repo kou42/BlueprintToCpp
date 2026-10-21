@@ -114,7 +114,7 @@ bool LowerRecursive(const FBPGraphIR& GraphIR, const FGuid& CallNodeId,
     for (const FBPIRLink& Edge : Graph->DataEdges)
     {
         if (Edge.TargetNode == CallNodeId &&
-            Call->Pins.ContainsByPredicate([&Edge](const FBPIRPin& Pin)
+            Call->Pins.ContainsByPredicate([&Edge, &Signature](const FBPIRPin& Pin)
             {
                 return Pin.Id == Edge.TargetPin &&
                     ((Pin.Name == TEXT("self") || Pin.Name == TEXT("Target")) ||
