@@ -706,6 +706,127 @@ bool ReadBoolLiteral(const FBPSemanticExpression& Expression, FString& OutValue)
     return true;
 }
 
+// 括弧で囲まれた二項算術式の最上位演算子を調べる。
+// 数値リテラルの符号やネスト内の演算子は対象外にする。
+int32 GetWrappedArithmeticPrecedence(const FString& Expression)
+{
+    if (Expression.Len() < 5 || Expression[0] != TEXT('(') ||
+        Expression[Expression.Len() - 1] != TEXT(')'))
+    {
+        return 0;
+    }
+    int32 Depth = 0;
+    int32 Precedence = 0;
+    for (int32 Index = 0; Index < Expression.Len(); ++Index)
+    {
+        const TCHAR Character = Expression[Index];
+        if (Character == TEXT('('))
+        {
+            ++Depth;
+        }
+        else if (Character == TEXT(')'))
+        {
+            --Depth;
+            if (Depth == 0 && Index != Expression.Len() - 1)
+            {
+                return 0;
+            }
+        }
+        else if (Depth == 1 && Index > 0 && Index + 1 < Expression.Len() &&
+            Expression[Index - 1] == TEXT(' ') &&
+            Expression[Index + 1] == TEXT(' '))
+        {
+            if (Character == TEXT('+') || Character == TEXT('-'))
+            {
+                // 同じ階層に乗除があっても、加減が式全体の優先順位を決める。
+                Precedence = 1;
+            }
+            else if ((Character == TEXT('*') || Character == TEXT('/')) &&
+                Precedence == 0)
+            {
+                Precedence = 2;
+            }
+        }
+        if (Depth < 0)
+        {
+            return 0;
+        }
+    }
+    return Depth == 0 ? Precedence : 0;
+}
+
+// 子式の優先順位が高ければ括弧を省略できる。
+// 同順位の場合は左辺だけを省略する。右辺の同順位は減算や
+// 浮動小数点の丸め順序を変え得るため括弧を維持する。
+FString FormatArithmeticChild(const FString& Expression,
+    const int32 ParentPrecedence, const bool bLeft)
+{
+    const int32 ChildPrecedence = GetWrappedArithmeticPrecedence(Expression);
+    if (ChildPrecedence > ParentPrecedence ||
+        (bLeft && ChildPrecedence == ParentPrecedence))
+    {
+        if (ChildPrecedence != 0)
+        {
+            return Expression.Mid(1, Expression.Len() - 2);
+        }
+    }
+    return Expression;
+}
+
+// 四則演算の表示形式を共通化する。未知の関数は変換しない。
+// 最外周括弧は親の式生成時に安全性を判定して省略する。
+bool FormatArithmeticOperator(const FName FunctionName,
+    const FString& A, const FString& B, FString& Out)
+{
+    const FString Name = FunctionName.ToString();
+    const TCHAR* Symbol = Name.StartsWith(TEXT("Add_")) ? TEXT("+")
+        : Name.StartsWith(TEXT("Subtract_")) ? TEXT("-")
+        : Name.StartsWith(TEXT("Multiply_")) ? TEXT("*")
+        : Name.StartsWith(TEXT("Divide_")) ? TEXT("/") : nullptr;
+    if (Symbol == nullptr)
+    {
+        return false;
+    }
+    const int32 Precedence =
+        (Name.StartsWith(TEXT("Multiply_")) || Name.StartsWith(TEXT("Divide_"))) ? 2 : 1;
+    const FString Left = FormatArithmeticChild(A, Precedence, true);
+    const FString Right = FormatArithmeticChild(B, Precedence, false);
+    Out = FString::Printf(TEXT("(%s %s %s)"), *Left, Symbol, *Right);
+    return true;
+}
+
+// 比較演算子は算術演算子より優先順位が低いため、比較式の直下にある
+// 算術式の最外周括弧のみ省略できる。内側の括弧は演算順序保持のため残す。
+FString UnwrapComparisonOperand(const FString& Expression)
+{
+    if (Expression.Len() < 2 || Expression[0] != TEXT('(') ||
+        Expression[Expression.Len() - 1] != TEXT(')'))
+    {
+        return Expression;
+    }
+    int32 Depth = 0;
+    for (int32 Index = 0; Index < Expression.Len(); ++Index)
+    {
+        if (Expression[Index] == TEXT('('))
+        {
+            ++Depth;
+        }
+        else if (Expression[Index] == TEXT(')'))
+        {
+            --Depth;
+            if (Depth == 0 && Index != Expression.Len() - 1)
+            {
+                return Expression;
+            }
+        }
+        if (Depth < 0)
+        {
+            return Expression;
+        }
+    }
+    return Depth == 0 ? Expression.Mid(1, Expression.Len() - 2) : Expression;
+}
+
 bool EmitNumericExpression(const FBPSemanticExpression& Expression,
     const EBPSemanticTypeKind OperandType,
     const TArray<FBPSemanticVariable>& Variables, FString& OutOperand,
@@ -747,9 +868,26 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         {
             return false;
         }
-        // 除算を含め、Blueprint側のゼロ除算処理と同じ実装を呼び出す。
-        OutOperand = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
-            *Operation.FunctionName.ToString(), *A, *B);
+        // 0と-1以外の整数リテラル除数なら、ゼロ除算とINT_MIN/-1の
+        // オーバーフローを避けられるためC++の除算演算子に変換する。
+        // それ以外はBlueprint固有の挙動を維持する。
+        const bool bDivision = Operation.FunctionName.ToString().StartsWith(TEXT("Divide_"));
+        int32 Divisor = 0;
+        const bool bSafeIntegerDivision = bDivision &&
+            OperandType == EBPSemanticTypeKind::Int32 &&
+            Expression.Arguments[1].Kind == EBPSemanticExpressionKind::Literal &&
+            LexTryParseString(Divisor, *Expression.Arguments[1].LiteralValue) &&
+            Divisor != 0 && Divisor != -1;
+        if (bDivision && bSafeIntegerDivision == false)
+        {
+            OutOperand = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
+                *Operation.FunctionName.ToString(), *A, *B);
+        }
+        else if (FormatArithmeticOperator(Operation.FunctionName, A, B, OutOperand) == false)
+        {
+            Diagnostics.Add(TEXT("Unsupported numeric arithmetic operator"));
+            return false;
+        }
         return true;
     }
     if (Expression.Kind != EBPSemanticExpressionKind::VariableReference)
@@ -829,7 +967,8 @@ bool EmitForLoopCondition(const FBPSemanticExpression& Expression,
     {
         return false;
     }
-    OutCondition = FString::Printf(TEXT("%s %s %s"), *A, *Comparison.OperatorToken, *B);
+    OutCondition = FString::Printf(TEXT("%s %s %s"),
+        *UnwrapComparisonOperand(A), *Comparison.OperatorToken, *UnwrapComparisonOperand(B));
     return true;
 }
 
@@ -866,7 +1005,7 @@ bool EmitBranchCondition(const FBPSemanticExpression& Expression,
         return false;
     }
     OutCondition = FString::Printf(TEXT("%s %s %s"),
-        *A, *Comparison.OperatorToken, *B);
+        *UnwrapComparisonOperand(A), *Comparison.OperatorToken, *UnwrapComparisonOperand(B));
     return true;
 }
 
@@ -1023,8 +1162,10 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                     {
                         return false;
                     }
-                    Out = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
-                        *Integer.FunctionName.ToString(), *Left, *Right);
+                    if (FormatArithmeticOperator(Integer.FunctionName, Left, Right, Out) == false)
+                    {
+                        return false;
+                    }
                     return true;
                 };
                 FString IndexExpression;
@@ -1130,8 +1271,10 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
             {
                 return false;
             }
-            Result = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
-                *Expression.FunctionName.ToString(), *Left, *Right);
+            if (FormatArithmeticOperator(Expression.FunctionName, Left, Right, Result) == false)
+            {
+                return false;
+            }
             return true;
         };
         FString IntegerExpression;

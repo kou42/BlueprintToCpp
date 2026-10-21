@@ -267,7 +267,91 @@ bool FBPRealArithmeticComparisonBranchConversionTest::RunTest(
         Files.HeaderContent.Contains(TEXT("int32 Score = 42")));
     TestTrue(TEXT("算術式を比較条件へ一度だけ生成"),
         Files.SourceContent.Contains(
-            TEXT("if (UKismetMathLibrary::Divide_IntInt(UKismetMathLibrary::Multiply_IntInt(UKismetMathLibrary::Subtract_IntInt(UKismetMathLibrary::Add_IntInt(Score, 8), 2), 3), 4) > 35)")));
+            TEXT("if ((Score + 8 - 2) * 3 / 4 > 35)")));
+
+    // 加減乗は演算子に置換する一方、除算はBlueprintとの互換性を維持する。
+    TestFalse(TEXT("加算のKismet呼び出しを生成しない"),
+        Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Add_IntInt(")));
+    TestFalse(TEXT("減算のKismet呼び出しを生成しない"),
+        Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Subtract_IntInt(")));
+    TestFalse(TEXT("乗算のKismet呼び出しを生成しない"),
+        Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Multiply_IntInt(")));
+    // 正の定数による整数除算は安全に演算子化できる。
+    TestFalse(TEXT("正の定数除算でKismet呼び出しを生成しない"),
+        Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Divide_IntInt(")));
+    TestTrue(TEXT("正の定数除算を演算子で生成する"),
+        Files.SourceContent.Contains(TEXT(" * 3 / 4 > 35")));
+
+    // 除数だけを変えたSemantic IRで境界値の出力を検証する。
+    // -2は安全に演算子化できるが、0と-1はKismet関数を保持する。
+    for (const TCHAR* DivisorText : { TEXT("-2"), TEXT("0"), TEXT("-1") })
+    {
+        FBPSemanticIR DivisionSemantic = SemanticIR;
+        FBPSemanticExpression& Division =
+            DivisionSemantic.Functions[0].Blocks[0].Statements[0].Expression.Arguments[0];
+        if (TestEqual(TEXT("除算引数数を保持"), Division.Arguments.Num(), 2) == false)
+        {
+            return false;
+        }
+        Division.Arguments[1].Kind = EBPSemanticExpressionKind::Literal;
+        Division.Arguments[1].Type.Kind = EBPSemanticTypeKind::Int32;
+        Division.Arguments[1].LiteralValue = DivisorText;
+        FBPGeneratedActorFiles DivisionFiles;
+        TArray<FString> DivisionDiagnostics;
+        if (TestTrue(TEXT("除数境界値のC++生成"),
+            FBPSemanticCodeGenerator::Generate(DivisionSemantic,
+                TEXT("ARealArithmeticComparisonBranch"), FString(),
+                DivisionFiles, DivisionDiagnostics)) == false)
+        {
+            for (const FString& Diagnostic : DivisionDiagnostics)
+            {
+                AddError(Diagnostic);
+            }
+            return false;
+        }
+        if (DivisorText == TEXT("-2"))
+        {
+            TestTrue(TEXT("負の安全な除数を演算子化"),
+                DivisionFiles.SourceContent.Contains(TEXT(" / -2 > 35")));
+        }
+        else
+        {
+            TestTrue(TEXT("危険な除数はKismet関数を維持"),
+                DivisionFiles.SourceContent.Contains(
+                    TEXT("UKismetMathLibrary::Divide_IntInt(")));
+        }
+    }
+
+    // 混合演算の最上位優先順位を確認する。
+    // (A * B + C) * D の加算を見落として括弧を外すと結果が変わる。
+    FBPSemanticIR MixedSemantic = SemanticIR;
+    FBPSemanticExpression& MixedCondition =
+        MixedSemantic.Functions[0].Blocks[0].Statements[0].Expression;
+    FBPSemanticExpression MixedAdd = Arithmetic.Arguments[0];
+    MixedAdd.FunctionName = TEXT("Add_IntInt");
+    MixedAdd.Arguments[0] = Arithmetic.Arguments[0].Arguments[0];
+    MixedAdd.Arguments[1].LiteralValue = TEXT("1");
+    FBPSemanticExpression MixedMultiply = Arithmetic.Arguments[0];
+    MixedMultiply.FunctionName = TEXT("Multiply_IntInt");
+    MixedMultiply.Arguments[0] = MixedAdd;
+    MixedMultiply.Arguments[1].LiteralValue = TEXT("2");
+    MixedCondition.Arguments[0] = MixedMultiply;
+    FBPGeneratedActorFiles MixedFiles;
+    TArray<FString> MixedDiagnostics;
+    if (TestTrue(TEXT("混合演算のC++生成"),
+        FBPSemanticCodeGenerator::Generate(MixedSemantic,
+            TEXT("ARealArithmeticComparisonBranch"), FString(),
+            MixedFiles, MixedDiagnostics)) == false)
+    {
+        for (const FString& Diagnostic : MixedDiagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("乗算より低優先順位の加算を括弧で保護"),
+        MixedFiles.SourceContent.Contains(
+            TEXT("if (((Score + 8 - 2) * 3 + 1) * 2 > 35)")));
 
     FBPGraphIR TamperedIR = GraphIR;
     TamperedIR.Graphs[EventGraphIndex].Nodes[ArithmeticNodeIndex]
