@@ -866,7 +866,8 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         {
             return false;
         }
-        // 正の整数リテラルによる除算はゼロ除算・INT_MIN/-1を生じないため
+        // 0と-1以外の整数リテラル除数なら、ゼロ除算とINT_MIN/-1の
+        // オーバーフローを避けられるためC++の除算演算子に変換する。
         // C++の除算演算子に変換する。それ以外はBlueprint固有の挙動を維持する。
         const bool bDivision = Operation.FunctionName.ToString().StartsWith(TEXT("Divide_"));
         int32 Divisor = 0;
@@ -874,7 +875,7 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
             OperandType == EBPSemanticTypeKind::Int32 &&
             Expression.Arguments[1].Kind == EBPSemanticExpressionKind::Literal &&
             LexTryParseString(Divisor, *Expression.Arguments[1].LiteralValue) &&
-            Divisor > 0;
+            Divisor != 0 && Divisor != -1;
         if (bDivision && bSafeIntegerDivision == false)
         {
             OutOperand = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
