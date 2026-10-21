@@ -284,7 +284,7 @@ bool FBPRealArithmeticComparisonBranchConversionTest::RunTest(
 
     // 除数だけを変えたSemantic IRで境界値の出力を検証する。
     // -2は安全に演算子化できるが、0と-1はKismet関数を保持する。
-    for (const FString& DivisorText : { TEXT("-2"), TEXT("0"), TEXT("-1") })
+    for (const TCHAR* DivisorText : { TEXT("-2"), TEXT("0"), TEXT("-1") })
     {
         FBPSemanticIR DivisionSemantic = SemanticIR;
         FBPSemanticExpression& Division =
