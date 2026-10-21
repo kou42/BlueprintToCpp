@@ -868,7 +868,7 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         }
         // 0と-1以外の整数リテラル除数なら、ゼロ除算とINT_MIN/-1の
         // オーバーフローを避けられるためC++の除算演算子に変換する。
-        // C++の除算演算子に変換する。それ以外はBlueprint固有の挙動を維持する。
+        // それ以外はBlueprint固有の挙動を維持する。
         const bool bDivision = Operation.FunctionName.ToString().StartsWith(TEXT("Divide_"));
         int32 Divisor = 0;
         const bool bSafeIntegerDivision = bDivision &&
