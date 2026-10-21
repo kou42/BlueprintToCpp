@@ -706,8 +706,73 @@ bool ReadBoolLiteral(const FBPSemanticExpression& Expression, FString& OutValue)
     return true;
 }
 
-// 数値演算の表示形式を一箇所に集約する。未知の演算は変換しない。
-// 子式を括弧で保護し、Blueprintの演算木の結合順序を保持する。
+// 括弧で囲まれた二項算術式の最上位演算子を調べる。
+// 数値リテラルの符号やネスト内の演算子は対象外にする。
+int32 GetWrappedArithmeticPrecedence(const FString& Expression)
+{
+    if (Expression.Len() < 5 || Expression[0] != TEXT('(') ||
+        Expression[Expression.Len() - 1] != TEXT(')'))
+    {
+        return 0;
+    }
+    int32 Depth = 0;
+    int32 Precedence = 0;
+    for (int32 Index = 0; Index < Expression.Len(); ++Index)
+    {
+        const TCHAR Character = Expression[Index];
+        if (Character == TEXT('('))
+        {
+            ++Depth;
+        }
+        else if (Character == TEXT(')'))
+        {
+            --Depth;
+            if (Depth == 0 && Index != Expression.Len() - 1)
+            {
+                return 0;
+            }
+        }
+        else if (Depth == 1 && Index > 0 && Index + 1 < Expression.Len() &&
+            Expression[Index - 1] == TEXT(' ') &&
+            Expression[Index + 1] == TEXT(' '))
+        {
+            if (Character == TEXT('+') || Character == TEXT('-'))
+            {
+                Precedence = 1;
+            }
+            else if (Character == TEXT('*'))
+            {
+                Precedence = 2;
+            }
+        }
+        if (Depth < 0)
+        {
+            return 0;
+        }
+    }
+    return Depth == 0 ? Precedence : 0;
+}
+
+// 子式の優先順位が高ければ括弧を省略できる。
+// 同順位の場合は左辺だけを省略する。右辺の同順位は減算や
+// 浮動小数点の丸め順序を変え得るため括弧を維持する。
+FString FormatArithmeticChild(const FString& Expression,
+    const int32 ParentPrecedence, const bool bLeft)
+{
+    const int32 ChildPrecedence = GetWrappedArithmeticPrecedence(Expression);
+    if (ChildPrecedence > ParentPrecedence ||
+        (bLeft && ChildPrecedence == ParentPrecedence))
+    {
+        if (ChildPrecedence != 0)
+        {
+            return Expression.Mid(1, Expression.Len() - 2);
+        }
+    }
+    return Expression;
+}
+
+// 四則演算の表示形式を共通化する。未知の関数は変換しない。
+// 最外周括弧は親の式生成時に安全性を判定して省略する。
 bool FormatArithmeticOperator(const FName FunctionName,
     const FString& A, const FString& B, FString& Out)
 {
@@ -719,10 +784,10 @@ bool FormatArithmeticOperator(const FName FunctionName,
     {
         return false;
     }
-    // 数値や変数などの単純な葉は括弧不要。ただし複合式は
-    // Blueprintの演算木を保持するため、ここでは外側の括弧を維持する。
-    // 将来の最小括弧化では演算子優先順位と右辺の結合規則を扱う。
-    Out = FString::Printf(TEXT("(%s %s %s)"), *A, Symbol, *B);
+    const int32 Precedence = Name.StartsWith(TEXT("Multiply_")) ? 2 : 1;
+    const FString Left = FormatArithmeticChild(A, Precedence, true);
+    const FString Right = FormatArithmeticChild(B, Precedence, false);
+    Out = FString::Printf(TEXT("(%s %s %s)"), *Left, Symbol, *Right);
     return true;
 }
 
