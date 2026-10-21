@@ -747,9 +747,27 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         {
             return false;
         }
-        // 除算を含め、Blueprint側のゼロ除算処理と同じ実装を呼び出す。
-        OutOperand = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
-            *Operation.FunctionName.ToString(), *A, *B);
+        // 除算はゼロ除算時のBlueprint固有の挙動を保持するため、既存の関数呼び出しを維持する。
+        // それ以外の四則演算は演算子で表現する。子式を括弧で囲むことで
+        // Blueprintの接続順序をC++の演算子優先順位に依存せず再現する。
+        if (Operation.FunctionName.ToString().StartsWith(TEXT("Divide_")))
+        {
+            OutOperand = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
+                *Operation.FunctionName.ToString(), *A, *B);
+        }
+        else
+        {
+            const FString FunctionName = Operation.FunctionName.ToString();
+            const TCHAR* Operator = FunctionName.StartsWith(TEXT("Add_")) ? TEXT("+")
+                : FunctionName.StartsWith(TEXT("Subtract_")) ? TEXT("-")
+                : FunctionName.StartsWith(TEXT("Multiply_")) ? TEXT("*") : nullptr;
+            if (Operator == nullptr)
+            {
+                Diagnostics.Add(TEXT("Unsupported numeric arithmetic operator"));
+                return false;
+            }
+            OutOperand = FString::Printf(TEXT("(%s %s %s)"), *A, Operator, *B);
+        }
         return true;
     }
     if (Expression.Kind != EBPSemanticExpressionKind::VariableReference)
