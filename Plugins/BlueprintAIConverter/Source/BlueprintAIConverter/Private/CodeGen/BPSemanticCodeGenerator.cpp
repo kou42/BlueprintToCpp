@@ -706,6 +706,23 @@ bool ReadBoolLiteral(const FBPSemanticExpression& Expression, FString& OutValue)
     return true;
 }
 
+// 数値演算の表示形式を一箇所に集約する。未知の演算は変換しない。
+// 子式を括弧で保護し、Blueprintの演算木の結合順序を保持する。
+bool FormatArithmeticOperator(const FName FunctionName,
+    const FString& A, const FString& B, FString& Out)
+{
+    const FString Name = FunctionName.ToString();
+    const TCHAR* Symbol = Name.StartsWith(TEXT("Add_")) ? TEXT("+")
+        : Name.StartsWith(TEXT("Subtract_")) ? TEXT("-")
+        : Name.StartsWith(TEXT("Multiply_")) ? TEXT("*") : nullptr;
+    if (Symbol == nullptr)
+    {
+        return false;
+    }
+    Out = FString::Printf(TEXT("(%s %s %s)"), *A, Symbol, *B);
+    return true;
+}
+
 bool EmitNumericExpression(const FBPSemanticExpression& Expression,
     const EBPSemanticTypeKind OperandType,
     const TArray<FBPSemanticVariable>& Variables, FString& OutOperand,
@@ -757,16 +774,11 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         }
         else
         {
-            const FString FunctionName = Operation.FunctionName.ToString();
-            const TCHAR* Operator = FunctionName.StartsWith(TEXT("Add_")) ? TEXT("+")
-                : FunctionName.StartsWith(TEXT("Subtract_")) ? TEXT("-")
-                : FunctionName.StartsWith(TEXT("Multiply_")) ? TEXT("*") : nullptr;
-            if (Operator == nullptr)
+            if (FormatArithmeticOperator(Operation.FunctionName, A, B, OutOperand) == false)
             {
                 Diagnostics.Add(TEXT("Unsupported numeric arithmetic operator"));
                 return false;
             }
-            OutOperand = FString::Printf(TEXT("(%s %s %s)"), *A, Operator, *B);
         }
         return true;
     }
@@ -1041,8 +1053,10 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                     {
                         return false;
                     }
-                    Out = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
-                        *Integer.FunctionName.ToString(), *Left, *Right);
+                    if (FormatArithmeticOperator(Integer.FunctionName, Left, Right, Out) == false)
+                    {
+                        return false;
+                    }
                     return true;
                 };
                 FString IndexExpression;
@@ -1148,8 +1162,10 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
             {
                 return false;
             }
-            Result = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
-                *Expression.FunctionName.ToString(), *Left, *Right);
+            if (FormatArithmeticOperator(Expression.FunctionName, Left, Right, Result) == false)
+            {
+                return false;
+            }
             return true;
         };
         FString IntegerExpression;
