@@ -719,6 +719,9 @@ bool FormatArithmeticOperator(const FName FunctionName,
     {
         return false;
     }
+    // 数値や変数などの単純な葉は括弧不要。ただし複合式は
+    // Blueprintの演算木を保持するため、ここでは外側の括弧を維持する。
+    // 将来の最小括弧化では演算子優先順位と右辺の結合規則を扱う。
     Out = FString::Printf(TEXT("(%s %s %s)"), *A, Symbol, *B);
     return true;
 }
@@ -764,9 +767,9 @@ bool EmitNumericExpression(const FBPSemanticExpression& Expression,
         {
             return false;
         }
-        // 除算はゼロ除算時のBlueprint固有の挙動を保持するため、既存の関数呼び出しを維持する。
-        // それ以外の四則演算は演算子で表現する。子式を括弧で囲むことで
-        // Blueprintの接続順序をC++の演算子優先順位に依存せず再現する。
+        // 整数除算のゼロ除算や実数除算の特殊値処理など、
+        // KismetMathLibrary固有の振る舞いを変えないため除算は関数形式を維持する。
+        // 他の演算はC++演算子を使用し、括弧でBlueprintの演算順序を保持する。
         if (Operation.FunctionName.ToString().StartsWith(TEXT("Divide_")))
         {
             OutOperand = FString::Printf(TEXT("UKismetMathLibrary::%s(%s, %s)"),
