@@ -726,6 +726,38 @@ bool FormatArithmeticOperator(const FName FunctionName,
     return true;
 }
 
+// 比較演算子は算術演算子より優先順位が低いため、比較式の直下にある
+// 算術式の最外周括弧のみ省略できる。内側の括弧は演算順序保持のため残す。
+FString UnwrapComparisonOperand(const FString& Expression)
+{
+    if (Expression.Len() < 2 || Expression[0] != TEXT('(') ||
+        Expression[Expression.Len() - 1] != TEXT(')'))
+    {
+        return Expression;
+    }
+    int32 Depth = 0;
+    for (int32 Index = 0; Index < Expression.Len(); ++Index)
+    {
+        if (Expression[Index] == TEXT('('))
+        {
+            ++Depth;
+        }
+        else if (Expression[Index] == TEXT(')'))
+        {
+            --Depth;
+            if (Depth == 0 && Index != Expression.Len() - 1)
+            {
+                return Expression;
+            }
+        }
+        if (Depth < 0)
+        {
+            return Expression;
+        }
+    }
+    return Depth == 0 ? Expression.Mid(1, Expression.Len() - 2) : Expression;
+}
+
 bool EmitNumericExpression(const FBPSemanticExpression& Expression,
     const EBPSemanticTypeKind OperandType,
     const TArray<FBPSemanticVariable>& Variables, FString& OutOperand,
@@ -862,7 +894,8 @@ bool EmitForLoopCondition(const FBPSemanticExpression& Expression,
     {
         return false;
     }
-    OutCondition = FString::Printf(TEXT("%s %s %s"), *A, *Comparison.OperatorToken, *B);
+    OutCondition = FString::Printf(TEXT("%s %s %s"),
+        *UnwrapComparisonOperand(A), *Comparison.OperatorToken, *UnwrapComparisonOperand(B));
     return true;
 }
 
@@ -899,7 +932,7 @@ bool EmitBranchCondition(const FBPSemanticExpression& Expression,
         return false;
     }
     OutCondition = FString::Printf(TEXT("%s %s %s"),
-        *A, *Comparison.OperatorToken, *B);
+        *UnwrapComparisonOperand(A), *Comparison.OperatorToken, *UnwrapComparisonOperand(B));
     return true;
 }
 
