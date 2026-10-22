@@ -1230,6 +1230,21 @@ bool FBPSemanticGeneratorForEachLocalTypeTest::RunTest(const FString& Parameters
         FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
             FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
     TestTrue(TEXT("Index拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+
+    // 親Actorの公開ネイティブプロパティと同じIndex名も拒否する。
+    // Blueprint側のIR.Variablesだけでは継承メンバーを列挙できない。
+    FBPSemanticStatement& CheckedLoop = IR.Functions[0].Blocks[0].Statements[0];
+    CheckedLoop.LoopIndexVariable = TEXT("InitialLifeSpan");
+    BodyCall.FunctionName = TEXT("SetActorTickEnabled");
+    BodyCall.Arguments[1].Kind = EBPSemanticExpressionKind::Literal;
+    BodyCall.Arguments[1].Type.Kind = EBPSemanticTypeKind::Bool;
+    BodyCall.Arguments[1].VariableName = NAME_None;
+    BodyCall.Arguments[1].LiteralValue = TEXT("true");
+    Diagnostics.Reset();
+    TestFalse(TEXT("継承したネイティブメンバーとIndex名の衝突を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("名前衝突時に生成物を公開しない"), Files.SourceContent.IsEmpty());
     return true;
 }
 
