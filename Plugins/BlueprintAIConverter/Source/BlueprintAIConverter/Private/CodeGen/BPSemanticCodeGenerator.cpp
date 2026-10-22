@@ -1084,9 +1084,22 @@ bool IsCompatiblePrintStringIntMember(const FName Name, const FString& ParentCla
         Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic);
 }
 
+// ローカル整数参照は現在のループスコープ内に存在する場合のみ許可する。
+bool IsValidPrintStringLocalInt(const FBPSemanticExpression& Expression,
+    const FName LocalIndex, const FName LocalElement)
+{
+    return Expression.SourcePinId.IsValid() == false &&
+        Expression.Type.Kind == EBPSemanticTypeKind::Int32 &&
+        Expression.Type.ContainerKind.IsEmpty() &&
+        Expression.Type.bIsReference == false && Expression.Type.bIsConst == false &&
+        ((LocalIndex.IsNone() == false && Expression.VariableName == LocalIndex) ||
+         (LocalElement.IsNone() == false && Expression.VariableName == LocalElement));
+}
+
 bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
     const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
-    TArray<FString>& Diagnostics, const TArray<FBPSemanticVariable>* Variables)
+    TArray<FString>& Diagnostics, const TArray<FBPSemanticVariable>* Variables,
+    const FName LocalIndex, const FName LocalElement)
 {
     OutStatement.Reset();
     if (Call.Kind != EBPSemanticExpressionKind::FunctionCall ||
@@ -1180,7 +1193,9 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
             }
             if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
             {
-                if (IsIdentifier(Expression.VariableName.ToString()) == false ||
+                if ((Expression.SourcePinId.IsValid()
+                            ? IsCompatiblePrintStringIntMember(Expression.VariableName, ParentClassPath, Variables)
+                            : IsValidPrintStringLocalInt(Expression, LocalIndex, LocalElement)) == false ||
                     Expression.VariableName == TEXT("this") ||
                     IsCompatiblePrintStringMember(Expression.VariableName,
                         ParentClassPath, Variables) == false)
@@ -1218,7 +1233,9 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                     }
                     if (Integer.Kind == EBPSemanticExpressionKind::VariableReference)
                     {
-                        if (IsIdentifier(Integer.VariableName.ToString()) == false ||
+                        if ((Integer.SourcePinId.IsValid()
+                            ? IsCompatiblePrintStringIntMember(Integer.VariableName, ParentClassPath, Variables)
+                            : IsValidPrintStringLocalInt(Integer, LocalIndex, LocalElement)) == false ||
                             Integer.Type.ContainerKind.IsEmpty() == false ||
                             Integer.Type.bIsReference || Integer.Type.bIsConst ||
                             (Integer.SourcePinId.IsValid() &&
@@ -1299,6 +1316,9 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         TextArgument.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
         TextArgument.Arguments[0].Type.Kind == EBPSemanticTypeKind::Int32 &&
         IsIdentifier(TextArgument.Arguments[0].VariableName.ToString()) &&
+        (TextArgument.Arguments[0].SourcePinId.IsValid()
+            ? IsCompatiblePrintStringIntMember(TextArgument.Arguments[0].VariableName, ParentClassPath, Variables)
+            : IsValidPrintStringLocalInt(TextArgument.Arguments[0], LocalIndex, LocalElement)) &&
         TextArgument.Arguments[0].Type.ContainerKind.IsEmpty() &&
         TextArgument.Arguments[0].Type.bIsReference == false &&
         TextArgument.Arguments[0].Type.bIsConst == false &&
@@ -1453,7 +1473,7 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
         Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetSystemLibrary"))
     {
         return EmitPrintStringStatement(Expression, ParentClassPath,
-            Indent, OutStatement, Diagnostics, Variables);
+            Indent, OutStatement, Diagnostics, Variables, LocalIndex, LocalElement);
     }
     if (Expression.FunctionName == TEXT("K2_SetActorLocation") &&
         Expression.FunctionOwnerPath == TEXT("/Script/Engine.Actor"))
@@ -1827,7 +1847,7 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
     if (Statement.Kind == EBPSemanticStatementKind::Expression)
     {
         return EmitExpressionStatement(Statement.Expression, ParentClassPath,
-            Indent, OutCode, Diagnostics, NAME_None, NAME_None, &Variables);
+            Indent, OutCode, Diagnostics, LocalIndex, NAME_None, &Variables);
     }
     if (Statement.Kind == EBPSemanticStatementKind::ForLoop)
     {
