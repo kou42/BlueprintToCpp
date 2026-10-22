@@ -4571,6 +4571,279 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
     OutIR.Functions.Add(MoveTemp(Function));
     return true;
 }
+
+bool LowerSequenceImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
+    FBPSemanticIR& OutIR)
+{
+    OutIR = FBPSemanticIR();
+    OutIR.AssetPath = GraphIR.AssetPath;
+    OutIR.ParentClassPath = GraphIR.ParentClassPath;
+    if (Blueprint == nullptr || Blueprint->GeneratedClass == nullptr)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(),
+            TEXT("Sequence conversion requires a compiled source Blueprint"));
+        return false;
+    }
+    if (Blueprint->NewVariables.Num() != GraphIR.BlueprintVariableCount)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(),
+            TEXT("Blueprint variables changed after Graph IR was built"));
+        return false;
+    }
+    if (GraphIR.Diagnostics.IsEmpty() == false)
+    {
+        for (const FString& Message : GraphIR.Diagnostics)
+        {
+            AddDiagnostic(OutIR, FString(), FGuid(), Message);
+        }
+        return false;
+    }
+
+    FBPResolvedParentClass ParentClass;
+    TArray<FString> ParentDiagnostics;
+    if (FBPParentClassResolver::ResolveParent(
+        GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
+    {
+        for (const FString& Message : ParentDiagnostics)
+        {
+            AddDiagnostic(OutIR, FString(), FGuid(), Message);
+        }
+        return false;
+    }
+    if (ParentClass.bSupportsBeginPlay == false)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(), FString::Printf(
+            TEXT("Parent class does not provide an overridable BeginPlay lifecycle: %s"),
+            *ParentClass.ClassPath));
+        return false;
+    }
+
+    FBPSemanticVariableExtractor::Append(Blueprint, OutIR);
+    if (OutIR.HasErrors())
+    {
+        return false;
+    }
+
+    const FBPIRGraph* EventGraph = nullptr;
+    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    {
+        if (Graph.Kind == TEXT("event"))
+        {
+            if (EventGraph != nullptr)
+            {
+                AddDiagnostic(OutIR, Graph.Name, FGuid(),
+                    TEXT("Sequence conversion requires exactly one event graph"));
+                return false;
+            }
+            EventGraph = &Graph;
+        }
+        else if (Graph.Kind == TEXT("function") &&
+            Graph.Name == TEXT("UserConstructionScript") &&
+            Graph.ExecEdges.IsEmpty() && Graph.DataEdges.IsEmpty())
+        {
+            continue;
+        }
+        else
+        {
+            AddDiagnostic(OutIR, Graph.Name, FGuid(),
+                TEXT("Sequence conversion contains an unsupported graph"));
+            return false;
+        }
+    }
+    if (EventGraph == nullptr)
+    {
+        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("Event graph is missing"));
+        return false;
+    }
+
+    const FBPIRGraph& Graph = *EventGraph;
+    const FBPIRNode* BeginPlay = nullptr;
+    const FBPIRNode* Sequence = nullptr;
+    TArray<const FBPIRNode*> Prints;
+    for (const FBPIRNode& Node : Graph.Nodes)
+    {
+        if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
+            Node.FunctionName == TEXT("ReceiveBeginPlay"))
+        {
+            if (BeginPlay != nullptr)
+            {
+                AddDiagnostic(OutIR, Graph.Name, Node.Id, TEXT("Duplicate BeginPlay event"));
+                return false;
+            }
+            BeginPlay = &Node;
+        }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_ExecutionSequence"))
+        {
+            if (Sequence != nullptr)
+            {
+                AddDiagnostic(OutIR, Graph.Name, Node.Id, TEXT("Duplicate Sequence node"));
+                return false;
+            }
+            Sequence = &Node;
+        }
+        else if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CallFunction") &&
+            Node.FunctionName == TEXT("PrintString"))
+        {
+            Prints.Add(&Node);
+        }
+        else
+        {
+            AddDiagnostic(OutIR, Graph.Name, Node.Id,
+                TEXT("Sequence conversion contains an unsupported node"));
+            return false;
+        }
+    }
+    if (BeginPlay == nullptr || Sequence == nullptr || Prints.Num() < 2 ||
+        Prints.Num() > 16 || Graph.DataEdges.IsEmpty() == false)
+    {
+        AddDiagnostic(OutIR, Graph.Name, FGuid(),
+            TEXT("Sequence conversion requires BeginPlay, one Sequence, two to sixteen PrintString calls, and no data links"));
+        return false;
+    }
+
+    const FBPIRPin* BeginThen = FindPin(*BeginPlay, UEdGraphSchema_K2::PN_Then, EGPD_Output);
+    const FBPIRPin* SequenceExecute = FindPin(*Sequence, UEdGraphSchema_K2::PN_Execute, EGPD_Input);
+    if (BeginThen == nullptr || SequenceExecute == nullptr)
+    {
+        AddDiagnostic(OutIR, Graph.Name, Sequence->Id,
+            TEXT("Sequence Exec pins are missing"));
+        return false;
+    }
+
+    struct FOrderedSequenceOutput
+    {
+        int32 Index = INDEX_NONE;
+        const FBPIRPin* Pin = nullptr;
+    };
+    TArray<FOrderedSequenceOutput> Outputs;
+    for (const FBPIRPin& Pin : Sequence->Pins)
+    {
+        if (Pin.Direction != EGPD_Output || Pin.Category != UEdGraphSchema_K2::PC_Exec)
+        {
+            continue;
+        }
+        const FString PinName = Pin.Name.ToString();
+        if (PinName.StartsWith(TEXT("Then_")) == false)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Sequence->Id,
+                TEXT("Sequence contains an unsupported Exec output pin"));
+            return false;
+        }
+        int32 Index = INDEX_NONE;
+        if (LexTryParseString(Index, *PinName.RightChop(5)) == false || Index < 0)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Sequence->Id,
+                TEXT("Sequence output pin index is invalid"));
+            return false;
+        }
+        FOrderedSequenceOutput& Output = Outputs.AddDefaulted_GetRef();
+        Output.Index = Index;
+        Output.Pin = &Pin;
+    }
+    Outputs.Sort([](const FOrderedSequenceOutput& A, const FOrderedSequenceOutput& B)
+    {
+        return A.Index < B.Index;
+    });
+    if (Outputs.Num() != Prints.Num())
+    {
+        AddDiagnostic(OutIR, Graph.Name, Sequence->Id,
+            TEXT("Every Sequence output must connect to exactly one supported statement"));
+        return false;
+    }
+    for (int32 Index = 0; Index < Outputs.Num(); ++Index)
+    {
+        if (Outputs[Index].Index != Index)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Sequence->Id,
+                TEXT("Sequence output pin indices must be contiguous and start at zero"));
+            return false;
+        }
+    }
+
+    int32 EntryEdgeCount = 0;
+    for (const FBPIRLink& Edge : Graph.ExecEdges)
+    {
+        if (Edge.SourceNode == BeginPlay->Id && Edge.SourcePin == BeginThen->Id &&
+            Edge.TargetNode == Sequence->Id && Edge.TargetPin == SequenceExecute->Id)
+        {
+            ++EntryEdgeCount;
+        }
+    }
+    if (EntryEdgeCount != 1 || Graph.ExecEdges.Num() != Outputs.Num() + 1)
+    {
+        AddDiagnostic(OutIR, Graph.Name, Sequence->Id,
+            TEXT("Sequence Exec topology contains a missing or extra connection"));
+        return false;
+    }
+
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    Block.SourceEntryNodeId = BeginPlay->Id;
+    TSet<FGuid> ConsumedPrints;
+    for (const FOrderedSequenceOutput& Output : Outputs)
+    {
+        const FBPIRLink* OutputEdge = nullptr;
+        for (const FBPIRLink& Edge : Graph.ExecEdges)
+        {
+            if (Edge.SourceNode == Sequence->Id && Edge.SourcePin == Output.Pin->Id)
+            {
+                if (OutputEdge != nullptr)
+                {
+                    AddDiagnostic(OutIR, Graph.Name, Sequence->Id,
+                        TEXT("Sequence output has multiple successors"));
+                    return false;
+                }
+                OutputEdge = &Edge;
+            }
+        }
+        const FBPIRNode* Print = nullptr;
+        if (OutputEdge != nullptr)
+        {
+            for (const FBPIRNode* Candidate : Prints)
+            {
+                if (Candidate->Id == OutputEdge->TargetNode)
+                {
+                    Print = Candidate;
+                    break;
+                }
+            }
+        }
+        const FBPIRPin* PrintExecute = Print != nullptr
+            ? FindPin(*Print, UEdGraphSchema_K2::PN_Execute, EGPD_Input) : nullptr;
+        if (Print == nullptr || PrintExecute == nullptr ||
+            OutputEdge->TargetPin != PrintExecute->Id || ConsumedPrints.Contains(Print->Id))
+        {
+            AddDiagnostic(OutIR, Graph.Name, Sequence->Id,
+                TEXT("Sequence outputs must target distinct PrintString Exec inputs"));
+            return false;
+        }
+        ConsumedPrints.Add(Print->Id);
+
+        FBPPrintStringCall Values;
+        if (AnalyzeBranchPrint(GraphIR, Graph, *BeginPlay, *Print, Values, OutIR) == false)
+        {
+            return false;
+        }
+        FBPSemanticStatement Statement;
+        Statement.Kind = EBPSemanticStatementKind::Expression;
+        Statement.SourceNodeId = Print->Id;
+        Statement.Expression = MakePrintStringExpression(
+            Values, *Print, GraphIR.ParentClassPath);
+        Block.Statements.Add(MoveTemp(Statement));
+    }
+    if (ConsumedPrints.Num() != Prints.Num())
+    {
+        AddDiagnostic(OutIR, Graph.Name, Sequence->Id,
+            TEXT("Sequence contains a disconnected or multiply reached statement"));
+        return false;
+    }
+
+    Function.Blocks.Add(MoveTemp(Block));
+    OutIR.Functions.Add(MoveTemp(Function));
+    return OutIR.HasErrors() == false;
+}
 }
 
 bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
@@ -4581,6 +4854,7 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
     bool bHasSetActorLocation = false;
     bool bHasBranch = false;
     bool bHasForLoop = false;
+    bool bHasSequence = false;
     for (const FBPIRGraph& Graph : GraphIR.Graphs)
     {
         for (const FBPIRNode& Node : Graph.Nodes)
@@ -4590,6 +4864,7 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
             bHasSetActorLocation |= Node.FunctionName == TEXT("K2_SetActorLocation");
             bHasBranch |= Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
             bHasForLoop |= Node.MacroGraphName == TEXT("ForLoop");
+            bHasSequence |= Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_ExecutionSequence");
         }
     }
     // ForEachLoopは配列要素型・配列の供給元・Exec経路の検証が必要。
@@ -4623,6 +4898,11 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
                 return LowerForEachLoopImpl(Blueprint, GraphIR, OutIR);
             }
         }
+    }
+    if (bHasSequence && bHasBranch == false && bHasForLoop == false && bHasPrintString &&
+        bHasGetActorLocation == false && bHasSetActorLocation == false)
+    {
+        return LowerSequence(Blueprint, GraphIR, OutIR);
     }
     if (bHasForLoop && bHasPrintString && bHasBranch == false &&
         bHasGetActorLocation == false && bHasSetActorLocation == false)
@@ -4699,6 +4979,12 @@ bool FBPSemanticLowering::LowerBranch(const UBlueprint* Blueprint,
     const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
     return LowerBranchImpl(Blueprint, GraphIR, OutIR);
+}
+
+bool FBPSemanticLowering::LowerSequence(const UBlueprint* Blueprint,
+    const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+{
+    return LowerSequenceImpl(Blueprint, GraphIR, OutIR);
 }
 
 bool FBPSemanticLowering::LowerForLoop(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)

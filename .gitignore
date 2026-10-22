@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+*.code-workspace
 
 # Unreal build products are local deployment artifacts.
 Binaries/

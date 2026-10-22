@@ -31,6 +31,11 @@ public:
     static bool LowerBranch(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
 
+    // BeginPlay -> Sequence -> 複数のPrintStringを、Sequence出力ピンの番号順に
+    // Semantic基本ブロックへLoweringする。
+    static bool LowerSequence(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
+        FBPSemanticIR& OutIR);
+
     // BeginPlay -> ForLoop -> PrintString の限定形状を、両端を含むfor文へLoweringする。
     static bool LowerForLoop(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR);
 
