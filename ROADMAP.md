@@ -11,6 +11,7 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - Actor固有のノードやBeginPlayはクラス固有のPolicyとして扱い、一般のUObject関数に混入させない。
 - 未対応のノード・署名・データフローは曖昧に変換せず、理由が分かる診断を返す。
 - 既存のActor／ActorComponent変換を維持する。機能拡張は原則として縦断テストを先に追加する。
+- **C++生成だけでなくJSON出力も正式な成果物として扱う。** Semantic IRに新しい表現を追加したら、JSONシリアライズ・Python側検証・往復テストも同じ変更で追従させる。
 
 ## 現状（コード調査に基づく。テスト実行結果ではない）
 
@@ -21,6 +22,7 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - `FBPSemanticCodeGenerator::Generate` はSemantic関数をちょうど1個、BasicBlockをちょうど1個に制限している。
 - `EmitExpressionStatement` には `FBPReflectedCallResolver` を使う共通呼び出し経路があるが、PrintStringは先に専用Emitterへ分岐する。ForEachLoopにもPrintString固有処理が残る。
 - Branch／ForLoop／ForEachLoopの既存LoweringはBeginPlay前提の経路を含む。
+- Semantic JSONは `BPSemanticJsonSerializer.cpp` で `schema_version: 2` を出力し、Pythonの `semantic_json.py` が同バージョンを検証する。JSON Exporterと既存テストがあるが、今後の共通Call／複数関数対応に追従するかは別途検証が必要。
 - PR #109 はUObject派生クラスの回帰テストと通常関数の振り分け改善を提案中。**mainへの反映やUEビルド成功は未確認**。
 
 ## 優先順位と完了条件
@@ -55,6 +57,17 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 **完了条件:** 複数の通常関数・イベントを一つのクラスに安全に生成できること。
 
+### P2並行: Semantic JSON出力・Python連携（必須）
+
+- [ ] EditorからのSemantic IR JSONエクスポートが、UObject通常関数・Custom Event・Actor BeginPlayで機能することを確認する。
+- [ ] 共通Call IR、制御フロー、複数関数、変数、引数・戻り値、親クラス情報、診断をJSONで欠落なく表現する。C++出力だけを先行してJSON出力を置き去りにしない。
+- [ ] `BPSemanticJsonSerializer` と `PythonServer/app/semantic_json.py` のスキーマ契約を同期する。互換性を壊す変更はバージョン方針と移行手順を明示する。
+- [ ] JSON出力の決定性（同じ入力で安定した結果）、型・GUID・参照関係、エラー時の診断をテストする。
+- [ ] JSONのgolden test、Python側schema validation、export→parse→必要に応じたroundtrip／C++生成の統合テストを追加・更新する。
+- [ ] C++生成に対応する機能がJSONでも扱えるかをPRレビューの必須確認項目にする。
+
+**完了条件:** 対応済みのSemantic IR表現をJSONに損失なく出力し、Python側が同じスキーマで検証でき、対応する往復／回帰テストが通ること。
+
 ### P3: 対応クラス・ノードの拡張
 
 - [ ] ActorComponent／SceneComponentのライフサイクルと通常関数の組み合わせを検証する。
@@ -73,14 +86,16 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 | `BPSemanticLowering.cpp::Lower` | ノードの有無でパターンを選択 | 関数単位のEntry／Statement Loweringへ移行後に撤去 |
 | Branch／ForLoop／ForEachLoop Lowering | BeginPlay前提の検証 | 共通Entry解析とクラス固有Policyへ分離後に整理 |
 | `BPSemanticCodeGenerator.cpp::Generate` | 単一関数・単一Block制限 | 複数関数／CFG出力とテストが通れば撤去 |
+| `BPSemanticJsonSerializer.cpp`／`PythonServer/app/semantic_json.py` | schema_version 2 の表現と検証の同期が必要 | 新IR表現ごとに両側を更新しgolden／roundtripで確認 |
 
 ## 検証ゲート
 
 1. **静的確認:** UFunction署名、WorldContext、型、include、親クラスPolicyの検証に抜けがないこと。
 2. **単体テスト:** 既存PrintStringケースに加え、PrintString以外の共通関数呼び出しを検証すること。
 3. **統合テスト:** UObject通常関数／Custom Event、Actor BeginPlay、Component、Branch／Loop、複数グラフの拒否動作を確認すること。
-4. **UE実行確認:** UHT／UBTビルドとEditor Automation Testを実行し、結果をPRへ記録すること。実行していない場合は明記すること。
-5. **完了判定:** 「残存専用処理」の該当行を削除または明示的な理由付きで更新し、チェックボックスを実際のテスト結果に合わせて更新すること。
+4. **JSON連携確認:** Semantic JSONシリアライズ、Pythonスキーマ検証、golden／roundtripを実施し、C++生成との差分を確認すること。
+5. **UE実行確認:** UHT／UBTビルドとEditor Automation Testを実行し、結果をPRへ記録すること。実行していない場合は明記すること。
+6. **完了判定:** 「残存専用処理」の該当行を削除または明示的な理由付きで更新し、チェックボックスを実際のテスト結果に合わせて更新すること。
 
 ## 運用ルール
 
