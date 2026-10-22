@@ -101,6 +101,8 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 - **追加変更（検証待ち）:** PrintStringの整数変換・Concat内整数演算で、SourcePinIdのないローカル整数参照をForLoop／ForEachLoopの有効なIndex／Element名に限定。ForLoopの式文にもLocalIndexを伝播。既存の正常系・拒否系Automation TestとUEビルドは未実施。
 
+- **回帰テスト追加（実行待ち）:** `BPSemanticPrintStringScopeTests.cpp` にForLoop内Indexの正常系、未宣言Index拒否、Completedのスコープ外参照拒否を追加。併せてConcat内の文字列メンバー参照の誤った整数判定を修正。テスト実行・UEコンパイルは未確認。
+
 ### 次の実装・検証順序
 
 1. PrintStringのネスト式（Concat／Conv_IntToString／整数演算）で、ローカルIndexとBlueprint／ネイティブメンバーの参照元・型を共通ルールで検証する。
