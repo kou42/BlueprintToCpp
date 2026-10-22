@@ -1496,15 +1496,21 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
             // 衝突を検証済みの場合だけ参照する。メンバーとは別のスコープで扱い、
             // 未検証の任意識別子をC++式として出力しない。
             if (Argument.Kind == EBPSemanticExpressionKind::VariableReference &&
-                Argument.Type.Kind == EBPSemanticTypeKind::Int32 &&
-                Argument.Type.ContainerKind.IsEmpty() &&
-                Argument.Type.bIsReference == false &&
-                Argument.Type.bIsConst == false &&
                 (Argument.VariableName == LocalIndex ||
                     Argument.VariableName == LocalElement) &&
                 Argument.VariableName.IsNone() == false &&
-                IsIdentifier(Argument.VariableName.ToString()))
+                (LocalIndex.IsNone() == false || LocalElement.IsNone() == false))
             {
+                // ループローカル名の型偽装を拒否し、同名のActorメンバーへ
+                // フォールバックさせない。宣言時のint32型と一致させる。
+                if (Argument.Type.Kind != EBPSemanticTypeKind::Int32 ||
+                    Argument.Type.ContainerKind.IsEmpty() == false ||
+                    Argument.Type.bIsReference || Argument.Type.bIsConst ||
+                    IsIdentifier(Argument.VariableName.ToString()) == false)
+                {
+                    Diagnostics.Add(TEXT("ForEach local argument requires a plain int32 variable"));
+                    return false;
+                }
                 if (Index > FirstArgument)
                 {
                     Arguments += TEXT(", ");
