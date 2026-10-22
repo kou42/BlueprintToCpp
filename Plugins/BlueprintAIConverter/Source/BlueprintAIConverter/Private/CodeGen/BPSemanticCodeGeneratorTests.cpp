@@ -1401,4 +1401,40 @@ bool FBPSemanticGeneratorPrintStringNativeMemberTest::RunTest(const FString& Par
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorPrintStringDeclaredVariableTest,
+    "BlueprintAIConverter.SemanticIR.Generator.PrintStringDeclaredVariable",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorPrintStringDeclaredVariableTest::RunTest(const FString& Parameters)
+{
+    // PrintStringに渡すBlueprint変数名が実在しても、
+    // 宣言された型がFString以外なら型偽装として拒否する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintStringのLowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("Message");
+    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+    Variable.ReflectedCppType = TEXT("int32");
+    IR.Variables.Add(Variable);
+    FBPSemanticExpression& Argument =
+        IR.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1];
+    Argument.Kind = EBPSemanticExpressionKind::VariableReference;
+    Argument.VariableName = Variable.Name;
+    Argument.Type.Kind = EBPSemanticTypeKind::String;
+    Argument.LiteralValue.Reset();
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("Blueprintのint32変数をFStringとして偽装すると拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AStringDeclaredVariableActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("型偽装時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
 #endif
