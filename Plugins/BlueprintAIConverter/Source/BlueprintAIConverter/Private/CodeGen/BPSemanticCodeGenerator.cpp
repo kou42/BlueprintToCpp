@@ -1491,11 +1491,14 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                     *Argument.VariableName.ToString());
                 continue;
             }
-            // 共通Callのbool/int32引数は公開ネイティブプロパティからも参照可能。
-            // 変数名だけを信用せず、実際のReflection型とアクセス指定を検証する。
+            // 共通Callのプリミティブ引数は公開ネイティブプロパティから参照できる。
+            // IRの型だけを信用せず、Reflectionの実際の型・アクセス指定を照合する。
+            // floatとdoubleは暗黙変換で取り違えないよう個別に検証する。
             if (Argument.Kind == EBPSemanticExpressionKind::VariableReference &&
                 (Argument.Type.Kind == EBPSemanticTypeKind::Bool ||
-                 Argument.Type.Kind == EBPSemanticTypeKind::Int32))
+                 Argument.Type.Kind == EBPSemanticTypeKind::Int32 ||
+                 Argument.Type.Kind == EBPSemanticTypeKind::Float ||
+                 Argument.Type.Kind == EBPSemanticTypeKind::Double))
             {
                 const FProperty* Member = ParentClass != nullptr
                     ? ParentClass->FindPropertyByName(Argument.VariableName) : nullptr;
@@ -1503,13 +1506,17 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                     (Argument.Type.Kind == EBPSemanticTypeKind::Bool &&
                         CastField<FBoolProperty>(Member) != nullptr) ||
                     (Argument.Type.Kind == EBPSemanticTypeKind::Int32 &&
-                        CastField<FIntProperty>(Member) != nullptr);
+                        CastField<FIntProperty>(Member) != nullptr) ||
+                    (Argument.Type.Kind == EBPSemanticTypeKind::Float &&
+                        CastField<FFloatProperty>(Member) != nullptr) ||
+                    (Argument.Type.Kind == EBPSemanticTypeKind::Double &&
+                        CastField<FDoubleProperty>(Member) != nullptr);
                 if (Member == nullptr || bMatchesType == false ||
                     Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic) == false ||
                     IsIdentifier(Argument.VariableName.ToString()) == false ||
                     Argument.VariableName == TEXT("this"))
                 {
-                    Diagnostics.Add(TEXT("Reflected bool/int32 member is not a matching public native property"));
+                    Diagnostics.Add(TEXT("Reflected primitive member is not a matching public native property"));
                     return false;
                 }
                 if (Index > FirstArgument)
