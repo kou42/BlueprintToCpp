@@ -1456,10 +1456,37 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 Arguments += TEXT("this");
                 continue;
             }
-            if (Argument.Kind != EBPSemanticExpressionKind::Literal ||
-                Argument.Type.bIsReference || Argument.Type.bIsConst)
+            if (Argument.Type.bIsReference || Argument.Type.bIsConst)
             {
-                Diagnostics.Add(TEXT("Actor call contains an unsupported argument expression"));
+                Diagnostics.Add(TEXT("Reflected call argument has unsupported reference qualifiers"));
+                return false;
+            }
+            // FStringのメンバー参照は親クラスの公開ネイティブプロパティに限定する。
+            // 変数名だけから任意のC++式を生成しないため、Reflectionで型と公開範囲を検証する。
+            if (Argument.Kind == EBPSemanticExpressionKind::VariableReference &&
+                Argument.Type.Kind == EBPSemanticTypeKind::String)
+            {
+                const FProperty* Member = ParentClass != nullptr
+                    ? ParentClass->FindPropertyByName(Argument.VariableName) : nullptr;
+                if (Member == nullptr || CastField<FStrProperty>(Member) == nullptr ||
+                    Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic) == false ||
+                    IsIdentifier(Argument.VariableName.ToString()) == false ||
+                    Argument.VariableName == TEXT("this"))
+                {
+                    Diagnostics.Add(TEXT("Reflected FString member is not a public native property"));
+                    return false;
+                }
+                if (Index > FirstArgument)
+                {
+                    Arguments += TEXT(", ");
+                }
+                Arguments += FString::Printf(TEXT("this->%s"),
+                    *Argument.VariableName.ToString());
+                continue;
+            }
+            if (Argument.Kind != EBPSemanticExpressionKind::Literal)
+            {
+                Diagnostics.Add(TEXT("Reflected call contains an unsupported argument expression"));
                 return false;
             }
             FString Value;
