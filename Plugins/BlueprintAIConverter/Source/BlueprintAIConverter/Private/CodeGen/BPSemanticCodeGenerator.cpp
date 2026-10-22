@@ -1461,9 +1461,20 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                     Value += TEXT("f");
                 }
             }
+            else if (Argument.Type.Kind == EBPSemanticTypeKind::String)
+            {
+                // 文字列はReflectionでFString引数と確認した場合のみ生成する。
+                // 任意のIR文字列をC++ソースへ直書きせず、制御文字と引用符を検証・エスケープする。
+                FString Escaped;
+                if (EscapeString(Argument.LiteralValue, Escaped, Diagnostics) == false)
+                {
+                    return false;
+                }
+                Value = FString::Printf(TEXT("TEXT(\\\"%s\\\")"), *Escaped);
+            }
             else
             {
-                Diagnostics.Add(TEXT("Actor call argument type is unsupported"));
+                Diagnostics.Add(TEXT("Reflected call argument type is unsupported"));
                 return false;
             }
             if (Index > FirstArgument)
