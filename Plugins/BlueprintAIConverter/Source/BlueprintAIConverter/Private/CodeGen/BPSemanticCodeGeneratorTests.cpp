@@ -1168,6 +1168,43 @@ bool FBPSemanticGeneratorForEachLocalTypeTest::RunTest(const FString& Parameters
         FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
             FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
     TestTrue(TEXT("拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+
+    // 正常系では同じForEach内の非PrintString共通Callを出力できる。
+    // まずboolリテラルでループ本体の共通Emitter経路を検証する。
+    FBPSemanticExpression& BodyCall =
+        IR.Functions[0].Blocks[0].Statements[0].LoopBodyStatements[0].Expression;
+    BodyCall.FunctionName = TEXT("SetActorTickEnabled");
+    BodyCall.Arguments[1].Kind = EBPSemanticExpressionKind::Literal;
+    BodyCall.Arguments[1].Type.Kind = EBPSemanticTypeKind::Bool;
+    BodyCall.Arguments[1].VariableName = NAME_None;
+    BodyCall.Arguments[1].LiteralValue = TEXT("true");
+    Diagnostics.Reset();
+    if (TestTrue(TEXT("ForEach内の非PrintString共通Callを生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("ForEachの本体に共通Callを出力"),
+        Files.SourceContent.Contains(TEXT("this->SetActorTickEnabled(true);")));
+    TestFalse(TEXT("Element未使用時に要素コピーを生成しない"),
+        Files.SourceContent.Contains(TEXT("const int32 LoopElement =")));
+
+    // 同じループ内でIndex/Elementの型偽装が拒否されることを検証する。
+    BodyCall.FunctionName = TEXT("SetActorTickInterval");
+    BodyCall.Arguments[1].Kind = EBPSemanticExpressionKind::VariableReference;
+    BodyCall.Arguments[1].VariableName = TEXT("LoopIndex");
+    BodyCall.Arguments[1].Type.Kind = EBPSemanticTypeKind::Float;
+    BodyCall.Arguments[1].LiteralValue.Reset();
+    Diagnostics.Reset();
+    TestFalse(TEXT("ForEachローカルIndexの型偽装を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("Index拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
     return true;
 }
 
