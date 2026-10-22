@@ -2095,11 +2095,10 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         for (const FBPSemanticStatement& Completed : Statement.CompletedStatements)
         {
             FString Part;
+            // Completedはループ外の通常の式文として共通の入口で検証する。
+            // PrintStringだけをここでリテラル限定すると、既存の専用Emitterが
+            // 検証可能なメンバー参照・文字列式まで不必要に拒否してしまう。
             if (Completed.Kind != EBPSemanticStatementKind::Expression ||
-                ((Completed.Expression.FunctionName == TEXT("PrintString") &&
-                    Completed.Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetSystemLibrary")) &&
-                    (Completed.Expression.Arguments.Num() != 7 ||
-                        Completed.Expression.Arguments[1].Kind != EBPSemanticExpressionKind::Literal)) ||
                 EmitExpressionStatement(Completed.Expression, IR.ParentClassPath,
                     TEXT("    "), Part, OutDiagnostics) == false)
             {
