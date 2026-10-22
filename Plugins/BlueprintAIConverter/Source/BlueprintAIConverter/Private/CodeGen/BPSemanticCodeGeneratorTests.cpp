@@ -1233,4 +1233,79 @@ bool FBPSemanticGeneratorForEachLocalTypeTest::RunTest(const FString& Parameters
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorForEachInt32ArgumentsTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ForEachInt32Arguments",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorForEachInt32ArgumentsTest::RunTest(const FString& Parameters)
+{
+    // PlayerControllerのSetMouseLocation(int32, int32)を使用し、
+    // 共通CallがForEachのIndexとElementを直接受け取る正常系を確認する。
+    FBPSemanticIR IR;
+    IR.ParentClassPath = TEXT("/Script/Engine.PlayerController");
+    FBPSemanticVariable Array;
+    Array.Name = TEXT("Numbers");
+    Array.Type.Kind = EBPSemanticTypeKind::Int32;
+    Array.Type.ContainerKind = TEXT("array");
+    Array.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Array);
+
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = Array.Name;
+    Loop.LoopArray.Type = Array.Type;
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopIndexVariable = TEXT("LoopIndex");
+    Loop.LoopElementVariable = TEXT("LoopElement");
+
+    FBPSemanticStatement Body;
+    Body.Kind = EBPSemanticStatementKind::Expression;
+    Body.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Body.Expression.Type.Kind = EBPSemanticTypeKind::Void;
+    Body.Expression.FunctionOwnerPath = IR.ParentClassPath;
+    Body.Expression.FunctionName = TEXT("SetMouseLocation");
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = IR.ParentClassPath;
+    Target.VariableName = TEXT("this");
+    Body.Expression.Arguments.Add(Target);
+    FBPSemanticExpression Index;
+    Index.Kind = EBPSemanticExpressionKind::VariableReference;
+    Index.Type.Kind = EBPSemanticTypeKind::Int32;
+    Index.VariableName = Loop.LoopIndexVariable;
+    Body.Expression.Arguments.Add(Index);
+    FBPSemanticExpression Element = Index;
+    Element.VariableName = Loop.LoopElementVariable;
+    Body.Expression.Arguments.Add(Element);
+    Loop.LoopBodyStatements.Add(Body);
+    Block.Statements.Add(Loop);
+    Function.Blocks.Add(Block);
+    IR.Functions.Add(Function);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ForEachのIndex/Elementを共通Call引数として生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachInt32PlayerController"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("Elementのローカル宣言を生成"),
+        Files.SourceContent.Contains(TEXT("const int32 LoopElement = Numbers[LoopIndex];")));
+    TestTrue(TEXT("共通CallにIndex/Elementを渡す"),
+        Files.SourceContent.Contains(TEXT("this->SetMouseLocation(LoopIndex, LoopElement);")));
+    return true;
+}
+
 #endif
