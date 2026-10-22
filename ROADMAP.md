@@ -90,6 +90,7 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - WorldContextの実引数`this`がReflection上の期待UObjectクラスから派生していること、参照引数ではないことを共通Emitterで追加検証。署名回帰テストにも期待型と非参照属性を追加。
 - 共通Callのfloat/doubleリテラルを数値解析後に正規化し、float範囲外を拒否するよう変更。指数表記への単純な`f`追加を廃止。生成テストとUEビルドは未実施。
 - 共通Callで公開ネイティブbool/int32メンバー参照をReflection型検証付きで出力する経路を追加。Actorのbool参照と型不一致拒否のAutomation Testを追加（未実行）。
+- 共通Callの指数表記float正規化とfloat範囲外拒否をActorのSetActorTickIntervalで検証するAutomation Testを追加（未実行）。
 - **検証待ち:** UEビルド、Automation Test、JSON往復テストは未実施。P0の完了チェックは変更しない。
 
 ## 残存専用処理（完了まで追跡）
