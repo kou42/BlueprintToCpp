@@ -172,7 +172,7 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("UObjectを親クラスとして維持"),
         Files.HeaderContent.Contains(TEXT("public UObject")));
     TestTrue(TEXT("UObjectの公開ヘッダーを含む"),
-        Files.HeaderContent.Contains(TEXT("#include \\"UObject/Object.h\\"")));
+        Files.HeaderContent.Contains(TEXT("#include \"UObject/Object.h\"")));
     TestFalse(TEXT("UObjectにActorのBeginPlayを生成しない"),
         FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(
             ObjectInfo, TEXT("UReflectionGeneratedObject"), FString(), Files, Diagnostics));
