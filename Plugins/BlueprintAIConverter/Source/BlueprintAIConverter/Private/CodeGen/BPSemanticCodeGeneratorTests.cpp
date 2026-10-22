@@ -1205,7 +1205,7 @@ bool FBPSemanticGeneratorForEachLocalTypeTest::RunTest(const FString& Parameters
         FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
             FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly)))
     {
-        const int32 LoopEnd = Files.SourceContent.Find(TEXT("    }\\n"));
+        const int32 LoopEnd = Files.SourceContent.Find(TEXT("    }\n"));
         const int32 CompletedCall = Files.SourceContent.Find(
             TEXT("this->SetActorTickEnabled(false);"));
         TestTrue(TEXT("Completedはループ本体の後に出力"),
