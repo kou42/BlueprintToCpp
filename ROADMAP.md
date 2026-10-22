@@ -76,6 +76,13 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - [ ] Python側の固定親クラス許可リストとUnreal側Reflection解決の差を整理する。
 - [ ] 旧 `FBPActorCodeGenerator` のParity用途を確認し、置き換え完了後に削除を検討する。
 
+## P0作業記録（2026-10-22）
+
+- 共通CallのReflection解決失敗時に、Resolverが返した具体的な診断を呼び出し元へ伝播する変更を追加。従来の一般的な未対応診断も維持する。
+- 専用PrintStringと共通Callの差分を確認: PrintStringはWorldContextの`this`、文字列リテラル／メンバー／Concat／整数からの変換、bool、LinearColor、有限float、Key、ループIndexの式を扱う。一方、共通CallはReflectionでstatic/self/公開オブジェクトTarget、引数数・型・方向を確認するが、引数の出力は主にbool・数値リテラルに限定される。
+- includeは共通経路でstatic所有クラスのIncludePathを取得する一方、PrintString関連ヘッダーには既存の補助処理がある。両者の統合にはWorldContextメタデータ、型付き式、必要ヘッダーの一元化が必要。
+- **検証待ち:** UEビルド、Automation Test、JSON往復テストは未実施。P0の完了チェックは変更しない。
+
 ## 残存専用処理（完了まで追跡）
 
 | 箇所 | 現状・問題 | 移行先／削除条件 |
