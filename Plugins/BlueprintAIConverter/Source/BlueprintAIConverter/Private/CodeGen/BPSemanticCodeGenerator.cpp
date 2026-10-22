@@ -1193,9 +1193,7 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
             }
             if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
             {
-                if ((Expression.SourcePinId.IsValid()
-                            ? IsCompatiblePrintStringIntMember(Expression.VariableName, ParentClassPath, Variables)
-                            : IsValidPrintStringLocalInt(Expression, LocalIndex, LocalElement)) == false ||
+                if (IsIdentifier(Expression.VariableName.ToString()) == false ||
                     Expression.VariableName == TEXT("this") ||
                     IsCompatiblePrintStringMember(Expression.VariableName,
                         ParentClassPath, Variables) == false)
@@ -1365,9 +1363,10 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                 if (IsIdentifier(Expression.VariableName.ToString()) == false ||
                     Expression.Type.ContainerKind.IsEmpty() == false ||
                     Expression.Type.bIsReference || Expression.Type.bIsConst ||
-                    (Expression.SourcePinId.IsValid() &&
-                        IsCompatiblePrintStringIntMember(Expression.VariableName,
-                            ParentClassPath, Variables) == false))
+                    (Expression.SourcePinId.IsValid()
+                        ? IsCompatiblePrintStringIntMember(Expression.VariableName,
+                            ParentClassPath, Variables)
+                        : IsValidPrintStringLocalInt(Expression, LocalIndex, LocalElement)) == false)
                 {
                     return false;
                 }
