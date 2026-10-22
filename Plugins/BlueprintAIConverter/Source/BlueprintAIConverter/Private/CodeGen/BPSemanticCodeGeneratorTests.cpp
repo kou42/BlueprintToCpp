@@ -1323,4 +1323,52 @@ bool FBPSemanticGeneratorForEachInt32ArgumentsTest::RunTest(const FString& Param
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorPrintStringQualifierTest,
+    "BlueprintAIConverter.SemanticIR.Generator.PrintStringQualifier",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorPrintStringQualifierTest::RunTest(const FString& Parameters)
+{
+    // 正常なPrintString IRから文字列引数のみを変異させ、
+    // コンテナや参照修飾をC++の単一FStringとして誤出力しないことを確認する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintStringのLowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticExpression& TextArgument =
+        IR.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1];
+    TextArgument.Kind = EBPSemanticExpressionKind::VariableReference;
+    TextArgument.VariableName = TEXT("TextValue");
+    TextArgument.Type.Kind = EBPSemanticTypeKind::String;
+    TextArgument.LiteralValue.Reset();
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TextArgument.Type.ContainerKind = TEXT("array");
+    TestFalse(TEXT("PrintStringのFString配列参照を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AStringQualifierActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("配列拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+
+    TextArgument.Type.ContainerKind.Reset();
+    TextArgument.Type.bIsReference = true;
+    Diagnostics.Reset();
+    TestFalse(TEXT("PrintStringのFString参照修飾を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AStringQualifierActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("参照拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+
+    TextArgument.Type.bIsReference = false;
+    TextArgument.Type.bIsConst = true;
+    Diagnostics.Reset();
+    TestFalse(TEXT("PrintStringのconst修飾を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AStringQualifierActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("const拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
 #endif
