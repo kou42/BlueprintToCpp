@@ -1058,8 +1058,11 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
     else if (TextArgument.Kind == EBPSemanticExpressionKind::VariableReference &&
         TextArgument.Type.Kind == EBPSemanticTypeKind::String)
     {
-        // メンバー変数を明示的に参照し、ローカル変数との名前衝突を避ける。
-        if (IsIdentifier(TextArgument.VariableName.ToString()) == false ||
+        // FStringの単一値だけを文字列メンバー参照として出力する。
+        // コンテナや参照修飾を無視すると、IRの型偽装で不正なC++式を作り得る。
+        if (TextArgument.Type.ContainerKind.IsEmpty() == false ||
+            TextArgument.Type.bIsReference || TextArgument.Type.bIsConst ||
+            IsIdentifier(TextArgument.VariableName.ToString()) == false ||
             TextArgument.VariableName == TEXT("this"))
         {
             Diagnostics.Add(TEXT("Invalid PrintString member variable name"));
@@ -1080,7 +1083,9 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         EmitString = [&](const FBPSemanticExpression& Expression,
             int32 Depth, FString& Result) -> bool
         {
-            if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::String)
+            if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::String ||
+                Expression.Type.ContainerKind.IsEmpty() == false ||
+                Expression.Type.bIsReference || Expression.Type.bIsConst)
             {
                 return false;
             }
