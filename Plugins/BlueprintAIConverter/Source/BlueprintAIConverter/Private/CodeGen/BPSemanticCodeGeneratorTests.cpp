@@ -352,6 +352,13 @@ bool FBPReflectedCallResolverInheritanceTest::RunTest(const FString& Parameters)
             Call.Function->HasMetaData(TEXT("WorldContext")));
         TestTrue(TEXT("WorldContext引数が署名に存在"),
             Call.Signature.ParameterNames.Contains(FName(TEXT("WorldContextObject"))));
+        TestTrue(TEXT("WorldContextが先頭引数"),
+            Call.Signature.ParameterNames.IsEmpty() == false &&
+            Call.Signature.ParameterNames[0] == FName(TEXT("WorldContextObject")));
+        TestTrue(TEXT("WorldContextがオブジェクト入力引数"),
+            Call.Signature.ParameterTypes.IsEmpty() == false &&
+            Call.Signature.ParameterTypes[0].Kind == EBPSemanticTypeKind::Object &&
+            Call.Signature.OutputParameters[0] == false);
     }
 
     return true;
