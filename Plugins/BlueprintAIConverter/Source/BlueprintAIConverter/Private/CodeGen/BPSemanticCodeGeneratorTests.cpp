@@ -1194,6 +1194,31 @@ bool FBPSemanticGeneratorForEachLocalTypeTest::RunTest(const FString& Parameters
     TestFalse(TEXT("Element未使用時に要素コピーを生成しない"),
         Files.SourceContent.Contains(TEXT("const int32 LoopElement =")));
 
+    // CompletedもPrintString専用条件を通さず、通常の共通Callで検証する。
+    FBPSemanticStatement Completed;
+    Completed.Kind = EBPSemanticStatementKind::Expression;
+    Completed.Expression = BodyCall;
+    Completed.Expression.Arguments[1].LiteralValue = TEXT("false");
+    IR.Functions[0].Blocks[0].Statements[0].CompletedStatements.Add(Completed);
+    Diagnostics.Reset();
+    if (TestTrue(TEXT("ForEach Completedの共通Callを生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly)))
+    {
+        const int32 LoopEnd = Files.SourceContent.Find(TEXT("    }\\n"));
+        const int32 CompletedCall = Files.SourceContent.Find(
+            TEXT("this->SetActorTickEnabled(false);"));
+        TestTrue(TEXT("Completedはループ本体の後に出力"),
+            LoopEnd != INDEX_NONE && CompletedCall > LoopEnd);
+    }
+    else
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+    }
+
     // 同じループ内でIndex/Elementの型偽装が拒否されることを検証する。
     BodyCall.FunctionName = TEXT("SetActorTickInterval");
     BodyCall.Arguments[1].Kind = EBPSemanticExpressionKind::VariableReference;
