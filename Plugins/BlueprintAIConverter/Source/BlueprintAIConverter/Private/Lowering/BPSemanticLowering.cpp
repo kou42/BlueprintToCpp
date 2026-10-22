@@ -4643,6 +4643,11 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
         bool bHasNonBeginPlayEntry = false;
         for (const FBPIRGraph& Graph : GraphIR.Graphs)
         {
+            // 空のConstruction Script等のEntryだけでは通常関数扱いしない。
+            if (Graph.ExecEdges.IsEmpty() && Graph.DataEdges.IsEmpty())
+            {
+                continue;
+            }
             for (const FBPIRNode& Node : Graph.Nodes)
             {
                 if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry") ||
