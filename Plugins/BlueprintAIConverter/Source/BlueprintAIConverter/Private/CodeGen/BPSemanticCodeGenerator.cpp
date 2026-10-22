@@ -1012,8 +1012,27 @@ bool EmitBranchCondition(const FBPSemanticExpression& Expression,
 // PrintString専用経路ではBlueprint変数の宣言一覧を受け取らないため、
 // 少なくとも既存ネイティブプロパティと同名の場合はReflection型を照合する。
 // 見つからない名前は既存のBlueprint変数参照との互換性を維持する。
-bool IsCompatiblePrintStringMember(const FName Name, const FString& ParentClassPath)
+bool IsCompatiblePrintStringMember(const FName Name, const FString& ParentClassPath,
+    const TArray<FBPSemanticVariable>* Variables)
 {
+    // Semantic変数一覧が渡された経路では、名前だけで任意の
+    // BlueprintメンバーをC++に出力せず、宣言された型を照合する。
+    if (Variables != nullptr)
+    {
+        const FBPSemanticVariable* Variable = Variables->FindByPredicate(
+            [Name](const FBPSemanticVariable& Candidate)
+            {
+                return Candidate.Name == Name;
+            });
+        if (Variable != nullptr)
+        {
+            return Variable->Type.Kind == EBPSemanticTypeKind::String &&
+                Variable->Type.ContainerKind.IsEmpty() &&
+                Variable->Type.bIsReference == false &&
+                Variable->Type.bIsConst == false &&
+                Variable->ReflectedCppType == TEXT("FString");
+        }
+    }
     const UClass* ParentClass = FindObject<UClass>(nullptr, *ParentClassPath);
     if (ParentClass == nullptr)
     {
@@ -1030,7 +1049,7 @@ bool IsCompatiblePrintStringMember(const FName Name, const FString& ParentClassP
 
 bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
     const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
-    TArray<FString>& Diagnostics)
+    TArray<FString>& Diagnostics, const TArray<FBPSemanticVariable>* Variables)
 {
     OutStatement.Reset();
     if (Call.Kind != EBPSemanticExpressionKind::FunctionCall ||
@@ -1083,7 +1102,7 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
             TextArgument.Type.bIsReference || TextArgument.Type.bIsConst ||
             IsIdentifier(TextArgument.VariableName.ToString()) == false ||
             TextArgument.VariableName == TEXT("this") ||
-            IsCompatiblePrintStringMember(TextArgument.VariableName, ParentClassPath) == false)
+            IsCompatiblePrintStringMember(TextArgument.VariableName, ParentClassPath, Variables) == false)
         {
             Diagnostics.Add(TEXT("Invalid PrintString member variable name or reflected type"));
             return false;
@@ -1127,7 +1146,7 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                 if (IsIdentifier(Expression.VariableName.ToString()) == false ||
                     Expression.VariableName == TEXT("this") ||
                     IsCompatiblePrintStringMember(Expression.VariableName,
-                        ParentClassPath) == false)
+                        ParentClassPath, Variables) == false)
                 {
                     return false;
                 }
@@ -1367,7 +1386,8 @@ bool EmitActorLocationStatement(const FBPSemanticExpression& Call,
 bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
     TArray<FString>& Diagnostics, const FName LocalIndex = NAME_None,
-    const FName LocalElement = NAME_None)
+    const FName LocalElement = NAME_None,
+    const TArray<FBPSemanticVariable>* Variables = nullptr)
 {
     if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall)
     {
@@ -1378,7 +1398,7 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
         Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetSystemLibrary"))
     {
         return EmitPrintStringStatement(Expression, ParentClassPath,
-            Indent, OutStatement, Diagnostics);
+            Indent, OutStatement, Diagnostics, Variables);
     }
     if (Expression.FunctionName == TEXT("K2_SetActorLocation") &&
         Expression.FunctionOwnerPath == TEXT("/Script/Engine.Actor"))
@@ -2104,7 +2124,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             }
             if (EmitExpressionStatement(Body.Expression, IR.ParentClassPath,
                     TEXT("        "), Part, OutDiagnostics,
-                    Statement.LoopIndexVariable, Statement.LoopElementVariable) == false)
+                    Statement.LoopIndexVariable, Statement.LoopElementVariable,
+                    &IR.Variables) == false)
             {
                 return false;
             }
@@ -2135,7 +2156,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             // 検証可能なメンバー参照・文字列式まで不必要に拒否してしまう。
             if (Completed.Kind != EBPSemanticStatementKind::Expression ||
                 EmitExpressionStatement(Completed.Expression, IR.ParentClassPath,
-                    TEXT("    "), Part, OutDiagnostics) == false)
+                    TEXT("    "), Part, OutDiagnostics,
+                    NAME_None, NAME_None, &IR.Variables) == false)
             {
                 OutDiagnostics.Add(TEXT("ForEachLoop Completed contains an unsupported semantic statement"));
                 return false;
@@ -2338,7 +2360,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     {
         FString ExpressionStatementCode;
         if (EmitExpressionStatement(Call, IR.ParentClassPath, TEXT("    "),
-            ExpressionStatementCode, OutDiagnostics) == false)
+            ExpressionStatementCode, OutDiagnostics,
+            NAME_None, NAME_None, &IR.Variables) == false)
         {
             return false;
         }
