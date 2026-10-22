@@ -1522,10 +1522,21 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 {
                     return false;
                 }
-                Value = Argument.LiteralValue;
+                // 検証済み数値を正規化して出力する。入力文字列に直接fを付けると、
+                // 指数表記や既存の接尾辞により不正なC++リテラルになり得る。
                 if (Argument.Type.Kind == EBPSemanticTypeKind::Float)
                 {
-                    Value += TEXT("f");
+                    const float FloatValue = static_cast<float>(Parsed);
+                    if (FMath::IsFinite(FloatValue) == false)
+                    {
+                        Diagnostics.Add(TEXT("Reflected float argument exceeds finite float range"));
+                        return false;
+                    }
+                    Value = FloatLiteral(FloatValue);
+                }
+                else
+                {
+                    Value = DoubleLiteral(Parsed);
                 }
             }
             else if (Argument.Type.Kind == EBPSemanticTypeKind::Struct &&
