@@ -164,6 +164,19 @@ bool FBPNativeSubclassGeneratorTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+    // UObjectにはActor系ライフサイクルがない。通常の派生UCLASSは生成でき、
+    // 未対応のoverrideだけを拒否することを確認する。
+    TestTrue(TEXT("UObject派生クラスの基本生成"),
+        FBPNativeSubclassGenerator::Generate(
+            ObjectInfo, TEXT("UReflectionGeneratedObject"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("UObjectを親クラスとして維持"),
+        Files.HeaderContent.Contains(TEXT("public UObject")));
+    TestTrue(TEXT("UObjectの公開ヘッダーを含む"),
+        Files.HeaderContent.Contains(TEXT("#include \\"UObject/Object.h\\"")));
+    TestFalse(TEXT("UObjectにActorのBeginPlayを生成しない"),
+        FBPNativeSubclassGenerator::GenerateWithBeginPlayOverride(
+            ObjectInfo, TEXT("UReflectionGeneratedObject"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("未対応BeginPlayの拒否時に出力を消去"), Files.HeaderContent.IsEmpty());
     TestFalse(TEXT("未登録の親クラスにはTickを生成しない"),
         FBPNativeSubclassGenerator::GenerateWithTickOverride(
             ObjectInfo, TEXT("UReflectionGeneratedObject"), FString(), Files, Diagnostics));
