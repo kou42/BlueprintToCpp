@@ -927,4 +927,66 @@ bool FBPSemanticGeneratorImportTextVariableTest::RunTest(const FString& Paramete
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorReflectedBoolMemberTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ReflectedBoolMember",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorReflectedBoolMemberTest::RunTest(const FString& Parameters)
+{
+    // Actorの公開ネイティブboolを、PrintString専用処理を経由せず共通Callへ渡す。
+    FBPSemanticIR Semantic;
+    Semantic.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Statement;
+    Statement.Kind = EBPSemanticStatementKind::Expression;
+    FBPSemanticExpression& Call = Statement.Expression;
+    Call.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Call.Type.Kind = EBPSemanticTypeKind::Void;
+    Call.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Call.FunctionName = TEXT("SetActorTickEnabled");
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = Semantic.ParentClassPath;
+    Target.VariableName = TEXT("this");
+    Call.Arguments.Add(Target);
+    FBPSemanticExpression Argument;
+    Argument.Kind = EBPSemanticExpressionKind::VariableReference;
+    Argument.Type.Kind = EBPSemanticTypeKind::Bool;
+    Argument.VariableName = TEXT("bCanBeDamaged");
+    Call.Arguments.Add(Argument);
+    Block.Statements.Add(Statement);
+    Function.Blocks.Add(Block);
+    Semantic.Functions.Add(Function);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("公開ネイティブboolを共通Callへ渡せる"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedBoolActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("共通Callでboolメンバー参照を生成"),
+        Files.SourceContent.Contains(TEXT("this->SetActorTickEnabled(this->bCanBeDamaged);")));
+
+    // Reflection上の型とIR型が異なる変数を安全に拒否する。
+    Semantic.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1].VariableName =
+        TEXT("InitialLifeSpan");
+    Diagnostics.Reset();
+    TestFalse(TEXT("floatプロパティをboolとして参照しない"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedBoolActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("型不一致で生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
 #endif
