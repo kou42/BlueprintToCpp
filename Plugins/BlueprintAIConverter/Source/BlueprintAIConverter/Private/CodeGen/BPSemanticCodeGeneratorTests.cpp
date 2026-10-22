@@ -339,6 +339,21 @@ bool FBPReflectedCallResolverInheritanceTest::RunTest(const FString& Parameters)
             TEXT("SetActorTickEnabled"), TEXT("/Script/Engine.ActorComponent"),
             false, Call, Diagnostics));
 
+    // WorldContextを持つ静的関数も、Reflectionの所有クラスと署名から解決する。
+    // 専用PrintString Emitterの存在に依存しないResolverの回帰テスト。
+    Diagnostics.Reset();
+    TestTrue(TEXT("PrintStringの静的UFunctionをReflectionから解決"),
+        FBPReflectedCallResolver::Resolve(TEXT("/Script/Engine.KismetSystemLibrary"),
+            TEXT("PrintString"), TEXT("/Script/Engine.Actor"),
+            true, Call, Diagnostics));
+    if (Call.Function != nullptr)
+    {
+        TestTrue(TEXT("WorldContextメタデータを持つ"),
+            Call.Function->HasMetaData(TEXT("WorldContext")));
+        TestTrue(TEXT("WorldContext引数が署名に存在"),
+            Call.Signature.ParameterNames.Contains(FName(TEXT("WorldContextObject"))));
+    }
+
     return true;
 }
 
