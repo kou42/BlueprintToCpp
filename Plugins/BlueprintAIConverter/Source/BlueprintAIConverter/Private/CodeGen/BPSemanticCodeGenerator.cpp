@@ -1009,6 +1009,25 @@ bool EmitBranchCondition(const FBPSemanticExpression& Expression,
     return true;
 }
 
+// PrintString専用経路ではBlueprint変数の宣言一覧を受け取らないため、
+// 少なくとも既存ネイティブプロパティと同名の場合はReflection型を照合する。
+// 見つからない名前は既存のBlueprint変数参照との互換性を維持する。
+bool IsCompatiblePrintStringMember(const FName Name, const FString& ParentClassPath)
+{
+    const UClass* ParentClass = FindObject<UClass>(nullptr, *ParentClassPath);
+    if (ParentClass == nullptr)
+    {
+        return false;
+    }
+    const FProperty* Member = ParentClass->FindPropertyByName(Name);
+    if (Member == nullptr)
+    {
+        return true;
+    }
+    return CastField<FStrProperty>(Member) != nullptr &&
+        Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic);
+}
+
 bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
     const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
     TArray<FString>& Diagnostics)
@@ -1063,9 +1082,10 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         if (TextArgument.Type.ContainerKind.IsEmpty() == false ||
             TextArgument.Type.bIsReference || TextArgument.Type.bIsConst ||
             IsIdentifier(TextArgument.VariableName.ToString()) == false ||
-            TextArgument.VariableName == TEXT("this"))
+            TextArgument.VariableName == TEXT("this") ||
+            IsCompatiblePrintStringMember(TextArgument.VariableName, ParentClassPath) == false)
         {
-            Diagnostics.Add(TEXT("Invalid PrintString member variable name"));
+            Diagnostics.Add(TEXT("Invalid PrintString member variable name or reflected type"));
             return false;
         }
         TextExpression = FString::Printf(TEXT("this->%s"),
@@ -1105,7 +1125,9 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
             if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
             {
                 if (IsIdentifier(Expression.VariableName.ToString()) == false ||
-                    Expression.VariableName == TEXT("this"))
+                    Expression.VariableName == TEXT("this") ||
+                    IsCompatiblePrintStringMember(Expression.VariableName,
+                        ParentClassPath) == false)
                 {
                     return false;
                 }
