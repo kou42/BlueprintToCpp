@@ -1437,4 +1437,36 @@ bool FBPSemanticGeneratorPrintStringDeclaredVariableTest::RunTest(const FString&
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorPrintStringUnknownMemberTest,
+    "BlueprintAIConverter.SemanticIR.Generator.PrintStringUnknownMember",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorPrintStringUnknownMemberTest::RunTest(const FString& Parameters)
+{
+    // Blueprint宣言にも親ActorのReflectionにもない文字列メンバー名は、
+    // 未定義識別子を含むC++を生成しないよう拒否する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintStringのLowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticExpression& Argument =
+        IR.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1];
+    Argument.Kind = EBPSemanticExpressionKind::VariableReference;
+    Argument.VariableName = TEXT("UnknownPrintStringMemberForTest");
+    Argument.Type.Kind = EBPSemanticTypeKind::String;
+    Argument.LiteralValue.Reset();
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("未宣言のFStringメンバーを拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AUnknownStringMemberActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("未宣言参照の拒否時に生成物を公開しない"),
+        Files.SourceContent.IsEmpty());
+    return true;
+}
+
 #endif
