@@ -56,6 +56,33 @@ FBPSemanticStatement MakePrintIndex(const FName IndexName)
     return Statement;
 }
 
+// Concat -> Conv_IntToString -> Add_IntInt の複合式を構築する。
+// 単純なConvと同じスコープ規則がネストした式にも適用されることを検証する。
+FBPSemanticStatement MakeNestedPrintIndex(const FName IndexName)
+{
+    FBPSemanticStatement Statement = MakePrintIndex(IndexName);
+    FBPSemanticExpression& Conversion = Statement.Expression.Arguments[1];
+    FBPSemanticExpression Addition;
+    Addition.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Addition.Type.Kind = EBPSemanticTypeKind::Int32;
+    Addition.FunctionName = TEXT("Add_IntInt");
+    Addition.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Addition.Arguments.Add(Conversion.Arguments[0]);
+    Addition.Arguments.Add(MakeLiteral(EBPSemanticTypeKind::Int32, TEXT("1")));
+    Conversion.Arguments.Reset();
+    Conversion.Arguments.Add(Addition);
+
+    FBPSemanticExpression Concat;
+    Concat.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Concat.Type.Kind = EBPSemanticTypeKind::String;
+    Concat.FunctionName = TEXT("Concat_StrStr");
+    Concat.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+    Concat.Arguments.Add(MakeLiteral(EBPSemanticTypeKind::String, TEXT("Index: ")));
+    Concat.Arguments.Add(Conversion);
+    Statement.Expression.Arguments[1] = MoveTemp(Concat);
+    return Statement;
+}
+
 FBPSemanticIR MakeLoopIR(const FName PrintedName)
 {
     FBPSemanticIR IR;
@@ -105,6 +132,32 @@ bool FBPSemanticPrintStringScopeTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("ループ完了後のIndex参照は拒否"),
         FBPSemanticCodeGenerator::Generate(Completed, TEXT("AScopeTestActor"),
             TEXT(""), Files, Diagnostics));
+    // ネスト式でもループIndexを有効なローカル参照として扱う。
+    FBPSemanticIR Nested = MakeLoopIR(TEXT("Index"));
+    Nested.Functions[0].Blocks[0].Statements[0].LoopBodyStatements[0] =
+        MakeNestedPrintIndex(TEXT("Index"));
+    TestTrue(TEXT("Concat内の整数加算とIndexを生成可能"),
+        FBPSemanticCodeGenerator::Generate(Nested, TEXT("AScopeTestActor"),
+            TEXT(""), Files, Diagnostics));
+    TestTrue(TEXT("ネスト式の加算を出力"),
+        Files.SourceContent.Contains(TEXT("Conv_IntToString((Index + 1))")));
+
+    Nested.Functions[0].Blocks[0].Statements[0].LoopBodyStatements[0] =
+        MakeNestedPrintIndex(TEXT("UnknownIndex"));
+    TestFalse(TEXT("Concat内の未宣言Indexを拒否"),
+        FBPSemanticCodeGenerator::Generate(Nested, TEXT("AScopeTestActor"),
+            TEXT(""), Files, Diagnostics));
+
+    // SourcePinIdを偽装しても、存在しないint32メンバー参照は許可しない。
+    Nested.Functions[0].Blocks[0].Statements[0].LoopBodyStatements[0] =
+        MakeNestedPrintIndex(TEXT("MissingMember"));
+    FBPSemanticExpression& Member = Nested.Functions[0].Blocks[0].Statements[0]
+        .LoopBodyStatements[0].Expression.Arguments[1].Arguments[1].Arguments[0].Arguments[0];
+    Member.SourcePinId = FGuid::NewGuid();
+    TestFalse(TEXT("Concat内の未宣言int32メンバーを拒否"),
+        FBPSemanticCodeGenerator::Generate(Nested, TEXT("AScopeTestActor"),
+            TEXT(""), Files, Diagnostics));
+
     return true;
 }
 #endif
