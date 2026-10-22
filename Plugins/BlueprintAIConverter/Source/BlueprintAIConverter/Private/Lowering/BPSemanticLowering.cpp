@@ -4637,14 +4637,45 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
     if (bHasBranch == false && bHasForLoop == false && bHasPrintString &&
         bHasGetActorLocation == false && bHasSetActorLocation == false)
     {
+        // Function Entry / Custom EventはBeginPlay専用経路より先に判定する。
+        // UObjectなどBeginPlayを持たないクラスの通常関数を、Actorの
+        // ライフサイクル前提で誤って検証しないための振り分けである。
+        bool bHasNonBeginPlayEntry = false;
+        for (const FBPIRGraph& Graph : GraphIR.Graphs)
+        {
+            // 空のConstruction Script等のEntryだけでは通常関数扱いしない。
+            if (Graph.ExecEdges.IsEmpty() && Graph.DataEdges.IsEmpty())
+            {
+                continue;
+            }
+            for (const FBPIRNode& Node : Graph.Nodes)
+            {
+                if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry") ||
+                    Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent") ||
+                    (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
+                        Node.FunctionName != TEXT("ReceiveBeginPlay")))
+                {
+                    bHasNonBeginPlayEntry = true;
+                    break;
+                }
+            }
+            if (bHasNonBeginPlayEntry)
+            {
+                break;
+            }
+        }
+        if (bHasNonBeginPlayEntry)
+        {
+            // 対象外の実行グラフがあれば既存Loweringが診断付きで拒否する。
+            return LowerSingleEntryPrintStringImpl(Blueprint, GraphIR, OutIR);
+        }
         FBPSemanticIR BeginPlayIR;
         if (LowerPrintString(Blueprint, GraphIR, BeginPlayIR))
         {
             OutIR = MoveTemp(BeginPlayIR);
             return true;
         }
-        // BeginPlayの限定形状に一致しない場合だけ、Reflectionで署名を確定できる
-        // Function Entry / Custom Event経路を試す。
+        // BeginPlayの限定形状に一致しない場合も、既存の診断を維持する。
         return LowerSingleEntryPrintStringImpl(Blueprint, GraphIR, OutIR);
     }
     if (bHasBranch == false && bHasPrintString == false &&
