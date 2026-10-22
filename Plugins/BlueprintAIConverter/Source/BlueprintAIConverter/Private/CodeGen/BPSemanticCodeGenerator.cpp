@@ -2317,8 +2317,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         for (const FBPSemanticStatement& CompletedStatement : Statement.CompletedStatements)
         {
             FString StatementCode;
+            // Completedはforの外側で実行されるため、Indexを有効なローカル名として渡さない。
             if (EmitForLoopBodyStatement(CompletedStatement, IR.ParentClassPath,
-                    IR.Variables, Statement.LoopIndexVariable, TEXT("    "),
+                    IR.Variables, NAME_None, TEXT("    "),
                     0, StatementCode, OutDiagnostics) == false)
             {
                 OutDiagnostics.Add(TEXT("ForLoop Completed contains an unsupported semantic statement"));
