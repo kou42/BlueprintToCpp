@@ -1339,7 +1339,8 @@ bool EmitActorLocationStatement(const FBPSemanticExpression& Call,
 // ループやBranchは特定の関数名を直接判定せず、この関数を通して対応範囲を共有する。
 bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
-    TArray<FString>& Diagnostics)
+    TArray<FString>& Diagnostics, const FName LocalIndex = NAME_None,
+    const FName LocalElement = NAME_None)
 {
     if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall)
     {
@@ -1489,6 +1490,26 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 }
                 Arguments += FString::Printf(TEXT("this->%s"),
                     *Argument.VariableName.ToString());
+                continue;
+            }
+            // ForEachのローカルIndex/Elementは、ループ構築側で型と名前の
+            // 衝突を検証済みの場合だけ参照する。メンバーとは別のスコープで扱い、
+            // 未検証の任意識別子をC++式として出力しない。
+            if (Argument.Kind == EBPSemanticExpressionKind::VariableReference &&
+                Argument.Type.Kind == EBPSemanticTypeKind::Int32 &&
+                Argument.Type.ContainerKind.IsEmpty() &&
+                Argument.Type.bIsReference == false &&
+                Argument.Type.bIsConst == false &&
+                (Argument.VariableName == LocalIndex ||
+                    Argument.VariableName == LocalElement) &&
+                Argument.VariableName.IsNone() == false &&
+                IsIdentifier(Argument.VariableName.ToString()))
+            {
+                if (Index > FirstArgument)
+                {
+                    Arguments += TEXT(", ");
+                }
+                Arguments += Argument.VariableName.ToString();
                 continue;
             }
             // 共通Callのプリミティブ引数は公開ネイティブプロパティから参照できる。
@@ -2041,7 +2062,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
                 return false;
             }
             if (EmitExpressionStatement(Body.Expression, IR.ParentClassPath,
-                    TEXT("        "), Part, OutDiagnostics) == false)
+                    TEXT("        "), Part, OutDiagnostics,
+                    Statement.LoopIndexVariable, Statement.LoopElementVariable) == false)
             {
                 return false;
             }
@@ -2050,6 +2072,16 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
                 Body.Expression.Arguments[1].Arguments[0].VariableName == Statement.LoopElementVariable)
             {
                 bUsesElement = true;
+            }
+            // PrintString以外の共通Callでも、要素を参照した場合は宣言が必要。
+            for (const FBPSemanticExpression& Argument : Body.Expression.Arguments)
+            {
+                if (Argument.Kind == EBPSemanticExpressionKind::VariableReference &&
+                    Argument.Type.Kind == EBPSemanticTypeKind::Int32 &&
+                    Argument.VariableName == Statement.LoopElementVariable)
+                {
+                    bUsesElement = true;
+                }
             }
             BodyCode += Part;
         }
