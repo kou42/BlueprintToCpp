@@ -1,6 +1,6 @@
 # BlueprintToCpp ロードマップ
 
-最終更新: 2026-10-22
+最終更新: 2026-10-23
 
 ## 目的と原則
 
@@ -76,7 +76,32 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - [ ] Python側の固定親クラス許可リストとUnreal側Reflection解決の差を整理する。
 - [ ] 旧 `FBPActorCodeGenerator` のParity用途を確認し、置き換え完了後に削除を検討する。
 
-## P0作業記録（2026-10-22）
+## P0進捗サマリー（2026-10-23）
+
+**状態: 実装進行中／検証待ち。P0完了条件は未達。** PR #111（`fix/p0-reflected-numeric-literals-20261023`、Draft・未マージ）で共通CallとPrintString参照検証を拡張中。
+
+| 領域 | 実装済みの範囲 | 残る課題 |
+| --- | --- | --- |
+| 共通Call | Reflectionに基づく署名・対象・WorldContext検証、文字列・数値・bool・LinearColorの一部リテラルと公開ネイティブプリミティブ参照 | PrintStringの全引数・式・デフォルト値を共通経路へ統合し、static／instance双方の回帰を確認 |
+| ForEachLoop | int32 Index／Elementの共通Call引数化、型偽装と継承メンバー名衝突の拒否、Completedの共通式文Emitter経由 | PrintString専用判定の除去、ループ変数のネスト式対応と正常系・拒否系テスト実行 |
+| PrintString | 直接・Concat内FString参照の型修飾検証、ネイティブReflection照合、Semantic変数宣言照合、未宣言名拒否 | 整数変換・演算などのネスト式参照元検証、専用Emitter削減、既存Parity回帰 |
+| JSON／Python | 今回のP0実装ではスキーマ変更なし | JSON export／Python validation／roundtripの既存契約を実行確認 |
+
+### 検証状況の区分
+
+- **ユーザー報告済み:** 2026-10-23時点でUEビルドに問題なし。ただし、報告以降の追加コミットを含む最新HEADのビルド成功を意味しない。
+- **未確認:** 最新HEADのUHT／UBTビルド、追加Automation Testの実行結果、既存PrintString Parity、ForEach正常系・拒否系、Semantic JSONとPythonの往復テスト。
+- **判定:** テスト未実施のためP0のチェックボックスは未完了のまま維持する。
+
+### 次の実装・検証順序
+
+1. PrintStringのネスト式（Concat／Conv_IntToString／整数演算）で、ローカルIndexとBlueprint／ネイティブメンバーの参照元・型を共通ルールで検証する。
+2. PrintStringの専用Emitterを共通Callへ段階移行する。WorldContext、LinearColor、必要include、既存Parityの互換性を先に確認する。
+3. UE Automation TestでPrintString、ForEach Index／Element、Completed、共通Callの正常系・拒否系を実行する。
+4. Semantic JSON export、Python schema validation、golden／roundtripを実行し、C++出力との整合性を確認する。
+5. 結果をPRへ記録し、残存専用処理を更新した後にP0完了を判定する。
+
+## P0作業記録（2026-10-22〜2026-10-23）
 
 - 共通CallのReflection解決失敗時に、Resolverが返した具体的な診断を呼び出し元へ伝播する変更を追加。従来の一般的な未対応診断も維持する。
 - 専用PrintStringと共通Callの差分を確認: PrintStringはWorldContextの`this`、文字列リテラル／メンバー／Concat／整数からの変換、bool、LinearColor、有限float、Key、ループIndexの式を扱う。一方、共通CallはReflectionでstatic/self/公開オブジェクトTarget、引数数・型・方向を確認するが、引数の出力は主にbool・数値リテラルに限定される。
@@ -102,15 +127,15 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - PrintStringの直接FStringメンバー参照とConcat内のFString参照に対し、親クラスのネイティブプロパティが存在する場合はReflectionでFString型・公開指定を検証。Actor::InitialLifeSpanの型偽装拒否テストを追加（未実行）。Blueprint独自変数は従来経路を維持。
 - PrintStringの直接/Concat内FString参照にSemantic IRの変数一覧を渡し、宣言済みBlueprint変数についてFString単一値・無修飾・C++型名を照合。int32変数のFString偽装拒否テストを追加（未実行）。未宣言名の一律拒否は既存互換性を踏まえ今後の課題。
 - PrintStringの未宣言FStringメンバー名をSemantic変数一覧・親クラスReflectionの双方で確認し、両方に存在しない場合は拒否。関数先行文・ForLoop内の式文にも変数一覧を渡し、未宣言参照拒否テストを追加（未実行）。
-- **検証待ち:** UEビルド、Automation Test、JSON往復テストは未実施。P0の完了チェックは変更しない。
+- **検証待ち:** ユーザー報告による以前のUEビルド成功は確認済み。最新HEADのビルド、Automation Test、JSON往復テストは未確認。P0の完了チェックは変更しない。
 
 ## 残存専用処理（完了まで追跡）
 
 | 箇所 | 現状・問題 | 移行先／削除条件 |
 | --- | --- | --- |
-| `BPSemanticCodeGenerator.cpp::EmitPrintStringStatement` | PrintStringの専用出力 | 共通UFunction Call Emitterで既存ケースがすべて通れば削除 |
+| `BPSemanticCodeGenerator.cpp::EmitPrintStringStatement` | PrintString専用出力。直接／Concat内のFString参照はReflection・Semantic宣言を照合するが、整数変換などのネスト式に検証差が残る | WorldContext・文字列式・LinearColor・既存Parityを共通UFunction Call Emitterで満たし、回帰テストが通れば削除 |
 | `BPSemanticCodeGenerator.cpp::EmitExpressionStatement` | PrintStringを共通解決より先に分岐 | 共通Call解決に一本化後、分岐を削除 |
-| `BPSemanticCodeGenerator.cpp` のForEachLoop出力 | PrintString名を直接判定 | ループ値を一般の式として渡せれば専用判定を削除 |
+| `BPSemanticCodeGenerator.cpp` のForEachLoop出力 | Index／Elementの共通Call引数化とCompleted共通化は進捗。ただしPrintString名による判定が残る | ネストした式へのローカル変数伝播と回帰テストが通れば専用判定を削除 |
 | `BPSemanticLowering.cpp::Lower` | ノードの有無でパターンを選択 | 関数単位のEntry／Statement Loweringへ移行後に撤去 |
 | Branch／ForLoop／ForEachLoop Lowering | BeginPlay前提の検証 | 共通Entry解析とクラス固有Policyへ分離後に整理 |
 | `BPSemanticCodeGenerator.cpp::Generate` | 単一関数・単一Block制限 | 複数関数／CFG出力とテストが通れば撤去 |
