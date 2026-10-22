@@ -435,6 +435,20 @@ bool FBPSemanticGeneratorActorNoArgBranchTest::RunTest(const FString& Parameters
     }
     TestTrue(TEXT("bool引数を生成"),
         WithArgument.SourceContent.Contains(TEXT("this->SetActorTickEnabled(false);")));
+
+    // Reflectionのbool引数へFString変数を誤って渡さないことを検証する。
+    // 失敗時には部分的なC++ファイルを公開しない。
+    FBPSemanticExpression& InvalidArgument = ActorCall.Expression.Arguments.Last();
+    InvalidArgument.Kind = EBPSemanticExpressionKind::VariableReference;
+    InvalidArgument.Type.Kind = EBPSemanticTypeKind::String;
+    InvalidArgument.VariableName = TEXT("UnverifiedString");
+    FBPGeneratedActorFiles InvalidFiles;
+    TArray<FString> InvalidDiagnostics;
+    TestFalse(TEXT("Reflectionと一致しないFString変数を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AActorNoArgBranch"),
+            FString(), InvalidFiles, InvalidDiagnostics));
+    TestTrue(TEXT("型不一致の診断を返す"), InvalidDiagnostics.IsEmpty() == false);
+    TestTrue(TEXT("失敗時にソースを公開しない"), InvalidFiles.SourceContent.IsEmpty());
     return true;
 }
 
