@@ -1491,6 +1491,35 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                     *Argument.VariableName.ToString());
                 continue;
             }
+            // 共通Callのbool/int32引数は公開ネイティブプロパティからも参照可能。
+            // 変数名だけを信用せず、実際のReflection型とアクセス指定を検証する。
+            if (Argument.Kind == EBPSemanticExpressionKind::VariableReference &&
+                (Argument.Type.Kind == EBPSemanticTypeKind::Bool ||
+                 Argument.Type.Kind == EBPSemanticTypeKind::Int32))
+            {
+                const FProperty* Member = ParentClass != nullptr
+                    ? ParentClass->FindPropertyByName(Argument.VariableName) : nullptr;
+                const bool bMatchesType =
+                    (Argument.Type.Kind == EBPSemanticTypeKind::Bool &&
+                        CastField<FBoolProperty>(Member) != nullptr) ||
+                    (Argument.Type.Kind == EBPSemanticTypeKind::Int32 &&
+                        CastField<FIntProperty>(Member) != nullptr);
+                if (Member == nullptr || bMatchesType == false ||
+                    Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic) == false ||
+                    IsIdentifier(Argument.VariableName.ToString()) == false ||
+                    Argument.VariableName == TEXT("this"))
+                {
+                    Diagnostics.Add(TEXT("Reflected bool/int32 member is not a matching public native property"));
+                    return false;
+                }
+                if (Index > FirstArgument)
+                {
+                    Arguments += TEXT(", ");
+                }
+                Arguments += FString::Printf(TEXT("this->%s"),
+                    *Argument.VariableName.ToString());
+                continue;
+            }
             if (Argument.Kind != EBPSemanticExpressionKind::Literal)
             {
                 Diagnostics.Add(TEXT("Reflected call contains an unsupported argument expression"));
