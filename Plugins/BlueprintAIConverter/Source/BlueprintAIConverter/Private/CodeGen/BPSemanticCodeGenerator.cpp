@@ -1470,7 +1470,7 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 {
                     return false;
                 }
-                Value = FString::Printf(TEXT("TEXT(\\\"%s\\\")"), *Escaped);
+                Value = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
             }
             else
             {
