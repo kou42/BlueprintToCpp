@@ -339,6 +339,38 @@ bool FBPReflectedCallResolverInheritanceTest::RunTest(const FString& Parameters)
             TEXT("SetActorTickEnabled"), TEXT("/Script/Engine.ActorComponent"),
             false, Call, Diagnostics));
 
+    // WorldContextを持つ静的関数も、Reflectionの所有クラスと署名から解決する。
+    // 専用PrintString Emitterの存在に依存しないResolverの回帰テスト。
+    Diagnostics.Reset();
+    TestTrue(TEXT("PrintStringの静的UFunctionをReflectionから解決"),
+        FBPReflectedCallResolver::Resolve(TEXT("/Script/Engine.KismetSystemLibrary"),
+            TEXT("PrintString"), TEXT("/Script/Engine.Actor"),
+            true, Call, Diagnostics));
+    if (Call.Function != nullptr)
+    {
+        TestTrue(TEXT("WorldContextメタデータを持つ"),
+            Call.Function->HasMetaData(TEXT("WorldContext")));
+        TestTrue(TEXT("WorldContext引数が署名に存在"),
+            Call.Signature.ParameterNames.Contains(FName(TEXT("WorldContextObject"))));
+        TestTrue(TEXT("WorldContextが先頭引数"),
+            Call.Signature.ParameterNames.IsEmpty() == false &&
+            Call.Signature.ParameterNames[0] == FName(TEXT("WorldContextObject")));
+        TestTrue(TEXT("WorldContextがオブジェクト入力引数"),
+            Call.Signature.ParameterTypes.IsEmpty() == false &&
+            Call.Signature.ParameterTypes[0].Kind == EBPSemanticTypeKind::Object &&
+            Call.Signature.OutputParameters[0] == false);
+        if (Call.Signature.ParameterTypes.IsEmpty() == false)
+        {
+            // 参照引数として扱うとthisの値渡し規約が変わるため、
+            // 共通Emitterの受理条件と同じ型制約を検証する。
+            TestFalse(TEXT("WorldContextは参照引数ではない"),
+                Call.Signature.ParameterTypes[0].bIsReference);
+            TestEqual(TEXT("WorldContextの期待クラス"),
+                Call.Signature.ParameterTypes[0].TypePath,
+                FString(TEXT("/Script/CoreUObject.Object")));
+        }
+    }
+
     return true;
 }
 
@@ -413,6 +445,20 @@ bool FBPSemanticGeneratorActorNoArgBranchTest::RunTest(const FString& Parameters
     }
     TestTrue(TEXT("bool引数を生成"),
         WithArgument.SourceContent.Contains(TEXT("this->SetActorTickEnabled(false);")));
+
+    // Reflectionのbool引数へFString変数を誤って渡さないことを検証する。
+    // 失敗時には部分的なC++ファイルを公開しない。
+    FBPSemanticExpression& InvalidArgument = ActorCall.Expression.Arguments.Last();
+    InvalidArgument.Kind = EBPSemanticExpressionKind::VariableReference;
+    InvalidArgument.Type.Kind = EBPSemanticTypeKind::String;
+    InvalidArgument.VariableName = TEXT("UnverifiedString");
+    FBPGeneratedActorFiles InvalidFiles;
+    TArray<FString> InvalidDiagnostics;
+    TestFalse(TEXT("Reflectionと一致しないFString変数を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AActorNoArgBranch"),
+            FString(), InvalidFiles, InvalidDiagnostics));
+    TestTrue(TEXT("型不一致の診断を返す"), InvalidDiagnostics.IsEmpty() == false);
+    TestTrue(TEXT("失敗時にソースを公開しない"), InvalidFiles.SourceContent.IsEmpty());
     return true;
 }
 

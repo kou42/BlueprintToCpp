@@ -1389,12 +1389,22 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
             TargetClass = nullptr;
         }
     }
+    // WorldContext付き静的UFunctionは、IRの先頭thisをTargetではなく
+    // Reflectionで指定されたWorldContext引数として扱う。
+    // メタデータの名前と先頭パラメータの一致を確認できない場合は許可しない。
+    const UClass* CandidateOwner = FindObject<UClass>(nullptr, *Expression.FunctionOwnerPath);
+    const UFunction* CandidateFunction = CandidateOwner != nullptr
+        ? CandidateOwner->FindFunctionByName(Expression.FunctionName) : nullptr;
+    const bool bWorldContextStatic = bSelfCall && CandidateFunction != nullptr &&
+        CandidateFunction->HasAnyFunctionFlags(FUNC_Native) &&
+        CandidateFunction->HasAnyFunctionFlags(FUNC_Static) &&
+        CandidateFunction->HasMetaData(TEXT("WorldContext"));
     FBPReflectedCall ResolvedCall;
     TArray<FString> ResolveDiagnostics;
     const bool bResolved = TargetClass != nullptr &&
         FBPReflectedCallResolver::ResolveForTarget(
             Expression.FunctionOwnerPath, Expression.FunctionName,
-            TargetClass->GetPathName(), bHasTarget == false,
+            TargetClass->GetPathName(), bHasTarget == false || bWorldContextStatic,
             ResolvedCall, ResolveDiagnostics);
     const UClass* OwnerClass = ResolvedCall.Owner;
     const UFunction* ReflectedFunction = ResolvedCall.Function;
@@ -1405,7 +1415,31 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     {
         FString Arguments;
         const bool bStatic = ReflectedFunction->HasAnyFunctionFlags(FUNC_Static);
+        // 静的関数は通常すべて引数として扱う。インスタンス関数のみ
+        // 先頭のTarget参照をC++引数から除外する。
         const int32 FirstArgument = bStatic ? 0 : 1;
+        if (bWorldContextStatic)
+        {
+            const FString ContextName = ReflectedFunction->GetMetaData(TEXT("WorldContext"));
+            const UClass* ContextClass = ResolvedCall.Signature.ParameterTypes.IsEmpty() == false
+                ? FindObject<UClass>(nullptr,
+                    *ResolvedCall.Signature.ParameterTypes[0].TypePath) : nullptr;
+            if (ResolvedCall.Signature.ParameterNames.IsEmpty() ||
+                ResolvedCall.Signature.ParameterNames[0].ToString() != ContextName ||
+                ResolvedCall.Signature.ParameterTypes[0].Kind != EBPSemanticTypeKind::Object ||
+                ResolvedCall.Signature.ParameterTypes[0].bIsReference ||
+                ResolvedCall.Signature.OutputParameters[0] ||
+                ContextClass == nullptr || ParentClass == nullptr ||
+                ParentClass->IsChildOf(ContextClass) == false ||
+                Expression.Arguments[0].Type.Kind != EBPSemanticTypeKind::Object ||
+                Expression.Arguments[0].Type.TypePath != ParentClassPath ||
+                Expression.Arguments[0].Type.bIsReference ||
+                Expression.Arguments[0].Type.bIsConst)
+            {
+                Diagnostics.Add(TEXT("Invalid reflected WorldContext parameter"));
+                return false;
+            }
+        }
         if (Expression.Arguments.Num() - FirstArgument !=
             ResolvedCall.Signature.ParameterNames.Num())
         {
@@ -1423,10 +1457,43 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 Diagnostics.Add(TEXT("Reflected parameter type or direction does not match semantic call"));
                 return false;
             }
-            if (Argument.Kind != EBPSemanticExpressionKind::Literal ||
-                Argument.Type.bIsReference || Argument.Type.bIsConst)
+            if (bWorldContextStatic && ParameterIndex == 0)
             {
-                Diagnostics.Add(TEXT("Actor call contains an unsupported argument expression"));
+                // メタデータとIRの型が一致したselfのみをC++のthisとして出力する。
+                Arguments += TEXT("this");
+                continue;
+            }
+            if (Argument.Type.bIsReference || Argument.Type.bIsConst)
+            {
+                Diagnostics.Add(TEXT("Reflected call argument has unsupported reference qualifiers"));
+                return false;
+            }
+            // FStringのメンバー参照は親クラスの公開ネイティブプロパティに限定する。
+            // 変数名だけから任意のC++式を生成しないため、Reflectionで型と公開範囲を検証する。
+            if (Argument.Kind == EBPSemanticExpressionKind::VariableReference &&
+                Argument.Type.Kind == EBPSemanticTypeKind::String)
+            {
+                const FProperty* Member = ParentClass != nullptr
+                    ? ParentClass->FindPropertyByName(Argument.VariableName) : nullptr;
+                if (Member == nullptr || CastField<FStrProperty>(Member) == nullptr ||
+                    Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic) == false ||
+                    IsIdentifier(Argument.VariableName.ToString()) == false ||
+                    Argument.VariableName == TEXT("this"))
+                {
+                    Diagnostics.Add(TEXT("Reflected FString member is not a public native property"));
+                    return false;
+                }
+                if (Index > FirstArgument)
+                {
+                    Arguments += TEXT(", ");
+                }
+                Arguments += FString::Printf(TEXT("this->%s"),
+                    *Argument.VariableName.ToString());
+                continue;
+            }
+            if (Argument.Kind != EBPSemanticExpressionKind::Literal)
+            {
+                Diagnostics.Add(TEXT("Reflected call contains an unsupported argument expression"));
                 return false;
             }
             FString Value;
@@ -1461,9 +1528,39 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                     Value += TEXT("f");
                 }
             }
+            else if (Argument.Type.Kind == EBPSemanticTypeKind::Struct &&
+                Argument.Type.TypePath == TEXT("/Script/CoreUObject.LinearColor") &&
+                ResolvedCall.Signature.ParameterTypes[ParameterIndex].TypePath ==
+                    TEXT("/Script/CoreUObject.LinearColor"))
+            {
+                // 構造体の任意テキストをC++へ直書きせず、LinearColorとして解析して
+                // 有限なRGBA値だけを型付きコンストラクタに変換する。
+                FLinearColor Color;
+                if (Color.InitFromString(Argument.LiteralValue) == false ||
+                    FMath::IsFinite(Color.R) == false || FMath::IsFinite(Color.G) == false ||
+                    FMath::IsFinite(Color.B) == false || FMath::IsFinite(Color.A) == false)
+                {
+                    Diagnostics.Add(TEXT("Invalid reflected LinearColor literal"));
+                    return false;
+                }
+                Value = FString::Printf(TEXT("FLinearColor(%s, %s, %s, %s)"),
+                    *FloatLiteral(Color.R), *FloatLiteral(Color.G),
+                    *FloatLiteral(Color.B), *FloatLiteral(Color.A));
+            }
+            else if (Argument.Type.Kind == EBPSemanticTypeKind::String)
+            {
+                // 文字列はReflectionでFString引数と確認した場合のみ生成する。
+                // 任意のIR文字列をC++ソースへ直書きせず、制御文字と引用符を検証・エスケープする。
+                FString Escaped;
+                if (EscapeString(Argument.LiteralValue, Escaped, Diagnostics) == false)
+                {
+                    return false;
+                }
+                Value = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
+            }
             else
             {
-                Diagnostics.Add(TEXT("Actor call argument type is unsupported"));
+                Diagnostics.Add(TEXT("Reflected call argument type is unsupported"));
                 return false;
             }
             if (Index > FirstArgument)
@@ -1479,6 +1576,13 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
         OutStatement = FString::Printf(TEXT("%s%s%s(%s);\n"),
             *Indent, *Target, *Expression.FunctionName.ToString(), *Arguments);
         return true;
+    }
+    // Reflectionの失敗理由を破棄すると、型不一致や未解決クラスが単なる
+    // 「未対応の式」に見えてしまう。共通Callの診断を呼び出し元まで伝播する。
+    // 既存の専用Emitterは段階的に統合するため、ここでは共通経路のみを対象とする。
+    if (bResolved == false)
+    {
+        Diagnostics.Append(ResolveDiagnostics);
     }
     Diagnostics.Add(FString::Printf(TEXT("Unsupported semantic expression statement: %s::%s"),
         *Expression.FunctionOwnerPath, *Expression.FunctionName.ToString()));

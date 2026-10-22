@@ -52,8 +52,39 @@ bool ResolvePropertyType(const FProperty* Property, FBPSemanticType& OutType)
 bool ValidateMetadata(const UFunction* Function, TArray<FString>& Diagnostics)
 {
     // Blueprintの隠し引数・展開・特殊実行規約を通常のC++呼び出しと誤認しない。
+    // WorldContextは先頭のUObject*入力引数としてReflectionで確認できる場合のみ許可する。
+    // DefaultToSelfも同じ引数を指す場合に限定し、暗黙の引数補完は行わない。
+    const bool bHasWorldContext = Function->HasMetaData(TEXT("WorldContext"));
+    const bool bHasDefaultToSelf = Function->HasMetaData(TEXT("DefaultToSelf"));
+    if (bHasWorldContext || bHasDefaultToSelf)
+    {
+        const FString ContextName = Function->GetMetaData(TEXT("WorldContext"));
+        const FString DefaultName = Function->GetMetaData(TEXT("DefaultToSelf"));
+        const FProperty* FirstParameter = nullptr;
+        for (TFieldIterator<FProperty> It(Function); It; ++It)
+        {
+            if ((*It)->HasAnyPropertyFlags(CPF_Parm) &&
+                (*It)->HasAnyPropertyFlags(CPF_ReturnParm) == false)
+            {
+                FirstParameter = *It;
+                break;
+            }
+        }
+        const FObjectProperty* ContextProperty = CastField<FObjectProperty>(FirstParameter);
+        if (bHasWorldContext == false || ContextName.IsEmpty() ||
+            (bHasDefaultToSelf && DefaultName != ContextName) ||
+            Function->HasAnyFunctionFlags(FUNC_Native) == false ||
+            Function->HasAnyFunctionFlags(FUNC_Static) == false ||
+            FirstParameter == nullptr || FirstParameter->GetName() != ContextName ||
+            ContextProperty == nullptr || ContextProperty->PropertyClass == nullptr ||
+            FirstParameter->HasAnyPropertyFlags(CPF_OutParm | CPF_ReferenceParm))
+        {
+            Diagnostics.Add(TEXT("Unsupported WorldContext/DefaultToSelf signature"));
+            return false;
+        }
+    }
     static const TCHAR* UnsupportedKeys[] = {
-        TEXT("WorldContext"), TEXT("DefaultToSelf"), TEXT("AutoCreateRefTerm"),
+        TEXT("AutoCreateRefTerm"),
         TEXT("ExpandEnumAsExecs"), TEXT("Latent"), TEXT("LatentInfo"),
         TEXT("BlueprintInternalUseOnly"), TEXT("CustomStructureParam"),
         TEXT("ArrayParm"), TEXT("ArrayTypeDependentParams"),
