@@ -927,4 +927,546 @@ bool FBPSemanticGeneratorImportTextVariableTest::RunTest(const FString& Paramete
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorReflectedBoolMemberTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ReflectedBoolMember",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorReflectedBoolMemberTest::RunTest(const FString& Parameters)
+{
+    // Actorの公開ネイティブboolを、PrintString専用処理を経由せず共通Callへ渡す。
+    FBPSemanticIR Semantic;
+    Semantic.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Statement;
+    Statement.Kind = EBPSemanticStatementKind::Expression;
+    FBPSemanticExpression& Call = Statement.Expression;
+    Call.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Call.Type.Kind = EBPSemanticTypeKind::Void;
+    Call.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Call.FunctionName = TEXT("SetActorTickEnabled");
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = Semantic.ParentClassPath;
+    Target.VariableName = TEXT("this");
+    Call.Arguments.Add(Target);
+    FBPSemanticExpression Argument;
+    Argument.Kind = EBPSemanticExpressionKind::VariableReference;
+    Argument.Type.Kind = EBPSemanticTypeKind::Bool;
+    Argument.VariableName = TEXT("bCanBeDamaged");
+    Call.Arguments.Add(Argument);
+    Block.Statements.Add(Statement);
+    Function.Blocks.Add(Block);
+    Semantic.Functions.Add(Function);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("公開ネイティブboolを共通Callへ渡せる"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedBoolActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("共通Callでboolメンバー参照を生成"),
+        Files.SourceContent.Contains(TEXT("this->SetActorTickEnabled(this->bCanBeDamaged);")));
+
+    // Reflection上の型とIR型が異なる変数を安全に拒否する。
+    Semantic.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1].VariableName =
+        TEXT("InitialLifeSpan");
+    Diagnostics.Reset();
+    TestFalse(TEXT("floatプロパティをboolとして参照しない"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedBoolActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("型不一致で生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorReflectedFloatLiteralTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ReflectedFloatLiteral",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorReflectedFloatLiteralTest::RunTest(const FString& Parameters)
+{
+    // PrintString専用経路ではなく、Actorのnative UFunctionで数値正規化を検証する。
+    FBPSemanticIR Semantic;
+    Semantic.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Statement;
+    Statement.Kind = EBPSemanticStatementKind::Expression;
+    FBPSemanticExpression& Call = Statement.Expression;
+    Call.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Call.Type.Kind = EBPSemanticTypeKind::Void;
+    Call.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Call.FunctionName = TEXT("SetActorTickInterval");
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = Semantic.ParentClassPath;
+    Target.VariableName = TEXT("this");
+    Call.Arguments.Add(Target);
+    FBPSemanticExpression Interval;
+    Interval.Kind = EBPSemanticExpressionKind::Literal;
+    Interval.Type.Kind = EBPSemanticTypeKind::Float;
+    Interval.LiteralValue = TEXT("1e-2");
+    Call.Arguments.Add(Interval);
+    Block.Statements.Add(Statement);
+    Function.Blocks.Add(Block);
+    Semantic.Functions.Add(Function);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("指数表記floatを共通Callで生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedFloatActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("数値リテラルを正規化して出力"),
+        Files.SourceContent.Contains(TEXT("this->SetActorTickInterval(0.01f);")));
+
+    Semantic.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1].LiteralValue =
+        TEXT("1e100");
+    Diagnostics.Reset();
+    TestFalse(TEXT("float範囲外を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedFloatActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorReflectedFloatMemberTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ReflectedFloatMember",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorReflectedFloatMemberTest::RunTest(const FString& Parameters)
+{
+    // 共通CallがActorの公開ネイティブfloatをReflectionで確認して参照する。
+    FBPSemanticIR Semantic;
+    Semantic.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Statement;
+    Statement.Kind = EBPSemanticStatementKind::Expression;
+    FBPSemanticExpression& Call = Statement.Expression;
+    Call.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Call.Type.Kind = EBPSemanticTypeKind::Void;
+    Call.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Call.FunctionName = TEXT("SetActorTickInterval");
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = Semantic.ParentClassPath;
+    Target.VariableName = TEXT("this");
+    Call.Arguments.Add(Target);
+    FBPSemanticExpression Argument;
+    Argument.Kind = EBPSemanticExpressionKind::VariableReference;
+    Argument.Type.Kind = EBPSemanticTypeKind::Float;
+    Argument.VariableName = TEXT("InitialLifeSpan");
+    Call.Arguments.Add(Argument);
+    Block.Statements.Add(Statement);
+    Function.Blocks.Add(Block);
+    Semantic.Functions.Add(Function);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("公開ネイティブfloatを共通Callへ渡せる"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedFloatMemberActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("floatメンバー参照を生成"),
+        Files.SourceContent.Contains(TEXT("this->SetActorTickInterval(this->InitialLifeSpan);")));
+
+    // 同じメンバー名をdoubleとして偽装してもReflection型照合で拒否する。
+    Semantic.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1].Type.Kind =
+        EBPSemanticTypeKind::Double;
+    Diagnostics.Reset();
+    TestFalse(TEXT("floatメンバーをdoubleとして出力しない"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedFloatMemberActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("失敗時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorForEachLocalTypeTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ForEachLocalType",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorForEachLocalTypeTest::RunTest(const FString& Parameters)
+{
+    // int32配列のForEachローカルElementをfloatとして偽装したIRは拒否する。
+    FBPSemanticIR IR;
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticVariable Array;
+    Array.Name = TEXT("Numbers");
+    Array.Type.Kind = EBPSemanticTypeKind::Int32;
+    Array.Type.ContainerKind = TEXT("array");
+    Array.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Array);
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopIndexVariable = TEXT("LoopIndex");
+    Loop.LoopElementVariable = TEXT("LoopElement");
+    FBPSemanticStatement Body;
+    Body.Kind = EBPSemanticStatementKind::Expression;
+    Body.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Body.Expression.Type.Kind = EBPSemanticTypeKind::Void;
+    Body.Expression.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Body.Expression.FunctionName = TEXT("SetActorTickInterval");
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = IR.ParentClassPath;
+    Target.VariableName = TEXT("this");
+    Body.Expression.Arguments.Add(Target);
+    FBPSemanticExpression Invalid;
+    Invalid.Kind = EBPSemanticExpressionKind::VariableReference;
+    Invalid.Type.Kind = EBPSemanticTypeKind::Float;
+    Invalid.VariableName = Loop.LoopElementVariable;
+    Body.Expression.Arguments.Add(Invalid);
+    Loop.LoopBodyStatements.Add(Body);
+    Block.Statements.Add(Loop);
+    Function.Blocks.Add(Block);
+    IR.Functions.Add(Function);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("ForEachローカルElementの型偽装を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+
+    // 正常系では同じForEach内の非PrintString共通Callを出力できる。
+    // まずboolリテラルでループ本体の共通Emitter経路を検証する。
+    FBPSemanticExpression& BodyCall =
+        IR.Functions[0].Blocks[0].Statements[0].LoopBodyStatements[0].Expression;
+    BodyCall.FunctionName = TEXT("SetActorTickEnabled");
+    BodyCall.Arguments[1].Kind = EBPSemanticExpressionKind::Literal;
+    BodyCall.Arguments[1].Type.Kind = EBPSemanticTypeKind::Bool;
+    BodyCall.Arguments[1].VariableName = NAME_None;
+    BodyCall.Arguments[1].LiteralValue = TEXT("true");
+    Diagnostics.Reset();
+    if (TestTrue(TEXT("ForEach内の非PrintString共通Callを生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("ForEachの本体に共通Callを出力"),
+        Files.SourceContent.Contains(TEXT("this->SetActorTickEnabled(true);")));
+    TestFalse(TEXT("Element未使用時に要素コピーを生成しない"),
+        Files.SourceContent.Contains(TEXT("const int32 LoopElement =")));
+
+    // CompletedもPrintString専用条件を通さず、通常の共通Callで検証する。
+    FBPSemanticStatement Completed;
+    Completed.Kind = EBPSemanticStatementKind::Expression;
+    Completed.Expression = BodyCall;
+    Completed.Expression.Arguments[1].LiteralValue = TEXT("false");
+    IR.Functions[0].Blocks[0].Statements[0].CompletedStatements.Add(Completed);
+    Diagnostics.Reset();
+    if (TestTrue(TEXT("ForEach Completedの共通Callを生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly)))
+    {
+        const int32 LoopEnd = Files.SourceContent.Find(TEXT("    }\n"));
+        const int32 CompletedCall = Files.SourceContent.Find(
+            TEXT("this->SetActorTickEnabled(false);"));
+        TestTrue(TEXT("Completedはループ本体の後に出力"),
+            LoopEnd != INDEX_NONE && CompletedCall > LoopEnd);
+    }
+    else
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+    }
+
+    // 同じループ内でIndex/Elementの型偽装が拒否されることを検証する。
+    BodyCall.FunctionName = TEXT("SetActorTickInterval");
+    BodyCall.Arguments[1].Kind = EBPSemanticExpressionKind::VariableReference;
+    BodyCall.Arguments[1].VariableName = TEXT("LoopIndex");
+    BodyCall.Arguments[1].Type.Kind = EBPSemanticTypeKind::Float;
+    BodyCall.Arguments[1].LiteralValue.Reset();
+    Diagnostics.Reset();
+    TestFalse(TEXT("ForEachローカルIndexの型偽装を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("Index拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+
+    // 親Actorの公開ネイティブプロパティと同じIndex名も拒否する。
+    // Blueprint側のIR.Variablesだけでは継承メンバーを列挙できない。
+    FBPSemanticStatement& CheckedLoop = IR.Functions[0].Blocks[0].Statements[0];
+    CheckedLoop.LoopIndexVariable = TEXT("InitialLifeSpan");
+    BodyCall.FunctionName = TEXT("SetActorTickEnabled");
+    BodyCall.Arguments[1].Kind = EBPSemanticExpressionKind::Literal;
+    BodyCall.Arguments[1].Type.Kind = EBPSemanticTypeKind::Bool;
+    BodyCall.Arguments[1].VariableName = NAME_None;
+    BodyCall.Arguments[1].LiteralValue = TEXT("true");
+    Diagnostics.Reset();
+    TestFalse(TEXT("継承したネイティブメンバーとIndex名の衝突を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("名前衝突時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorForEachInt32ArgumentsTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ForEachInt32Arguments",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorForEachInt32ArgumentsTest::RunTest(const FString& Parameters)
+{
+    // PlayerControllerのSetMouseLocation(int32, int32)を使用し、
+    // 共通CallがForEachのIndexとElementを直接受け取る正常系を確認する。
+    FBPSemanticIR IR;
+    IR.ParentClassPath = TEXT("/Script/Engine.PlayerController");
+    FBPSemanticVariable Array;
+    Array.Name = TEXT("Numbers");
+    Array.Type.Kind = EBPSemanticTypeKind::Int32;
+    Array.Type.ContainerKind = TEXT("array");
+    Array.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Array);
+
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = Array.Name;
+    Loop.LoopArray.Type = Array.Type;
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopIndexVariable = TEXT("LoopIndex");
+    Loop.LoopElementVariable = TEXT("LoopElement");
+
+    FBPSemanticStatement Body;
+    Body.Kind = EBPSemanticStatementKind::Expression;
+    Body.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Body.Expression.Type.Kind = EBPSemanticTypeKind::Void;
+    Body.Expression.FunctionOwnerPath = IR.ParentClassPath;
+    Body.Expression.FunctionName = TEXT("SetMouseLocation");
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = IR.ParentClassPath;
+    Target.VariableName = TEXT("this");
+    Body.Expression.Arguments.Add(Target);
+    FBPSemanticExpression Index;
+    Index.Kind = EBPSemanticExpressionKind::VariableReference;
+    Index.Type.Kind = EBPSemanticTypeKind::Int32;
+    Index.VariableName = Loop.LoopIndexVariable;
+    Body.Expression.Arguments.Add(Index);
+    FBPSemanticExpression Element = Index;
+    Element.VariableName = Loop.LoopElementVariable;
+    Body.Expression.Arguments.Add(Element);
+    Loop.LoopBodyStatements.Add(Body);
+    Block.Statements.Add(Loop);
+    Function.Blocks.Add(Block);
+    IR.Functions.Add(Function);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ForEachのIndex/Elementを共通Call引数として生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachInt32PlayerController"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("Elementのローカル宣言を生成"),
+        Files.SourceContent.Contains(TEXT("const int32 LoopElement = Numbers[LoopIndex];")));
+    TestTrue(TEXT("共通CallにIndex/Elementを渡す"),
+        Files.SourceContent.Contains(TEXT("this->SetMouseLocation(LoopIndex, LoopElement);")));
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorPrintStringQualifierTest,
+    "BlueprintAIConverter.SemanticIR.Generator.PrintStringQualifier",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorPrintStringQualifierTest::RunTest(const FString& Parameters)
+{
+    // 正常なPrintString IRから文字列引数のみを変異させ、
+    // コンテナや参照修飾をC++の単一FStringとして誤出力しないことを確認する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintStringのLowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticExpression& TextArgument =
+        IR.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1];
+    TextArgument.Kind = EBPSemanticExpressionKind::VariableReference;
+    TextArgument.VariableName = TEXT("TextValue");
+    TextArgument.Type.Kind = EBPSemanticTypeKind::String;
+    TextArgument.LiteralValue.Reset();
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TextArgument.Type.ContainerKind = TEXT("array");
+    TestFalse(TEXT("PrintStringのFString配列参照を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AStringQualifierActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("配列拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+
+    TextArgument.Type.ContainerKind.Reset();
+    TextArgument.Type.bIsReference = true;
+    Diagnostics.Reset();
+    TestFalse(TEXT("PrintStringのFString参照修飾を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AStringQualifierActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("参照拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+
+    TextArgument.Type.bIsReference = false;
+    TextArgument.Type.bIsConst = true;
+    Diagnostics.Reset();
+    TestFalse(TEXT("PrintStringのconst修飾を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AStringQualifierActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("const拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorPrintStringNativeMemberTest,
+    "BlueprintAIConverter.SemanticIR.Generator.PrintStringNativeMember",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorPrintStringNativeMemberTest::RunTest(const FString& Parameters)
+{
+    // PrintStringの文字列引数がActorのfloatプロパティをFStringとして
+    // 偽装しても、ネイティブReflectionの実型と一致しないため拒否する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintStringのLowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticExpression& Argument =
+        IR.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1];
+    Argument.Kind = EBPSemanticExpressionKind::VariableReference;
+    Argument.VariableName = TEXT("InitialLifeSpan");
+    Argument.Type.Kind = EBPSemanticTypeKind::String;
+    Argument.LiteralValue.Reset();
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("floatネイティブメンバーのFString偽装を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AStringNativeMemberActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("型偽装時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorPrintStringDeclaredVariableTest,
+    "BlueprintAIConverter.SemanticIR.Generator.PrintStringDeclaredVariable",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorPrintStringDeclaredVariableTest::RunTest(const FString& Parameters)
+{
+    // PrintStringに渡すBlueprint変数名が実在しても、
+    // 宣言された型がFString以外なら型偽装として拒否する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintStringのLowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticVariable Variable;
+    Variable.Name = TEXT("Message");
+    Variable.Type.Kind = EBPSemanticTypeKind::Int32;
+    Variable.ReflectedCppType = TEXT("int32");
+    IR.Variables.Add(Variable);
+    FBPSemanticExpression& Argument =
+        IR.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1];
+    Argument.Kind = EBPSemanticExpressionKind::VariableReference;
+    Argument.VariableName = Variable.Name;
+    Argument.Type.Kind = EBPSemanticTypeKind::String;
+    Argument.LiteralValue.Reset();
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("Blueprintのint32変数をFStringとして偽装すると拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AStringDeclaredVariableActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("型偽装時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorPrintStringUnknownMemberTest,
+    "BlueprintAIConverter.SemanticIR.Generator.PrintStringUnknownMember",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorPrintStringUnknownMemberTest::RunTest(const FString& Parameters)
+{
+    // Blueprint宣言にも親ActorのReflectionにもない文字列メンバー名は、
+    // 未定義識別子を含むC++を生成しないよう拒否する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintStringのLowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticExpression& Argument =
+        IR.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1];
+    Argument.Kind = EBPSemanticExpressionKind::VariableReference;
+    Argument.VariableName = TEXT("UnknownPrintStringMemberForTest");
+    Argument.Type.Kind = EBPSemanticTypeKind::String;
+    Argument.LiteralValue.Reset();
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("未宣言のFStringメンバーを拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AUnknownStringMemberActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("未宣言参照の拒否時に生成物を公開しない"),
+        Files.SourceContent.IsEmpty());
+    return true;
+}
+
 #endif
