@@ -1389,12 +1389,23 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
             TargetClass = nullptr;
         }
     }
+    // WorldContext付き静的UFunctionは、IRの先頭thisをTargetではなく
+    // Reflectionで指定されたWorldContext引数として扱う。
+    // メタデータの名前と先頭パラメータの一致を確認できない場合は許可しない。
+    const UClass* CandidateOwner = FindObject<UClass>(nullptr, *Expression.FunctionOwnerPath);
+    const UFunction* CandidateFunction = CandidateOwner != nullptr
+        ? CandidateOwner->FindFunctionByName(Expression.FunctionName) : nullptr;
+    const bool bWorldContextStatic = bSelfCall && CandidateFunction != nullptr &&
+        CandidateFunction->HasAnyFunctionFlags(FUNC_Native | FUNC_Static) &&
+        CandidateFunction->HasAnyFunctionFlags(FUNC_Native) &&
+        CandidateFunction->HasAnyFunctionFlags(FUNC_Static) &&
+        CandidateFunction->HasMetaData(TEXT("WorldContext"));
     FBPReflectedCall ResolvedCall;
     TArray<FString> ResolveDiagnostics;
     const bool bResolved = TargetClass != nullptr &&
         FBPReflectedCallResolver::ResolveForTarget(
             Expression.FunctionOwnerPath, Expression.FunctionName,
-            TargetClass->GetPathName(), bHasTarget == false,
+            TargetClass->GetPathName(), bHasTarget == false || bWorldContextStatic,
             ResolvedCall, ResolveDiagnostics);
     const UClass* OwnerClass = ResolvedCall.Owner;
     const UFunction* ReflectedFunction = ResolvedCall.Function;
@@ -1405,7 +1416,22 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     {
         FString Arguments;
         const bool bStatic = ReflectedFunction->HasAnyFunctionFlags(FUNC_Static);
-        const int32 FirstArgument = bStatic ? 0 : 1;
+        const int32 FirstArgument = bStatic && bWorldContextStatic == false ? 0 :
+            bWorldContextStatic ? 0 : 1;
+        if (bWorldContextStatic)
+        {
+            const FString ContextName = ReflectedFunction->GetMetaData(TEXT("WorldContext"));
+            if (ResolvedCall.Signature.ParameterNames.IsEmpty() ||
+                ResolvedCall.Signature.ParameterNames[0].ToString() != ContextName ||
+                Expression.Arguments[0].Type.Kind != EBPSemanticTypeKind::Object ||
+                Expression.Arguments[0].Type.TypePath != ParentClassPath ||
+                Expression.Arguments[0].Type.bIsReference ||
+                Expression.Arguments[0].Type.bIsConst)
+            {
+                Diagnostics.Add(TEXT("Invalid reflected WorldContext parameter"));
+                return false;
+            }
+        }
         if (Expression.Arguments.Num() - FirstArgument !=
             ResolvedCall.Signature.ParameterNames.Num())
         {
@@ -1422,6 +1448,12 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
             {
                 Diagnostics.Add(TEXT("Reflected parameter type or direction does not match semantic call"));
                 return false;
+            }
+            if (bWorldContextStatic && ParameterIndex == 0)
+            {
+                // メタデータとIRの型が一致したselfのみをC++のthisとして出力する。
+                Arguments += TEXT("this");
+                continue;
             }
             if (Argument.Kind != EBPSemanticExpressionKind::Literal ||
                 Argument.Type.bIsReference || Argument.Type.bIsConst)
