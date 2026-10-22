@@ -99,6 +99,8 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - 整数演算経由のメンバー参照は検証後にthis->参照として出力する。SourcePinIdのないローカル参照は既存互換性を維持し、ループスコープ検証は次の作業で共通化する。
 - UEビルド・Automation Test・JSON往復テストは未実施。P0完了とは判定しない。
 
+- **追加変更（検証待ち）:** PrintStringの整数変換・Concat内整数演算で、SourcePinIdのないローカル整数参照をForLoop／ForEachLoopの有効なIndex／Element名に限定。ForLoopの式文にもLocalIndexを伝播。既存の正常系・拒否系Automation TestとUEビルドは未実施。
+
 ### 次の実装・検証順序
 
 1. PrintStringのネスト式（Concat／Conv_IntToString／整数演算）で、ローカルIndexとBlueprint／ネイティブメンバーの参照元・型を共通ルールで検証する。
