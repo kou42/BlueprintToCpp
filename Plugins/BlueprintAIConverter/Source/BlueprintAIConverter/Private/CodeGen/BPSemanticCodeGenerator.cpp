@@ -1396,7 +1396,6 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     const UFunction* CandidateFunction = CandidateOwner != nullptr
         ? CandidateOwner->FindFunctionByName(Expression.FunctionName) : nullptr;
     const bool bWorldContextStatic = bSelfCall && CandidateFunction != nullptr &&
-        CandidateFunction->HasAnyFunctionFlags(FUNC_Native | FUNC_Static) &&
         CandidateFunction->HasAnyFunctionFlags(FUNC_Native) &&
         CandidateFunction->HasAnyFunctionFlags(FUNC_Static) &&
         CandidateFunction->HasMetaData(TEXT("WorldContext"));
@@ -1423,6 +1422,8 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
             const FString ContextName = ReflectedFunction->GetMetaData(TEXT("WorldContext"));
             if (ResolvedCall.Signature.ParameterNames.IsEmpty() ||
                 ResolvedCall.Signature.ParameterNames[0].ToString() != ContextName ||
+                ResolvedCall.Signature.ParameterTypes[0].Kind != EBPSemanticTypeKind::Object ||
+                ResolvedCall.Signature.OutputParameters[0] ||
                 Expression.Arguments[0].Type.Kind != EBPSemanticTypeKind::Object ||
                 Expression.Arguments[0].Type.TypePath != ParentClassPath ||
                 Expression.Arguments[0].Type.bIsReference ||
