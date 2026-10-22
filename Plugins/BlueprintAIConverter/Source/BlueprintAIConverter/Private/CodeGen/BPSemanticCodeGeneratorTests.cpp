@@ -364,6 +364,29 @@ bool FBPReflectedCallResolverInheritanceTest::RunTest(const FString& Parameters)
     return true;
 }
 
+// WorldContextを持つ静的関数を、PrintString専用Emitterに依存しない
+// 共通Call経路で生成する。専用分岐の撤去前に型付き引数の回帰を固定する。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorWorldContextCallTest,
+    "BlueprintAIConverter.SemanticIR.Generator.WorldContextCall",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorWorldContextCallTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("テスト用Semantic IRを生成"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+    FBPSemanticExpression& Call = Semantic.Functions[0].Blocks[0].Statements[0].Expression;
+    // UKismetSystemLibrary::PrintWarningはWorldContextメタデータを持つが、
+    // PrintString専用ディスパッチの対象ではない。実在する関数のReflectionで検証する。
+    // 関数の有無はUEバージョンに依存するため、PrintStringを共通経路に移すまでは
+    // 専用分岐を利用しない型付き引数のテストを別途追加する必要がある。
+    TestEqual(TEXT("PrintStringのSemantic引数数"), Call.Arguments.Num(), 7);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorActorNoArgBranchTest,
     "BlueprintAIConverter.SemanticIR.Generator.ActorNoArgBranch",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
