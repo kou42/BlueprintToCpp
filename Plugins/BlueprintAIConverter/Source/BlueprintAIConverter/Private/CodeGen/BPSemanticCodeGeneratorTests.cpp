@@ -989,4 +989,65 @@ bool FBPSemanticGeneratorReflectedBoolMemberTest::RunTest(const FString& Paramet
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorReflectedFloatLiteralTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ReflectedFloatLiteral",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorReflectedFloatLiteralTest::RunTest(const FString& Parameters)
+{
+    // PrintString専用経路ではなく、Actorのnative UFunctionで数値正規化を検証する。
+    FBPSemanticIR Semantic;
+    Semantic.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Statement;
+    Statement.Kind = EBPSemanticStatementKind::Expression;
+    FBPSemanticExpression& Call = Statement.Expression;
+    Call.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Call.Type.Kind = EBPSemanticTypeKind::Void;
+    Call.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Call.FunctionName = TEXT("SetActorTickInterval");
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = Semantic.ParentClassPath;
+    Target.VariableName = TEXT("this");
+    Call.Arguments.Add(Target);
+    FBPSemanticExpression Interval;
+    Interval.Kind = EBPSemanticExpressionKind::Literal;
+    Interval.Type.Kind = EBPSemanticTypeKind::Float;
+    Interval.LiteralValue = TEXT("1e-2");
+    Call.Arguments.Add(Interval);
+    Block.Statements.Add(Statement);
+    Function.Blocks.Add(Block);
+    Semantic.Functions.Add(Function);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("指数表記floatを共通Callで生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedFloatActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("数値リテラルを正規化して出力"),
+        Files.SourceContent.Contains(TEXT("this->SetActorTickInterval(0.01f);")));
+
+    Semantic.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1].LiteralValue =
+        TEXT("1e100");
+    Diagnostics.Reset();
+    TestFalse(TEXT("float範囲外を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedFloatActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
 #endif
