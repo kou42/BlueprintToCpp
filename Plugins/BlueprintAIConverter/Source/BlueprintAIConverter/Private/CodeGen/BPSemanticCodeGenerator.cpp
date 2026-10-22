@@ -1041,7 +1041,9 @@ bool IsCompatiblePrintStringMember(const FName Name, const FString& ParentClassP
     const FProperty* Member = ParentClass->FindPropertyByName(Name);
     if (Member == nullptr)
     {
-        return true;
+        // 変数宣言一覧を持つ経路では未宣言名を許可しない。
+        // 一覧を受け取れない旧経路のみ従来動作を維持する。
+        return Variables == nullptr;
     }
     return CastField<FStrProperty>(Member) != nullptr &&
         Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic);
@@ -1772,7 +1774,7 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
     if (Statement.Kind == EBPSemanticStatementKind::Expression)
     {
         return EmitExpressionStatement(Statement.Expression, ParentClassPath,
-            Indent, OutCode, Diagnostics);
+            Indent, OutCode, Diagnostics, NAME_None, NAME_None, &Variables);
     }
     if (Statement.Kind == EBPSemanticStatementKind::ForLoop)
     {
@@ -2021,7 +2023,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         }
         else if (LeadingStatement.Kind != EBPSemanticStatementKind::Expression ||
             EmitExpressionStatement(LeadingStatement.Expression, IR.ParentClassPath,
-                TEXT("    "), Part, OutDiagnostics) == false)
+                TEXT("    "), Part, OutDiagnostics, NAME_None, NAME_None,
+                &IR.Variables) == false)
         {
             OutDiagnostics.Add(TEXT("Function entry sequence contains an unsupported semantic statement"));
             return false;
