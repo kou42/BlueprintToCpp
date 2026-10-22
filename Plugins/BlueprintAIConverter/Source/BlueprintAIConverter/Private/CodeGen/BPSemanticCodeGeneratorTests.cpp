@@ -359,6 +359,16 @@ bool FBPReflectedCallResolverInheritanceTest::RunTest(const FString& Parameters)
             Call.Signature.ParameterTypes.IsEmpty() == false &&
             Call.Signature.ParameterTypes[0].Kind == EBPSemanticTypeKind::Object &&
             Call.Signature.OutputParameters[0] == false);
+        if (Call.Signature.ParameterTypes.IsEmpty() == false)
+        {
+            // 参照引数として扱うとthisの値渡し規約が変わるため、
+            // 共通Emitterの受理条件と同じ型制約を検証する。
+            TestFalse(TEXT("WorldContextは参照引数ではない"),
+                Call.Signature.ParameterTypes[0].bIsReference);
+            TestEqual(TEXT("WorldContextの期待クラス"),
+                Call.Signature.ParameterTypes[0].TypePath,
+                FString(TEXT("/Script/CoreUObject.Object")));
+        }
     }
 
     return true;
