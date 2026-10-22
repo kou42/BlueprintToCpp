@@ -1415,15 +1415,22 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     {
         FString Arguments;
         const bool bStatic = ReflectedFunction->HasAnyFunctionFlags(FUNC_Static);
-        const int32 FirstArgument = bStatic && bWorldContextStatic == false ? 0 :
-            bWorldContextStatic ? 0 : 1;
+        // 静的関数は通常すべて引数として扱う。インスタンス関数のみ
+        // 先頭のTarget参照をC++引数から除外する。
+        const int32 FirstArgument = bStatic ? 0 : 1;
         if (bWorldContextStatic)
         {
             const FString ContextName = ReflectedFunction->GetMetaData(TEXT("WorldContext"));
             if (ResolvedCall.Signature.ParameterNames.IsEmpty() ||
                 ResolvedCall.Signature.ParameterNames[0].ToString() != ContextName ||
                 ResolvedCall.Signature.ParameterTypes[0].Kind != EBPSemanticTypeKind::Object ||
+                ResolvedCall.Signature.ParameterTypes[0].bIsReference ||
                 ResolvedCall.Signature.OutputParameters[0] ||
+                FindObject<UClass>(nullptr,
+                    *ResolvedCall.Signature.ParameterTypes[0].TypePath) == nullptr ||
+                ParentClass == nullptr ||
+                ParentClass->IsChildOf(FindObject<UClass>(nullptr,
+                    *ResolvedCall.Signature.ParameterTypes[0].TypePath)) == false ||
                 Expression.Arguments[0].Type.Kind != EBPSemanticTypeKind::Object ||
                 Expression.Arguments[0].Type.TypePath != ParentClassPath ||
                 Expression.Arguments[0].Type.bIsReference ||
