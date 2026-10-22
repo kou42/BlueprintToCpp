@@ -2177,26 +2177,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
                 OutDiagnostics.Add(TEXT("ForEachLoop body contains an unsupported semantic statement"));
                 return false;
             }
-            const bool bPrintString =
-                Body.Expression.FunctionName == TEXT("PrintString") &&
-                Body.Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetSystemLibrary");
-            // ForEach固有のIndex/Element参照は、型とローカル名を検証できる
-            // PrintString変換だけに限定する。その他の式文は共通Emitterへ渡す。
-            if (bPrintString &&
-                (Body.Expression.Arguments.Num() != 7 ||
-                    (Body.Expression.Arguments[1].Kind != EBPSemanticExpressionKind::Literal &&
-                        (Body.Expression.Arguments[1].Kind != EBPSemanticExpressionKind::FunctionCall ||
-                            Body.Expression.Arguments[1].FunctionName != TEXT("Conv_IntToString") ||
-                            Body.Expression.Arguments[1].FunctionOwnerPath != TEXT("/Script/Engine.KismetStringLibrary") ||
-                            Body.Expression.Arguments[1].Arguments.Num() != 1 ||
-                            Body.Expression.Arguments[1].Arguments[0].Kind != EBPSemanticExpressionKind::VariableReference ||
-                            Body.Expression.Arguments[1].Arguments[0].Type.Kind != EBPSemanticTypeKind::Int32 ||
-                            (Body.Expression.Arguments[1].Arguments[0].VariableName != Statement.LoopIndexVariable &&
-                                Body.Expression.Arguments[1].Arguments[0].VariableName != Statement.LoopElementVariable)))))
-            {
-                OutDiagnostics.Add(TEXT("ForEachLoop PrintString requires a literal or verified int32 Index/Element value"));
-                return false;
-            }
+            // PrintString固有の式形状制限を撤廃する。Concatや整数演算の
+            // 再帰的な型・参照元検証はEmitExpressionStatement側に一本化する。
             if (EmitExpressionStatement(Body.Expression, IR.ParentClassPath,
                     TEXT("        "), Part, OutDiagnostics,
                     Statement.LoopIndexVariable, Statement.LoopElementVariable,
@@ -2204,21 +2186,34 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             {
                 return false;
             }
-            if (bPrintString &&
-                Body.Expression.Arguments[1].Kind == EBPSemanticExpressionKind::FunctionCall &&
-                Body.Expression.Arguments[1].Arguments[0].VariableName == Statement.LoopElementVariable)
+            // ElementはConcat/Conv_IntToString/算術式の深い位置にも現れる。
+            // 実際に参照される場合のみループ内で要素変数を宣言する。
+            TFunction<bool(const FBPSemanticExpression&, int32)> UsesElement;
+            UsesElement = [&](const FBPSemanticExpression& Current, int32 Depth) -> bool
+            {
+                if (Depth > 32)
+                {
+                    return false;
+                }
+                if (Current.Kind == EBPSemanticExpressionKind::VariableReference &&
+                    Current.VariableName == Statement.LoopElementVariable &&
+                    Current.Type.Kind == EBPSemanticTypeKind::Int32 &&
+                    Current.SourcePinId.IsValid() == false)
+                {
+                    return true;
+                }
+                for (const FBPSemanticExpression& Child : Current.Arguments)
+                {
+                    if (UsesElement(Child, Depth + 1))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            if (UsesElement(Body.Expression, 0))
             {
                 bUsesElement = true;
-            }
-            // PrintString以外の共通Callでも、要素を参照した場合は宣言が必要。
-            for (const FBPSemanticExpression& Argument : Body.Expression.Arguments)
-            {
-                if (Argument.Kind == EBPSemanticExpressionKind::VariableReference &&
-                    Argument.Type.Kind == EBPSemanticTypeKind::Int32 &&
-                    Argument.VariableName == Statement.LoopElementVariable)
-                {
-                    bUsesElement = true;
-                }
             }
             BodyCode += Part;
         }
