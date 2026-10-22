@@ -1494,6 +1494,25 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                     Value += TEXT("f");
                 }
             }
+            else if (Argument.Type.Kind == EBPSemanticTypeKind::Struct &&
+                Argument.Type.TypePath == TEXT("/Script/CoreUObject.LinearColor") &&
+                ResolvedCall.Signature.ParameterTypes[ParameterIndex].TypePath ==
+                    TEXT("/Script/CoreUObject.LinearColor"))
+            {
+                // 構造体の任意テキストをC++へ直書きせず、LinearColorとして解析して
+                // 有限なRGBA値だけを型付きコンストラクタに変換する。
+                FLinearColor Color;
+                if (Color.InitFromString(Argument.LiteralValue) == false ||
+                    FMath::IsFinite(Color.R) == false || FMath::IsFinite(Color.G) == false ||
+                    FMath::IsFinite(Color.B) == false || FMath::IsFinite(Color.A) == false)
+                {
+                    Diagnostics.Add(TEXT("Invalid reflected LinearColor literal"));
+                    return false;
+                }
+                Value = FString::Printf(TEXT("FLinearColor(%s, %s, %s, %s)"),
+                    *FloatLiteral(Color.R), *FloatLiteral(Color.G),
+                    *FloatLiteral(Color.B), *FloatLiteral(Color.A));
+            }
             else if (Argument.Type.Kind == EBPSemanticTypeKind::String)
             {
                 // 文字列はReflectionでFString引数と確認した場合のみ生成する。
