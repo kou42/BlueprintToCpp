@@ -1480,6 +1480,13 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
             *Indent, *Target, *Expression.FunctionName.ToString(), *Arguments);
         return true;
     }
+    // Reflectionの失敗理由を破棄すると、型不一致や未解決クラスが単なる
+    // 「未対応の式」に見えてしまう。共通Callの診断を呼び出し元まで伝播する。
+    // 既存の専用Emitterは段階的に統合するため、ここでは共通経路のみを対象とする。
+    if (bResolved == false)
+    {
+        Diagnostics.Append(ResolveDiagnostics);
+    }
     Diagnostics.Add(FString::Printf(TEXT("Unsupported semantic expression statement: %s::%s"),
         *Expression.FunctionOwnerPath, *Expression.FunctionName.ToString()));
     return false;
