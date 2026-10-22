@@ -1371,4 +1371,34 @@ bool FBPSemanticGeneratorPrintStringQualifierTest::RunTest(const FString& Parame
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorPrintStringNativeMemberTest,
+    "BlueprintAIConverter.SemanticIR.Generator.PrintStringNativeMember",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorPrintStringNativeMemberTest::RunTest(const FString& Parameters)
+{
+    // PrintStringの文字列引数がActorのfloatプロパティをFStringとして
+    // 偽装しても、ネイティブReflectionの実型と一致しないため拒否する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintStringのLowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), IR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticExpression& Argument =
+        IR.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1];
+    Argument.Kind = EBPSemanticExpressionKind::VariableReference;
+    Argument.VariableName = TEXT("InitialLifeSpan");
+    Argument.Type.Kind = EBPSemanticTypeKind::String;
+    Argument.LiteralValue.Reset();
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("floatネイティブメンバーのFString偽装を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AStringNativeMemberActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("型偽装時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
 #endif
