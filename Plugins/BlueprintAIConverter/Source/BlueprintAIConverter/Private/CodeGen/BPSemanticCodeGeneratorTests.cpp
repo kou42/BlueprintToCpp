@@ -1112,4 +1112,63 @@ bool FBPSemanticGeneratorReflectedFloatMemberTest::RunTest(const FString& Parame
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorForEachLocalTypeTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ForEachLocalType",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorForEachLocalTypeTest::RunTest(const FString& Parameters)
+{
+    // int32配列のForEachローカルElementをfloatとして偽装したIRは拒否する。
+    FBPSemanticIR IR;
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticVariable Array;
+    Array.Name = TEXT("Numbers");
+    Array.Type.Kind = EBPSemanticTypeKind::Int32;
+    Array.Type.ContainerKind = TEXT("array");
+    Array.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Array);
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = TEXT("Numbers");
+    Loop.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopArray.Type.ContainerKind = TEXT("array");
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopIndexVariable = TEXT("LoopIndex");
+    Loop.LoopElementVariable = TEXT("LoopElement");
+    FBPSemanticStatement Body;
+    Body.Kind = EBPSemanticStatementKind::Expression;
+    Body.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Body.Expression.Type.Kind = EBPSemanticTypeKind::Void;
+    Body.Expression.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Body.Expression.FunctionName = TEXT("SetActorTickInterval");
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = IR.ParentClassPath;
+    Target.VariableName = TEXT("this");
+    Body.Expression.Arguments.Add(Target);
+    FBPSemanticExpression Invalid;
+    Invalid.Kind = EBPSemanticExpressionKind::VariableReference;
+    Invalid.Type.Kind = EBPSemanticTypeKind::Float;
+    Invalid.VariableName = Loop.LoopElementVariable;
+    Body.Expression.Arguments.Add(Invalid);
+    Loop.LoopBodyStatements.Add(Body);
+    Block.Statements.Add(Loop);
+    Function.Blocks.Add(Block);
+    IR.Functions.Add(Function);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestFalse(TEXT("ForEachローカルElementの型偽装を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachLocalTypeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
 #endif
