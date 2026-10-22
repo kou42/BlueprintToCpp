@@ -93,6 +93,12 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - **未確認:** 最新HEADのUHT／UBTビルド、追加Automation Testの実行結果、既存PrintString Parity、ForEach正常系・拒否系、Semantic JSONとPythonの往復テスト。
 - **判定:** テスト未実施のためP0のチェックボックスは未完了のまま維持する。
 
+### P0追加実装（2026-10-23、検証待ち）
+
+- PrintStringのConv_IntToStringとConcat内整数演算で、SourcePinId付きint32メンバー参照をSemantic変数宣言または親クラスReflectionと照合する。未宣言・型偽装・コンテナ／参照／const修飾を拒否する。
+- 整数演算経由のメンバー参照は検証後にthis->参照として出力する。SourcePinIdのないローカル参照は既存互換性を維持し、ループスコープ検証は次の作業で共通化する。
+- UEビルド・Automation Test・JSON往復テストは未実施。P0完了とは判定しない。
+
 ### 次の実装・検証順序
 
 1. PrintStringのネスト式（Concat／Conv_IntToString／整数演算）で、ローカルIndexとBlueprint／ネイティブメンバーの参照元・型を共通ルールで検証する。
