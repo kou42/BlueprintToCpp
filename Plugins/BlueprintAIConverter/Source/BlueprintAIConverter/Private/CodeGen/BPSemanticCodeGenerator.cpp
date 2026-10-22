@@ -2027,6 +2027,14 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
                     return Variable.Name == Statement.LoopIndexVariable ||
                         Variable.Name == Statement.LoopElementVariable;
                 }) ||
+            // 生成クラスのBlueprint変数だけでなく、継承したネイティブ
+            // メンバーとの名前衝突も避ける。ローカルによる名前隠蔽で
+            // 既存のthis->参照や未修飾式の意味が変わることを防ぐ。
+            (FindObject<UClass>(nullptr, *IR.ParentClassPath) != nullptr &&
+                (FindObject<UClass>(nullptr, *IR.ParentClassPath)->FindPropertyByName(
+                    Statement.LoopIndexVariable) != nullptr ||
+                 FindObject<UClass>(nullptr, *IR.ParentClassPath)->FindPropertyByName(
+                    Statement.LoopElementVariable) != nullptr)) ||
             Statement.LoopBodyStatements.IsEmpty())
         {
             OutDiagnostics.Add(TEXT("ForEachLoop requires a verified int32 array member and distinct element/index identifiers"));
