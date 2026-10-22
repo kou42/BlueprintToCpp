@@ -1049,6 +1049,41 @@ bool IsCompatiblePrintStringMember(const FName Name, const FString& ParentClassP
         Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic);
 }
 
+// PrintString内の整数変換でも、メンバー参照は宣言とReflectionの両方で検証する。
+// SourcePinIdだけでは型の正当性を証明できないため、未宣言・型偽装を拒否する。
+bool IsCompatiblePrintStringIntMember(const FName Name, const FString& ParentClassPath,
+    const TArray<FBPSemanticVariable>* Variables)
+{
+    if (Variables != nullptr)
+    {
+        const FBPSemanticVariable* Variable = Variables->FindByPredicate(
+            [Name](const FBPSemanticVariable& Candidate)
+            {
+                return Candidate.Name == Name;
+            });
+        if (Variable != nullptr)
+        {
+            return Variable->Type.Kind == EBPSemanticTypeKind::Int32 &&
+                Variable->Type.ContainerKind.IsEmpty() &&
+                Variable->Type.bIsReference == false &&
+                Variable->Type.bIsConst == false &&
+                Variable->ReflectedCppType == TEXT("int32");
+        }
+    }
+    const UClass* ParentClass = FindObject<UClass>(nullptr, *ParentClassPath);
+    if (ParentClass == nullptr)
+    {
+        return false;
+    }
+    const FProperty* Member = ParentClass->FindPropertyByName(Name);
+    if (Member == nullptr)
+    {
+        return Variables == nullptr;
+    }
+    return CastField<FIntProperty>(Member) != nullptr &&
+        Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic);
+}
+
 bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
     const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
     TArray<FString>& Diagnostics, const TArray<FBPSemanticVariable>* Variables)
@@ -1183,7 +1218,12 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                     }
                     if (Integer.Kind == EBPSemanticExpressionKind::VariableReference)
                     {
-                        if (IsIdentifier(Integer.VariableName.ToString()) == false)
+                        if (IsIdentifier(Integer.VariableName.ToString()) == false ||
+                            Integer.Type.ContainerKind.IsEmpty() == false ||
+                            Integer.Type.bIsReference || Integer.Type.bIsConst ||
+                            (Integer.SourcePinId.IsValid() &&
+                                IsCompatiblePrintStringIntMember(Integer.VariableName,
+                                    ParentClassPath, Variables) == false))
                         {
                             return false;
                         }
@@ -1258,7 +1298,13 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         TextArgument.Arguments.Num() == 1 &&
         TextArgument.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
         TextArgument.Arguments[0].Type.Kind == EBPSemanticTypeKind::Int32 &&
-        IsIdentifier(TextArgument.Arguments[0].VariableName.ToString()))
+        IsIdentifier(TextArgument.Arguments[0].VariableName.ToString()) &&
+        TextArgument.Arguments[0].Type.ContainerKind.IsEmpty() &&
+        TextArgument.Arguments[0].Type.bIsReference == false &&
+        TextArgument.Arguments[0].Type.bIsConst == false &&
+        (TextArgument.Arguments[0].SourcePinId.IsValid() == false ||
+            IsCompatiblePrintStringIntMember(TextArgument.Arguments[0].VariableName,
+                ParentClassPath, Variables)))
     {
         // Getterは出力ピンIDを持つ。LoopIndexのローカル参照と区別する。
         const FBPSemanticExpression& Input = TextArgument.Arguments[0];
@@ -1296,11 +1342,18 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
             }
             if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
             {
-                if (IsIdentifier(Expression.VariableName.ToString()) == false)
+                if (IsIdentifier(Expression.VariableName.ToString()) == false ||
+                    Expression.Type.ContainerKind.IsEmpty() == false ||
+                    Expression.Type.bIsReference || Expression.Type.bIsConst ||
+                    (Expression.SourcePinId.IsValid() &&
+                        IsCompatiblePrintStringIntMember(Expression.VariableName,
+                            ParentClassPath, Variables) == false))
                 {
                     return false;
                 }
-                Result = Expression.VariableName.ToString();
+                Result = Expression.SourcePinId.IsValid()
+                    ? FString::Printf(TEXT("this->%s"), *Expression.VariableName.ToString())
+                    : Expression.VariableName.ToString();
                 return true;
             }
             if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
