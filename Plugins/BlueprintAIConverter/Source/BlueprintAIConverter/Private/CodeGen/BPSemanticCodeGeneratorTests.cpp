@@ -1050,4 +1050,66 @@ bool FBPSemanticGeneratorReflectedFloatLiteralTest::RunTest(const FString& Param
     return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorReflectedFloatMemberTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ReflectedFloatMember",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorReflectedFloatMemberTest::RunTest(const FString& Parameters)
+{
+    // 共通CallがActorの公開ネイティブfloatをReflectionで確認して参照する。
+    FBPSemanticIR Semantic;
+    Semantic.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Statement;
+    Statement.Kind = EBPSemanticStatementKind::Expression;
+    FBPSemanticExpression& Call = Statement.Expression;
+    Call.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Call.Type.Kind = EBPSemanticTypeKind::Void;
+    Call.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Call.FunctionName = TEXT("SetActorTickInterval");
+    FBPSemanticExpression Target;
+    Target.Kind = EBPSemanticExpressionKind::VariableReference;
+    Target.Type.Kind = EBPSemanticTypeKind::Object;
+    Target.Type.TypePath = Semantic.ParentClassPath;
+    Target.VariableName = TEXT("this");
+    Call.Arguments.Add(Target);
+    FBPSemanticExpression Argument;
+    Argument.Kind = EBPSemanticExpressionKind::VariableReference;
+    Argument.Type.Kind = EBPSemanticTypeKind::Float;
+    Argument.VariableName = TEXT("InitialLifeSpan");
+    Call.Arguments.Add(Argument);
+    Block.Statements.Add(Statement);
+    Function.Blocks.Add(Block);
+    Semantic.Functions.Add(Function);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("公開ネイティブfloatを共通Callへ渡せる"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedFloatMemberActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("floatメンバー参照を生成"),
+        Files.SourceContent.Contains(TEXT("this->SetActorTickInterval(this->InitialLifeSpan);")));
+
+    // 同じメンバー名をdoubleとして偽装してもReflection型照合で拒否する。
+    Semantic.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1].Type.Kind =
+        EBPSemanticTypeKind::Double;
+    Diagnostics.Reset();
+    TestFalse(TEXT("floatメンバーをdoubleとして出力しない"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedFloatMemberActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("失敗時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+    return true;
+}
+
 #endif
