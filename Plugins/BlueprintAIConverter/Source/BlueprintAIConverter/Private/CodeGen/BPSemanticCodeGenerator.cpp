@@ -1231,14 +1231,16 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                     }
                     if (Integer.Kind == EBPSemanticExpressionKind::VariableReference)
                     {
-                        if ((Integer.SourcePinId.IsValid()
-                            ? IsCompatiblePrintStringIntMember(Integer.VariableName, ParentClassPath, Variables)
-                            : IsValidPrintStringLocalInt(Integer, LocalIndex, LocalElement)) == false ||
+                        // Concat内の整数参照も、直接Convと同じ識別子・型・
+                        // 参照元検証を通す。重複したReflection照合は行わない。
+                        if (IsIdentifier(Integer.VariableName.ToString()) == false ||
+                            Integer.VariableName == TEXT("this") ||
                             Integer.Type.ContainerKind.IsEmpty() == false ||
                             Integer.Type.bIsReference || Integer.Type.bIsConst ||
-                            (Integer.SourcePinId.IsValid() &&
-                                IsCompatiblePrintStringIntMember(Integer.VariableName,
-                                    ParentClassPath, Variables) == false))
+                            (Integer.SourcePinId.IsValid()
+                                ? IsCompatiblePrintStringIntMember(Integer.VariableName,
+                                    ParentClassPath, Variables)
+                                : IsValidPrintStringLocalInt(Integer, LocalIndex, LocalElement)) == false)
                         {
                             return false;
                         }
