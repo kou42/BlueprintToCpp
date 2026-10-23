@@ -102,6 +102,35 @@ FBPSemanticIR MakeLoopIR(const FName PrintedName)
     IR.Functions.Add(Function);
     return IR;
 }
+FBPSemanticIR MakeForEachIR(const FName PrintedName)
+{
+    FBPSemanticIR IR;
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    FBPSemanticVariable Array;
+    Array.Name = TEXT("Numbers");
+    Array.Type.Kind = EBPSemanticTypeKind::Int32;
+    Array.Type.ContainerKind = TEXT("array");
+    Array.ReflectedCppType = TEXT("TArray<int32>");
+    IR.Variables.Add(Array);
+
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("BeginPlay");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    FBPSemanticBasicBlock Block;
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Loop.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Loop.LoopArray.VariableName = Array.Name;
+    Loop.LoopArray.Type = Array.Type;
+    Loop.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopIndexVariable = TEXT("LoopIndex");
+    Loop.LoopElementVariable = TEXT("LoopElement");
+    Loop.LoopBodyStatements.Add(MakeNestedPrintIndex(PrintedName));
+    Block.Statements.Add(Loop);
+    Function.Blocks.Add(Block);
+    IR.Functions.Add(Function);
+    return IR;
+}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticPrintStringScopeTest,
@@ -157,6 +186,38 @@ bool FBPSemanticPrintStringScopeTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Concat内の未宣言int32メンバーを拒否"),
         FBPSemanticCodeGenerator::Generate(Nested, TEXT("AScopeTestActor"),
             TEXT(""), Files, Diagnostics));
+
+    // ForEachのネスト式ではElement参照を再帰検出し、必要時のみ宣言する。
+    FBPSemanticIR ForEach = MakeForEachIR(TEXT("LoopElement"));
+    if (TestTrue(TEXT("ForEach内のConcatとElement加算を生成"),
+        FBPSemanticCodeGenerator::Generate(ForEach, TEXT("AForEachScopeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly)))
+    {
+        TestTrue(TEXT("ネストElementのローカル宣言を生成"),
+            Files.SourceContent.Contains(TEXT("const int32 LoopElement = Numbers[LoopIndex];")));
+        TestTrue(TEXT("Elementの加算式を生成"),
+            Files.SourceContent.Contains(TEXT("Conv_IntToString((LoopElement + 1))")));
+    }
+    // Indexだけを参照する場合、不要なElementのコピーを生成しない。
+    ForEach = MakeForEachIR(TEXT("LoopIndex"));
+    if (TestTrue(TEXT("ForEach内のネストIndexを生成"),
+        FBPSemanticCodeGenerator::Generate(ForEach, TEXT("AForEachScopeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly)))
+    {
+        TestFalse(TEXT("Element未使用なら宣言しない"),
+            Files.SourceContent.Contains(TEXT("const int32 LoopElement =")));
+    }
+    ForEach = MakeForEachIR(TEXT("UnknownIndex"));
+    TestFalse(TEXT("ForEach内の未宣言ローカルを拒否"),
+        FBPSemanticCodeGenerator::Generate(ForEach, TEXT("AForEachScopeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+
+    ForEach = MakeForEachIR(TEXT("LoopElement"));
+    ForEach.Functions[0].Blocks[0].Statements[0].CompletedStatements.Add(
+        MakeNestedPrintIndex(TEXT("LoopElement")));
+    TestFalse(TEXT("ForEach CompletedからElementを参照できない"),
+        FBPSemanticCodeGenerator::Generate(ForEach, TEXT("AForEachScopeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
 
     return true;
 }
