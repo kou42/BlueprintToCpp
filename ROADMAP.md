@@ -110,6 +110,8 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 - **ForEach回帰テスト拡充（新規・検証待ち）:** `BPSemanticPrintStringScopeTests.cpp` にForEach内Concat→Conv_IntToString→Add_IntIntのElement正常系、Index正常系、Element未使用時の宣言省略、未宣言ローカル拒否、CompletedからのElement参照拒否を追加。公開Generate入口で検証。最新HEADのUEビルドとAutomation Testは未実施。
 
+- **ネスト整数式の識別子検証（新規・検証待ち）:** Concat内部の整数変数参照でC++識別子を明示検証し、重複したメンバーReflection照合を整理。不正な識別子をSourcePinId付きメンバーとして与える拒否テストを追加。UEビルド／Automation Testは未実施。
+
 ### 次の実装・検証順序
 
 1. PrintStringのネスト式（Concat／Conv_IntToString／整数演算）で、ローカルIndexとBlueprint／ネイティブメンバーの参照元・型を共通ルールで検証する。
