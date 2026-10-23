@@ -108,6 +108,8 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 - **ForEachネスト式対応（新規変更・検証待ち）:** ForEachLoopのPrintString専用「リテラル／直接Conv_IntToString」制限を除去し、既存の検証済み式Emitterに統一。Concat／整数演算の内部までElement使用を再帰走査し、必要な場合にのみ要素変数を宣言する。既存のループ変数・Reflection検証は維持。UEビルド／Automation Testは新コミットに対して未実施。
 
+- **ForEach回帰テスト拡充（新規・検証待ち）:** `BPSemanticPrintStringScopeTests.cpp` にForEach内Concat→Conv_IntToString→Add_IntIntのElement正常系、Index正常系、Element未使用時の宣言省略、未宣言ローカル拒否、CompletedからのElement参照拒否を追加。公開Generate入口で検証。最新HEADのUEビルドとAutomation Testは未実施。
+
 ### 次の実装・検証順序
 
 1. PrintStringのネスト式（Concat／Conv_IntToString／整数演算）で、ローカルIndexとBlueprint／ネイティブメンバーの参照元・型を共通ルールで検証する。
