@@ -1506,7 +1506,8 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
             {
                 // ループローカル名の型偽装を拒否し、同名のActorメンバーへ
                 // フォールバックさせない。宣言時のint32型と一致させる。
-                if (Argument.Type.Kind != EBPSemanticTypeKind::Int32 ||
+                if (Argument.SourcePinId.IsValid() ||
+                    Argument.Type.Kind != EBPSemanticTypeKind::Int32 ||
                     Argument.Type.ContainerKind.IsEmpty() == false ||
                     Argument.Type.bIsReference || Argument.Type.bIsConst ||
                     IsIdentifier(Argument.VariableName.ToString()) == false)
