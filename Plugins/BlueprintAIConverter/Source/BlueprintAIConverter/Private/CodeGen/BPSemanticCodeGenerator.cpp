@@ -1451,6 +1451,27 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 Diagnostics.Add(TEXT("Reflected call argument has unsupported reference qualifiers"));
                 return false;
             }
+            // 共通CallのFString引数にも、PrintStringで検証済みの
+            // Concat/Conv_IntToString式を受け入れる。任意の関数式ではなく
+            // 文字列式Emitterの許可リストとスコープ検証を再利用する。
+            if (Argument.Kind == EBPSemanticExpressionKind::FunctionCall &&
+                Argument.Type.Kind == EBPSemanticTypeKind::String)
+            {
+                FString TextExpression;
+                if (EmitPrintStringTextExpression(Argument, ParentClassPath,
+                        Variables, LocalIndex, LocalElement, 0,
+                        TextExpression, Diagnostics) == false)
+                {
+                    Diagnostics.Add(TEXT("Unsupported reflected FString expression"));
+                    return false;
+                }
+                if (Index > FirstArgument)
+                {
+                    Arguments += TEXT(", ");
+                }
+                Arguments += TextExpression;
+                continue;
+            }
             // FStringのメンバー参照は親クラスの公開ネイティブプロパティに限定する。
             // 変数名だけから任意のC++式を生成しないため、Reflectionで型と公開範囲を検証する。
             if (Argument.Kind == EBPSemanticExpressionKind::VariableReference &&
