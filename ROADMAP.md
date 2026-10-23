@@ -116,6 +116,8 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 - **文字列式Emitter共通化（新規・検証待ち）:** PrintStringの文字列リテラル・メンバー参照・Concat_StrStr・Conv_IntToStringを`EmitPrintStringTextExpression`に統合。直接引数とConcat内部の型・識別子・Reflection・深さ制限を統一し、整数式は既存の共通ヘルパーを再利用。既存のPrintString/ForEach回帰テストで確認予定。最新HEADのUEビルド／Automation Testは未実施。
 
+- **共通CallのFStringネスト式対応（新規・検証待ち）:** Reflection共通CallのFString引数に`EmitPrintStringTextExpression`を再利用し、Concat_StrStr／Conv_IntToString／整数式の検証済み再帰生成を導入。共通CallのForEach Index/ElementではSourcePinId付き参照をローカルと誤認しないよう拒否し、Element偽装の回帰テストを追加。共通FStringネスト式自体の正常系Automation Testおよび最新HEADのUEビルドは未実施。
+
 ### 次の実装・検証順序
 
 1. PrintStringのネスト式（Concat／Conv_IntToString／整数演算）で、ローカルIndexとBlueprint／ネイティブメンバーの参照元・型を共通ルールで検証する。
