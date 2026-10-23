@@ -1156,6 +1156,82 @@ bool EmitPrintStringIntegerExpression(const FBPSemanticExpression& Expression,
     return FormatArithmeticOperator(Expression.FunctionName, Left, Right, Result);
 }
 
+// 文字列リテラル、メンバー、Concat、整数変換を単一の再帰Emitterで処理する。
+// 直接PrintString引数とConcatの子式に同じ型・参照元・深さ制限を適用する。
+bool EmitPrintStringTextExpression(const FBPSemanticExpression& Expression,
+    const FString& ParentClassPath, const TArray<FBPSemanticVariable>* Variables,
+    const FName LocalIndex, const FName LocalElement,
+    const int32 Depth, FString& Result, TArray<FString>& Diagnostics)
+{
+    if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::String ||
+        Expression.Type.ContainerKind.IsEmpty() == false ||
+        Expression.Type.bIsReference || Expression.Type.bIsConst)
+    {
+        return false;
+    }
+    if (Expression.Kind == EBPSemanticExpressionKind::Literal)
+    {
+        FString Value;
+        FString Escaped;
+        if (ReadArgument(Expression, EBPSemanticTypeKind::String,
+                Value, Diagnostics) == false ||
+            EscapeString(Value, Escaped, Diagnostics) == false)
+        {
+            return false;
+        }
+        Result = FString::Printf(TEXT("TEXT(\\\"%s\\\")"), *Escaped);
+        return true;
+    }
+    if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
+    {
+        if (IsIdentifier(Expression.VariableName.ToString()) == false ||
+            Expression.VariableName == TEXT("this") ||
+            IsCompatiblePrintStringMember(Expression.VariableName,
+                ParentClassPath, Variables) == false)
+        {
+            return false;
+        }
+        Result = FString::Printf(TEXT("this->%s"), *Expression.VariableName.ToString());
+        return true;
+    }
+    if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
+        Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetStringLibrary"))
+    {
+        return false;
+    }
+    if (Expression.FunctionName == TEXT("Conv_IntToString") &&
+        Expression.Arguments.Num() == 1)
+    {
+        FString IntegerExpression;
+        if (EmitPrintStringIntegerExpression(Expression.Arguments[0],
+                ParentClassPath, Variables, LocalIndex, LocalElement,
+                Depth + 1, IntegerExpression) == false)
+        {
+            return false;
+        }
+        Result = FString::Printf(TEXT("UKismetStringLibrary::Conv_IntToString(%s)"),
+            *IntegerExpression);
+        return true;
+    }
+    if (Expression.FunctionName != TEXT("Concat_StrStr") ||
+        Expression.Arguments.Num() != 2)
+    {
+        return false;
+    }
+    FString Left;
+    FString Right;
+    if (EmitPrintStringTextExpression(Expression.Arguments[0], ParentClassPath,
+            Variables, LocalIndex, LocalElement, Depth + 1, Left, Diagnostics) == false ||
+        EmitPrintStringTextExpression(Expression.Arguments[1], ParentClassPath,
+            Variables, LocalIndex, LocalElement, Depth + 1, Right, Diagnostics) == false)
+    {
+        return false;
+    }
+    Result = FString::Printf(TEXT("UKismetStringLibrary::Concat_StrStr(%s, %s)"),
+        *Left, *Right);
+    return true;
+}
+
 bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
     const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
     TArray<FString>& Diagnostics, const TArray<FBPSemanticVariable>* Variables,
@@ -1182,175 +1258,16 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         return false;
     }
 
-    FString Text;
     FString TextExpression;
     FString Screen;
     FString Log;
     FString Color;
     FString DurationText;
     FString Key;
-    const FBPSemanticExpression& TextArgument = Call.Arguments[1];
-    if (TextArgument.Kind == EBPSemanticExpressionKind::Literal)
-    {
-        if (ReadArgument(TextArgument, EBPSemanticTypeKind::String, Text, Diagnostics) == false)
-        {
-            return false;
-        }
-        FString EscapedText;
-        if (EscapeString(Text, EscapedText, Diagnostics) == false)
-        {
-            return false;
-        }
-        TextExpression = FString::Printf(TEXT("TEXT(\"%s\")"), *EscapedText);
-    }
-    else if (TextArgument.Kind == EBPSemanticExpressionKind::VariableReference &&
-        TextArgument.Type.Kind == EBPSemanticTypeKind::String)
-    {
-        // FStringの単一値だけを文字列メンバー参照として出力する。
-        // コンテナや参照修飾を無視すると、IRの型偽装で不正なC++式を作り得る。
-        if (TextArgument.Type.ContainerKind.IsEmpty() == false ||
-            TextArgument.Type.bIsReference || TextArgument.Type.bIsConst ||
-            IsIdentifier(TextArgument.VariableName.ToString()) == false ||
-            TextArgument.VariableName == TEXT("this") ||
-            IsCompatiblePrintStringMember(TextArgument.VariableName, ParentClassPath, Variables) == false)
-        {
-            Diagnostics.Add(TEXT("Invalid PrintString member variable name or reflected type"));
-            return false;
-        }
-        TextExpression = FString::Printf(TEXT("this->%s"),
-            *TextArgument.VariableName.ToString());
-    }
-    else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
-        TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
-        TextArgument.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
-        TextArgument.FunctionName == TEXT("Concat_StrStr") &&
-        TextArgument.Arguments.Num() == 2)
-    {
-        // 結合式を再帰的に出力する。深さ制限と関数の許可リストで
-        // 不正なIRから任意のC++式が生成されることを防ぐ。
-        TFunction<bool(const FBPSemanticExpression&, int32, FString&)> EmitString;
-        EmitString = [&](const FBPSemanticExpression& Expression,
-            int32 Depth, FString& Result) -> bool
-        {
-            if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::String ||
-                Expression.Type.ContainerKind.IsEmpty() == false ||
-                Expression.Type.bIsReference || Expression.Type.bIsConst)
-            {
-                return false;
-            }
-            if (Expression.Kind == EBPSemanticExpressionKind::Literal)
-            {
-                FString Value;
-                FString Escaped;
-                if (ReadArgument(Expression, EBPSemanticTypeKind::String,
-                        Value, Diagnostics) == false ||
-                    EscapeString(Value, Escaped, Diagnostics) == false)
-                {
-                    return false;
-                }
-                Result = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
-                return true;
-            }
-            if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
-            {
-                if (IsIdentifier(Expression.VariableName.ToString()) == false ||
-                    Expression.VariableName == TEXT("this") ||
-                    IsCompatiblePrintStringMember(Expression.VariableName,
-                        ParentClassPath, Variables) == false)
-                {
-                    return false;
-                }
-                Result = FString::Printf(TEXT("this->%s"),
-                    *Expression.VariableName.ToString());
-                return true;
-            }
-            if (Expression.Kind == EBPSemanticExpressionKind::FunctionCall &&
-                Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
-                Expression.FunctionName == TEXT("Conv_IntToString") &&
-                Expression.Arguments.Num() == 1)
-            {
-                // Concat内部も直接Convと同じ検証済み整数式Emitterを使う。
-                FString IndexExpression;
-                if (EmitPrintStringIntegerExpression(Expression.Arguments[0],
-                        ParentClassPath, Variables, LocalIndex, LocalElement,
-                        Depth + 1, IndexExpression) == false)
-                {
-                    return false;
-                }
-                Result = FString::Printf(
-                    TEXT("UKismetStringLibrary::Conv_IntToString(%s)"),
-                    *IndexExpression);
-                return true;
-            }
-            if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
-                Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetStringLibrary") ||
-                Expression.FunctionName != TEXT("Concat_StrStr") ||
-                Expression.Arguments.Num() != 2)
-            {
-                return false;
-            }
-            FString Left;
-            FString Right;
-            if (EmitString(Expression.Arguments[0], Depth + 1, Left) == false ||
-                EmitString(Expression.Arguments[1], Depth + 1, Right) == false)
-            {
-                return false;
-            }
-            Result = FString::Printf(TEXT("UKismetStringLibrary::Concat_StrStr(%s, %s)"),
-                *Left, *Right);
-            return true;
-        };
-        if (EmitString(TextArgument, 0, TextExpression) == false)
-        {
-            Diagnostics.Add(TEXT("Unsupported nested string concatenation"));
-            return false;
-        }
-    }
-    else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
-        TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
-        TextArgument.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
-        TextArgument.FunctionName == TEXT("Conv_IntToString") &&
-        TextArgument.Arguments.Num() == 1 &&
-        TextArgument.Arguments[0].Kind == EBPSemanticExpressionKind::VariableReference &&
-        TextArgument.Arguments[0].Type.Kind == EBPSemanticTypeKind::Int32 &&
-        IsIdentifier(TextArgument.Arguments[0].VariableName.ToString()) &&
-        (TextArgument.Arguments[0].SourcePinId.IsValid()
-            ? IsCompatiblePrintStringIntMember(TextArgument.Arguments[0].VariableName, ParentClassPath, Variables)
-            : IsValidPrintStringLocalInt(TextArgument.Arguments[0], LocalIndex, LocalElement)) &&
-        TextArgument.Arguments[0].Type.ContainerKind.IsEmpty() &&
-        TextArgument.Arguments[0].Type.bIsReference == false &&
-        TextArgument.Arguments[0].Type.bIsConst == false &&
-        (TextArgument.Arguments[0].SourcePinId.IsValid() == false ||
-            IsCompatiblePrintStringIntMember(TextArgument.Arguments[0].VariableName,
-                ParentClassPath, Variables)))
-    {
-        // Getterは出力ピンIDを持つ。LoopIndexのローカル参照と区別する。
-        const FBPSemanticExpression& Input = TextArgument.Arguments[0];
-        const FString Name = Input.VariableName.ToString();
-        const FString Reference = Input.SourcePinId.IsValid()
-            ? FString::Printf(TEXT("this->%s"), *Name) : Name;
-        TextExpression = FString::Printf(TEXT("UKismetStringLibrary::Conv_IntToString(%s)"),
-            *Reference);
-    }
-    else if (TextArgument.Kind == EBPSemanticExpressionKind::FunctionCall &&
-        TextArgument.Type.Kind == EBPSemanticTypeKind::String &&
-        TextArgument.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
-        TextArgument.FunctionName == TEXT("Conv_IntToString") &&
-        TextArgument.Arguments.Num() == 1)
-    {
-        // 直接ConvもConcat内と同じ再帰検証を通し、型偽装とスコープ逸脱を拒否する。
-        FString IntegerExpression;
-        if (EmitPrintStringIntegerExpression(TextArgument.Arguments[0],
-                ParentClassPath, Variables, LocalIndex, LocalElement,
-                0, IntegerExpression) == false)
-        {
-            Diagnostics.Add(TEXT("Unsupported nested Index arithmetic expression"));
-            return false;
-        }
-        TextExpression = FString::Printf(
-            TEXT("UKismetStringLibrary::Conv_IntToString(%s)"), *IntegerExpression);
-    }
-    else
+    // 文字列引数の全形状を共通Emitterに渡し、ネスト時だけ検証が
+    // 厳しくなる／緩くなるという経路差をなくす。
+    if (EmitPrintStringTextExpression(Call.Arguments[1], ParentClassPath,
+            Variables, LocalIndex, LocalElement, 0, TextExpression, Diagnostics) == false)
     {
         Diagnostics.Add(TEXT("Unsupported PrintString text expression"));
         return false;
