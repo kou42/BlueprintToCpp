@@ -219,6 +219,16 @@ bool FBPSemanticPrintStringScopeTest::RunTest(const FString& Parameters)
         FBPSemanticCodeGenerator::Generate(ForEach, TEXT("AForEachScopeActor"),
             FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
 
+    // 不正なC++識別子をSourcePinId付きメンバーとして偽装しても拒否する。
+    // ネスト整数式から未検証の識別子がC++へ漏れることを防ぐ。
+    ForEach = MakeForEachIR(TEXT("Invalid-Member"));
+    FBPSemanticExpression& InvalidMember = ForEach.Functions[0].Blocks[0].Statements[0]
+        .LoopBodyStatements[0].Expression.Arguments[1].Arguments[1].Arguments[0].Arguments[0];
+    InvalidMember.SourcePinId = FGuid::NewGuid();
+    TestFalse(TEXT("Concat内の不正なメンバー識別子を拒否"),
+        FBPSemanticCodeGenerator::Generate(ForEach, TEXT("AForEachScopeActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+
     return true;
 }
 #endif
