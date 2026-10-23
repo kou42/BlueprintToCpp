@@ -18,6 +18,13 @@ bool FBPConnectedActorLocationTest::RunTest(const FString& Parameters)
     Source.Id = FGuid::NewGuid();
     Source.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
     Source.FunctionName = TEXT("K2_GetActorLocation");
+    FBPIRPin Self;
+    Self.Id = FGuid::NewGuid();
+    Self.Name = TEXT("self");
+    Self.Direction = EGPD_Input;
+    Self.Category = TEXT("object");
+    Self.SubCategoryObjectPath = TEXT("/Script/Engine.Actor");
+    Source.Pins.Add(Self);
     FBPIRPin Return;
     Return.Id = FGuid::NewGuid();
     Return.Name = TEXT("ReturnValue");

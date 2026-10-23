@@ -13,6 +13,8 @@
 #include "HAL/FileManager.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
+#include "K2Node_FunctionEntry.h"
+#include "K2Node_FunctionResult.h"
 #include "K2Node_IfThenElse.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -139,6 +141,42 @@ bool FBPRealBranchConversionTest::RunTest(const FString& Parameters)
         return false;
     }
 
+    UBlueprint* ObjectBlueprint = FKismetEditorUtilities::CreateBlueprint(
+        UObject::StaticClass(), GetTransientPackage(), MakeUniqueObjectName(
+            GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_ObjectBeginPlayPolicy")),
+        BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("BeginPlay Policy検証用UObject Blueprint"), ObjectBlueprint) == false)
+    {
+        return false;
+    }
+    FKismetEditorUtilities::CompileBlueprint(ObjectBlueprint);
+    if (TestNotNull(TEXT("BeginPlay Policy検証用生成クラス"),
+            ObjectBlueprint->GeneratedClass.Get()) == false)
+    {
+        return false;
+    }
+    FBPGraphIR ObjectBeginPlayIR = GraphIR;
+    ObjectBeginPlayIR.ParentClassPath = UObject::StaticClass()->GetPathName();
+    FBPSemanticIR RejectedPolicyIR;
+    TestFalse(TEXT("UObjectにBeginPlay Policyを誤適用しない"),
+        FBPSemanticLowering::Lower(
+            ObjectBlueprint, ObjectBeginPlayIR, RejectedPolicyIR));
+    TestTrue(TEXT("BeginPlay非対応親クラスの診断を保持"),
+        RejectedPolicyIR.Diagnostics.ContainsByPredicate(
+            [](const FBPSemanticDiagnostic& Diagnostic)
+            {
+                return Diagnostic.Message.Contains(TEXT("does not provide an overridable BeginPlay"));
+            }));
+    RejectedPolicyIR = FBPSemanticIR();
+    TestFalse(TEXT("BeginPlay Graph IRとBlueprintの親クラス不一致を拒否"),
+        FBPSemanticLowering::Lower(ObjectBlueprint, GraphIR, RejectedPolicyIR));
+    TestTrue(TEXT("BeginPlay親クラス不一致の診断を保持"),
+        RejectedPolicyIR.Diagnostics.ContainsByPredicate(
+            [](const FBPSemanticDiagnostic& Diagnostic)
+            {
+                return Diagnostic.Message.Contains(TEXT("does not match the source Blueprint"));
+            }));
+
     int32 EventGraphIndex = INDEX_NONE;
     int32 BranchNodeIndex = INDEX_NONE;
     int32 ConditionPinIndex = INDEX_NONE;
@@ -257,6 +295,171 @@ bool FBPRealBranchConversionTest::RunTest(const FString& Parameters)
         FFileHelper::SaveStringToFile(Files.SourceContent, *SourcePath));
     AddInfo(FString::Printf(TEXT("REAL_BRANCH_HEADER=%s"), *HeaderPath));
     AddInfo(FString::Printf(TEXT("REAL_BRANCH_SOURCE=%s"), *SourcePath));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealFunctionBranchConversionTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.FunctionBranch",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPRealFunctionBranchConversionTest::RunTest(const FString& Parameters)
+{
+    const FName BlueprintName = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_FunctionBranch"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        UObject::StaticClass(), GetTransientPackage(), BlueprintName,
+        BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("UObject派生Blueprintを生成"), Blueprint) == false)
+    {
+        return false;
+    }
+
+    const FName FunctionName(TEXT("RunBranch"));
+    UEdGraph* FunctionGraph = FBlueprintEditorUtils::CreateNewGraph(
+        Blueprint, FunctionName, UEdGraph::StaticClass(),
+        UEdGraphSchema_K2::StaticClass());
+    FBlueprintEditorUtils::AddFunctionGraph<UFunction>(
+        Blueprint, FunctionGraph, true, nullptr);
+
+    UK2Node_FunctionEntry* Entry = nullptr;
+    TArray<UK2Node_FunctionResult*> Results;
+    for (UEdGraphNode* Node : FunctionGraph->Nodes)
+    {
+        Entry = Entry != nullptr ? Entry : Cast<UK2Node_FunctionEntry>(Node);
+        if (UK2Node_FunctionResult* Result = Cast<UK2Node_FunctionResult>(Node))
+        {
+            Results.Add(Result);
+        }
+    }
+    if (TestNotNull(TEXT("Function Entry"), Entry) == false)
+    {
+        return false;
+    }
+    while (Results.Num() < 2)
+    {
+        UK2Node_FunctionResult* Result = AddBranchNode<UK2Node_FunctionResult>(FunctionGraph);
+        Result->FunctionReference.SetSelfMember(FunctionName);
+        Result->AllocateDefaultPins();
+        Results.Add(Result);
+    }
+
+    UK2Node_IfThenElse* Branch = AddBranchNode<UK2Node_IfThenElse>(FunctionGraph);
+    Branch->AllocateDefaultPins();
+    Branch->FindPinChecked(TEXT("Condition"))->DefaultValue = TEXT("false");
+    UFunction* PrintFunction = UKismetSystemLibrary::StaticClass()->FindFunctionByName(
+        GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, PrintString));
+    if (TestNotNull(TEXT("PrintString UFunctionを取得"), PrintFunction) == false)
+    {
+        return false;
+    }
+    UK2Node_CallFunction* TruePrint = AddPrintStringNode(
+        FunctionGraph, PrintFunction, TEXT("Function Branch True"), TEXT("function-true"));
+    UK2Node_CallFunction* FalsePrint = AddPrintStringNode(
+        FunctionGraph, PrintFunction, TEXT("Function Branch False"), TEXT("function-false"));
+
+    const UEdGraphSchema_K2* Schema = Cast<UEdGraphSchema_K2>(FunctionGraph->GetSchema());
+    UEdGraphPin* EntryThen = Entry->FindPin(UEdGraphSchema_K2::PN_Then);
+    UEdGraphPin* FirstResultExecute = Results[0]->FindPin(UEdGraphSchema_K2::PN_Execute);
+    UEdGraphPin* SecondResultExecute = Results[1]->FindPin(UEdGraphSchema_K2::PN_Execute);
+    if (TestNotNull(TEXT("K2 schema"), Schema) == false ||
+        TestNotNull(TEXT("Entry Then"), EntryThen) == false ||
+        TestNotNull(TEXT("最初のResult Execute"), FirstResultExecute) == false ||
+        TestNotNull(TEXT("次のResult Execute"), SecondResultExecute) == false)
+    {
+        return false;
+    }
+    EntryThen->BreakAllPinLinks();
+    TestTrue(TEXT("Function EntryからBranchへ接続"), Schema->TryCreateConnection(
+        EntryThen, Branch->FindPinChecked(UEdGraphSchema_K2::PN_Execute)));
+    TestTrue(TEXT("True側をPrintStringへ接続"), Schema->TryCreateConnection(
+        Branch->FindPinChecked(UEdGraphSchema_K2::PN_Then),
+        TruePrint->FindPinChecked(UEdGraphSchema_K2::PN_Execute)));
+    TestTrue(TEXT("False側をPrintStringへ接続"), Schema->TryCreateConnection(
+        Branch->FindPinChecked(TEXT("else")),
+        FalsePrint->FindPinChecked(UEdGraphSchema_K2::PN_Execute)));
+    TestTrue(TEXT("True側をFunction Resultへ接続"), Schema->TryCreateConnection(
+        TruePrint->FindPinChecked(UEdGraphSchema_K2::PN_Then), FirstResultExecute));
+    TestTrue(TEXT("False側をFunction Resultへ接続"), Schema->TryCreateConnection(
+        FalsePrint->FindPinChecked(UEdGraphSchema_K2::PN_Then), SecondResultExecute));
+
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (TestTrue(TEXT("関数Blueprintのコンパイル成功"), Blueprint->Status != BS_Error) == false ||
+        TestNotNull(TEXT("生成クラス"), Blueprint->GeneratedClass.Get()) == false)
+    {
+        return false;
+    }
+
+    FBPGraphIR GraphIR;
+    if (TestTrue(TEXT("関数BranchのGraph IRを生成"),
+        FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false)
+    {
+        return false;
+    }
+    FBPSemanticIR SemanticIR;
+    if (TestTrue(TEXT("関数単位でBranchをLowering"),
+        FBPSemanticLowering::Lower(Blueprint, GraphIR, SemanticIR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : SemanticIR.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    if (TestEqual(TEXT("Semantic関数数"), SemanticIR.Functions.Num(), 1) == false ||
+        TestEqual(TEXT("Semantic関数名"), SemanticIR.Functions[0].Name, FunctionName) == false ||
+        TestFalse(TEXT("通常関数として保持"), SemanticIR.Functions[0].bIsEventGraph) == false ||
+        TestEqual(TEXT("Branch文数"),
+            SemanticIR.Functions[0].Blocks[0].Statements.Num(), 1) == false)
+    {
+        return false;
+    }
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("UObject通常関数のBranch C++を生成"),
+        FBPSemanticCodeGenerator::Generate(
+            SemanticIR, TEXT("UFunctionBranchObject"), FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("通常関数定義を生成"),
+        Files.SourceContent.Contains(TEXT("UFunctionBranchObject::RunBranch(")));
+    TestTrue(TEXT("Branchのifを生成"), Files.SourceContent.Contains(TEXT("if (false)")));
+    TestTrue(TEXT("True側本文を生成"), Files.SourceContent.Contains(TEXT("Function Branch True")));
+    TestTrue(TEXT("False側本文を生成"), Files.SourceContent.Contains(TEXT("Function Branch False")));
+
+    FBPGraphIR MissingResultIR = GraphIR;
+    FBPIRGraph* BranchGraph = MissingResultIR.Graphs.FindByPredicate(
+        [FunctionName](const FBPIRGraph& Graph)
+        {
+            return Graph.Kind == TEXT("function") && Graph.Name == FunctionName.ToString();
+        });
+    if (TestNotNull(TEXT("拒否系検証用の関数Graph"), BranchGraph) == false)
+    {
+        return false;
+    }
+    const int32 ResultEdgeIndex = BranchGraph->ExecEdges.IndexOfByPredicate(
+        [BranchGraph](const FBPIRLink& Edge)
+        {
+            const FBPIRNode* Target = BranchGraph->Nodes.FindByPredicate(
+                [&Edge](const FBPIRNode& Node) { return Node.Id == Edge.TargetNode; });
+            return Target != nullptr &&
+                Target->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionResult");
+        });
+    if (TestTrue(TEXT("拒否系検証用のResult接続を特定"), ResultEdgeIndex != INDEX_NONE) == false)
+    {
+        return false;
+    }
+    BranchGraph->ExecEdges.RemoveAt(ResultEdgeIndex);
+    FBPSemanticIR RejectedIR;
+    TestFalse(TEXT("Function Resultへ到達しない枝を拒否"),
+        FBPSemanticLowering::Lower(Blueprint, MissingResultIR, RejectedIR));
+    TestTrue(TEXT("Result欠落の診断を保持"), RejectedIR.HasErrors());
     return true;
 }
 

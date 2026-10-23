@@ -26,17 +26,18 @@ public:
     static bool LowerActorLocation(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
 
-    // BeginPlayからboolリテラルまたは反射検証済み数値比較のBranchを通り、
-    // 両枝でPrintStringを呼ぶ限定縦断Lowering。
+    // BeginPlayまたは通常関数Entryからboolリテラルまたは反射検証済み
+    // 数値比較のBranchを通り、両枝でPrintStringを呼ぶ限定縦断Lowering。
     static bool LowerBranch(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
 
-    // BeginPlay -> Sequence -> 複数のPrintStringを、Sequence出力ピンの番号順に
-    // Semantic基本ブロックへLoweringする。
+    // BeginPlay／Function Entry／Custom Event -> Sequence -> 複数のPrintStringを、
+    // Sequence出力ピンの番号順にSemantic基本ブロックへLoweringする。
     static bool LowerSequence(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
 
-    // BeginPlay -> ForLoop -> PrintString の限定形状を、両端を含むfor文へLoweringする。
+    // BeginPlay -> ForLoop -> PrintString、または通常関数の
+    // ForLoop -> 反射検証済みvoid関数呼び出しを、両端を含むfor文へLoweringする。
     static bool LowerForLoop(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR);
 
     // メンバー変数を参照するループでは、Blueprintから反射済みの変数定義を取得する。

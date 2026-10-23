@@ -32,8 +32,15 @@ bool FBPActorLocationEmitterTest::RunTest(const FString& Parameters)
 
     Call.Type.TypePath = TEXT("/Script/CoreUObject.Vector");
     Call.Arguments[0].VariableName = TEXT("OtherActor");
-    TestFalse(TEXT("Reject non-self target"), FBPActorLocationExpressionEmitter::Emit(Call, Cpp, Diagnostics));
-    TestTrue(TEXT("Report rejected call"), Diagnostics.IsEmpty() == false);
+    Diagnostics.Reset();
+    TestTrue(TEXT("Emit typed Actor target"),
+        FBPActorLocationExpressionEmitter::Emit(Call, Cpp, Diagnostics));
+    TestEqual(TEXT("Null-safe target expression"), Cpp, FString(
+        TEXT("(OtherActor != nullptr ? OtherActor->GetActorLocation() : FVector::ZeroVector)")));
+    Call.Arguments[0].VariableName = TEXT("Other-Actor");
+    TestFalse(TEXT("Reject invalid target identifier"),
+        FBPActorLocationExpressionEmitter::Emit(Call, Cpp, Diagnostics));
+    TestTrue(TEXT("Report rejected identifier"), Diagnostics.IsEmpty() == false);
     return true;
 }
 #endif

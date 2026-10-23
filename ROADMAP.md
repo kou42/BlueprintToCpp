@@ -1,6 +1,6 @@
 # BlueprintToCpp ロードマップ
 
-最終更新: 2026-10-23
+最終更新: 2026-10-24
 
 ## 目的と原則
 
@@ -21,9 +21,11 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - 通常関数／Custom Eventの `Entry -> PrintString` 経路とUObject統合テストは既存。ただし一般的なノードの組み合わせには未対応。
 - `FBPSemanticCodeGenerator::Generate` はSemantic関数をちょうど1個、BasicBlockをちょうど1個に制限している。
 - `EmitExpressionStatement` には `FBPReflectedCallResolver` を使う共通呼び出し経路があるが、PrintStringは先に専用Emitterへ分岐する。ForEachLoopにもPrintString固有処理が残る。
-- Branch／ForLoop／ForEachLoopの既存LoweringはBeginPlay前提の経路を含む。
+- ForLoopの複雑形状とForEachLoopの既存LoweringはBeginPlay前提の経路を含む。
+- `ResolveEntryFunction` がBeginPlay、Function Entry、Custom Eventの判定と反射署名復元を共通化した。単一PrintString、Sequence、単一Branch、通常関数の単一ForLoopがこの経路を利用する。
+- SequenceはActor BeginPlayに加えて、UObject通常関数でも出力ピン順を保持して複数PrintStringをLowering・C++生成できる。Function Resultは最後のSequence出力から到達する形だけを受理する。
 - Semantic JSONは `BPSemanticJsonSerializer.cpp` で `schema_version: 2` を出力し、Pythonの `semantic_json.py` が同バージョンを検証する。JSON Exporterと既存テストがあるが、今後の共通Call／複数関数対応に追従するかは別途検証が必要。
-- PR #109 はUObject派生クラスの回帰テストと通常関数の振り分け改善を提案中。**mainへの反映やUEビルド成功は未確認**。
+- PR #109 のUObject派生クラス回帰テストと通常関数の振り分け改善は `main` へ反映済み。
 
 ## 優先順位と完了条件
 
@@ -40,10 +42,11 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 ### P1: グラフ単位から関数単位のLoweringへ
 
-- [ ] BeginPlay、Function Entry、Custom Eventを共通Entry解析で区別し、Reflection署名を確認する。
+- [x] BeginPlay、Function Entry、Custom Eventを共通Entry解析で区別し、Reflection署名を確認する。
 - [ ] Blueprint全体のノード有無によるパターン振り分けを、関数グラフ単位の検証とStatement Loweringへ移行する。
-- [ ] UObject通常関数で `Branch -> PrintString`、`ForLoop -> 関数呼び出し` を変換できる統合テストを追加する。
-- [ ] ActorのBeginPlayおよびActor位置操作はActor専用Policyで検証し、非Actorへ誤適用しない。
+- [x] UObject通常関数で `Branch -> PrintString` を変換し、両枝のFunction Result到達も検証する統合テストを追加する。
+- [x] UObject通常関数で `ForLoop -> 関数呼び出し` を変換できる統合テストを追加する。
+- [x] ActorのBeginPlayおよびActor位置操作はActor専用Policyで検証し、非Actorへ誤適用しない。
 - [ ] 未対応グラフや複数の実行Entryを黙って無視せず、診断付きで拒否する。
 
 **完了条件:** UObject通常関数で制御フローと共通関数呼び出しを組み合わせられ、Actorの既存変換も維持されること。
@@ -137,9 +140,18 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 | `BPSemanticCodeGenerator.cpp::EmitExpressionStatement` | PrintStringを共通解決より先に分岐 | 共通Call解決に一本化後、分岐を削除 |
 | `BPSemanticCodeGenerator.cpp` のForEachLoop出力 | Index／Elementの共通Call引数化とCompleted共通化は進捗。ただしPrintString名による判定が残る | ネストした式へのローカル変数伝播と回帰テストが通れば専用判定を削除 |
 | `BPSemanticLowering.cpp::Lower` | ノードの有無でパターンを選択 | 関数単位のEntry／Statement Loweringへ移行後に撤去 |
-| Branch／ForLoop／ForEachLoop Lowering | BeginPlay前提の検証 | 共通Entry解析とクラス固有Policyへ分離後に整理 |
+| 複雑ForLoop／ForEachLoop Lowering | BeginPlay前提の検証 | 共通Entry解析とクラス固有Policyへ分離後に整理 |
 | `BPSemanticCodeGenerator.cpp::Generate` | 単一関数・単一Block制限 | 複数関数／CFG出力とテストが通れば撤去 |
 | `BPSemanticJsonSerializer.cpp`／`PythonServer/app/semantic_json.py` | schema_version 2 の表現と検証の同期が必要 | 新IR表現ごとに両側を更新しgolden／roundtripで確認 |
+
+## 最新の検証結果
+
+- 2026-10-24: UE 5.7 `MyProject2Editor Win64 Development` のUHT／UBTビルド成功。
+- 2026-10-24: Graph IRの親クラスと実Blueprintの親クラス一致を共通Entry解析とActor位置経路で検証。UObjectへのBeginPlay、UObject／ActorComponentへのActor位置APIの誤適用、および親クラス改ざんを診断付きで拒否する統合テスト成功。
+- 2026-10-24: UObject通常関数の `ForLoop -> UGameplayStatics::SetSubtitlesEnabled(bool) -> Function Result` を反射署名とExec接続によりLowering。ForLoop内の式から所有クラスincludeを収集する経路と `FunctionForLoopCall` 統合テストも追加。
+- 2026-10-24: UObject通常関数の `Branch -> PrintString -> Function Result` を共通Entry解析でLoweringし、両枝のResult欠落を拒否する `FunctionBranch` 統合テスト成功。
+- 2026-10-24: `FunctionSequence`、`CustomEventSequence`、既存 `Sequence` のAutomation Test成功。
+- 2026-10-24: `BlueprintAIConverter` 全129件のAutomation Test成功（Exit Code 0）。旧Kismet関数形式を期待していたForLoop算術式テストと、selfピンを欠いていたActorLocation／ConnectedFunctionCall fixtureも現在のGraph IR契約へ同期済み。
 
 ## 検証ゲート
 

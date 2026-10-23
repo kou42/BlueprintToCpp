@@ -2274,6 +2274,35 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             ? FString()
             : FString::Printf(TEXT("\n%s::%s()\n{\n%s}\n"),
                 *ClassName, *ClassName, *ConstructorBody);
+        FString LoopIncludes =
+            TEXT("#include \"Kismet/KismetMathLibrary.h\"\n")
+            TEXT("#include \"Kismet/KismetStringLibrary.h\"\n")
+            TEXT("#include \"Kismet/KismetSystemLibrary.h\"\n");
+        TFunction<void(const FBPSemanticStatement&)> CollectLoopIncludes;
+        CollectLoopIncludes = [&](const FBPSemanticStatement& Current)
+        {
+            if (Current.Kind == EBPSemanticStatementKind::Expression)
+            {
+                AppendExpressionIncludes(Current.Expression, LoopIncludes);
+            }
+            for (const FBPSemanticStatement& Child : Current.ThenStatements)
+            {
+                CollectLoopIncludes(Child);
+            }
+            for (const FBPSemanticStatement& Child : Current.ElseStatements)
+            {
+                CollectLoopIncludes(Child);
+            }
+            for (const FBPSemanticStatement& Child : Current.LoopBodyStatements)
+            {
+                CollectLoopIncludes(Child);
+            }
+            for (const FBPSemanticStatement& Child : Current.CompletedStatements)
+            {
+                CollectLoopIncludes(Child);
+            }
+        };
+        CollectLoopIncludes(Statement);
         FBPGeneratedActorFiles Files;
         Files.HeaderFileName = BaseName + TEXT(".h");
         Files.SourceFileName = BaseName + TEXT(".cpp");
@@ -2288,8 +2317,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             *Statement.LoopIndexVariable.ToString(), LastIndex,
             *Statement.LoopIndexVariable.ToString(), *BodyCode, *CompletedCode);
         Files.SourceContent = FString::Printf(
-            TEXT("#include \"%s.h\"\n#include \"Kismet/KismetMathLibrary.h\"\n#include \"Kismet/KismetStringLibrary.h\"\n#include \"Kismet/KismetSystemLibrary.h\"\n%s%s%s"),
-            *BaseName, *LeadingIncludes, *UnrealTypeInclude, *ConstructorDefinition);
+            TEXT("#include \"%s.h\"\n%s%s%s%s"),
+            *BaseName, *LoopIncludes, *LeadingIncludes,
+            *UnrealTypeInclude, *ConstructorDefinition);
         Files.SourceContent += FBPFunctionDefinitionEmitter::RenderDefinition(FunctionShape, Body);
         OutFiles = MoveTemp(Files);
         return true;

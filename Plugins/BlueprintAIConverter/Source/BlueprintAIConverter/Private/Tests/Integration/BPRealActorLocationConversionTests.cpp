@@ -9,6 +9,7 @@
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
+#include "Components/ActorComponent.h"
 #include "GameFramework/Actor.h"
 #include "HAL/FileManager.h"
 #include "K2Node_CallFunction.h"
@@ -118,6 +119,67 @@ bool FBPRealActorLocationConversionTest::RunTest(const FString& Parameters)
         }
         return false;
     }
+
+    const auto HasDiagnostic = [](const FBPSemanticIR& IR, const TCHAR* Text)
+    {
+        return IR.Diagnostics.ContainsByPredicate(
+            [Text](const FBPSemanticDiagnostic& Diagnostic)
+            {
+                return Diagnostic.Message.Contains(Text);
+            });
+    };
+    UBlueprint* ObjectBlueprint = FKismetEditorUtilities::CreateBlueprint(
+        UObject::StaticClass(), GetTransientPackage(), MakeUniqueObjectName(
+            GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_ObjectLocationPolicy")),
+        BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("UObject Policy検証用Blueprintを生成"), ObjectBlueprint) == false)
+    {
+        return false;
+    }
+    FKismetEditorUtilities::CompileBlueprint(ObjectBlueprint);
+    if (TestNotNull(TEXT("UObject Policy検証用Blueprint"),
+            ObjectBlueprint->GeneratedClass.Get()) == false)
+    {
+        return false;
+    }
+    FBPGraphIR ObjectLocationIR = GraphIR;
+    ObjectLocationIR.ParentClassPath = UObject::StaticClass()->GetPathName();
+    FBPSemanticIR RejectedPolicyIR;
+    TestFalse(TEXT("UObjectへActor位置Policyを誤適用しない"),
+        FBPSemanticLowering::Lower(ObjectBlueprint, ObjectLocationIR, RejectedPolicyIR));
+    TestTrue(TEXT("Actor専用Policyの拒否理由を保持"),
+        HasDiagnostic(RejectedPolicyIR, TEXT("not derived from AActor")));
+
+    RejectedPolicyIR = FBPSemanticIR();
+    TestFalse(TEXT("Graph IRとBlueprintの親クラス不一致を拒否"),
+        FBPSemanticLowering::Lower(ObjectBlueprint, GraphIR, RejectedPolicyIR));
+    TestTrue(TEXT("親クラス不一致の診断を保持"),
+        HasDiagnostic(RejectedPolicyIR, TEXT("does not match the source Blueprint")));
+
+    UBlueprint* ComponentBlueprint = FKismetEditorUtilities::CreateBlueprint(
+        UActorComponent::StaticClass(), GetTransientPackage(), MakeUniqueObjectName(
+            GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_ComponentLocationPolicy")),
+        BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("ActorComponent Policy検証用Blueprintを生成"),
+            ComponentBlueprint) == false)
+    {
+        return false;
+    }
+    FKismetEditorUtilities::CompileBlueprint(ComponentBlueprint);
+    if (TestNotNull(TEXT("ActorComponent Policy検証用Blueprint"),
+            ComponentBlueprint->GeneratedClass.Get()) == false)
+    {
+        return false;
+    }
+    FBPGraphIR ComponentLocationIR = GraphIR;
+    ComponentLocationIR.ParentClassPath = UActorComponent::StaticClass()->GetPathName();
+    RejectedPolicyIR = FBPSemanticIR();
+    TestFalse(TEXT("BeginPlay対応ComponentにActor位置APIを許可しない"),
+        FBPSemanticLowering::Lower(
+            ComponentBlueprint, ComponentLocationIR, RejectedPolicyIR));
+    TestTrue(TEXT("ActorComponentへの位置Policy拒否を保持"),
+        HasDiagnostic(RejectedPolicyIR, TEXT("not derived from AActor")));
+
     if (SemanticIR.Functions.Num() != 1 ||
         SemanticIR.Functions[0].Blocks.Num() != 1 ||
         SemanticIR.Functions[0].Blocks[0].Statements.Num() != 1)

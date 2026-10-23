@@ -309,7 +309,7 @@ bool FBPRealArithmeticComparisonBranchConversionTest::RunTest(
             }
             return false;
         }
-        if (DivisorText == TEXT("-2"))
+        if (FCString::Strcmp(DivisorText, TEXT("-2")) == 0)
         {
             TestTrue(TEXT("負の安全な除数を演算子化"),
                 DivisionFiles.SourceContent.Contains(TEXT(" / -2 > 35")));
@@ -329,7 +329,7 @@ bool FBPRealArithmeticComparisonBranchConversionTest::RunTest(
         MixedSemantic.Functions[0].Blocks[0].Statements[0].Expression;
     FBPSemanticExpression MixedAdd = Arithmetic.Arguments[0];
     MixedAdd.FunctionName = TEXT("Add_IntInt");
-    MixedAdd.Arguments[0] = Arithmetic.Arguments[0].Arguments[0];
+    MixedAdd.Arguments[0] = Arithmetic.Arguments[0];
     MixedAdd.Arguments[1].LiteralValue = TEXT("1");
     FBPSemanticExpression MixedMultiply = Arithmetic.Arguments[0];
     MixedMultiply.FunctionName = TEXT("Multiply_IntInt");

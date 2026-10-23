@@ -17,6 +17,13 @@ FBPGraphIR MakeLocationGraph()
     Call.Id = FGuid::NewGuid();
     Call.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
     Call.FunctionName = TEXT("K2_GetActorLocation");
+    FBPIRPin Self;
+    Self.Id = FGuid::NewGuid();
+    Self.Name = TEXT("self");
+    Self.Direction = EGPD_Input;
+    Self.Category = TEXT("object");
+    Self.SubCategoryObjectPath = TEXT("/Script/Engine.Actor");
+    Call.Pins.Add(Self);
     FBPIRPin Return;
     Return.Id = FGuid::NewGuid();
     Return.Name = TEXT("ReturnValue");
@@ -45,11 +52,11 @@ bool FBPActorLocationLoweringTest::RunTest(const FString& Parameters)
         FBPActorLocationLowering::LowerGetActorLocation(IR, NodeId, Expression, Diagnostics));
     TestEqual(TEXT("Function name"), Expression.FunctionName, FName(TEXT("K2_GetActorLocation")));
     TestEqual(TEXT("Source node ID"), Expression.SourceNodeId, NodeId);
-    TestEqual(TEXT("Return pin ID"), Expression.SourcePinId, IR.Graphs[0].Nodes[0].Pins[0].Id);
+    TestEqual(TEXT("Return pin ID"), Expression.SourcePinId, IR.Graphs[0].Nodes[0].Pins[1].Id);
     TestEqual(TEXT("Vector type"), Expression.Type.TypePath, FString(TEXT("/Script/CoreUObject.Vector")));
     TestEqual(TEXT("Self argument count"), Expression.Arguments.Num(), 1);
 
-    IR.Graphs[0].Nodes[0].Pins[0].SubCategoryObjectPath = TEXT("/Script/CoreUObject.Rotator");
+    IR.Graphs[0].Nodes[0].Pins[1].SubCategoryObjectPath = TEXT("/Script/CoreUObject.Rotator");
     Diagnostics.Reset();
     TestFalse(TEXT("Mismatched struct type rejected"),
         FBPActorLocationLowering::LowerGetActorLocation(IR, NodeId, Expression, Diagnostics));
@@ -57,7 +64,10 @@ bool FBPActorLocationLoweringTest::RunTest(const FString& Parameters)
 
     IR = MakeLocationGraph();
     FBPIRLink Unsupported;
+    Unsupported.SourceNode = FGuid::NewGuid();
+    Unsupported.SourcePin = FGuid::NewGuid();
     Unsupported.TargetNode = IR.Graphs[0].Nodes[0].Id;
+    Unsupported.TargetPin = IR.Graphs[0].Nodes[0].Pins[0].Id;
     IR.Graphs[0].DataEdges.Add(Unsupported);
     Diagnostics.Reset();
     TestFalse(TEXT("Connected input rejected"),

@@ -365,7 +365,7 @@ bool FBPForLoopNestedIndexAdditionTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("外側と内側Indexの加算"),
         Files.SourceContent.Contains(TEXT(
-            "UKismetStringLibrary::Conv_IntToString(UKismetMathLibrary::Add_IntInt(LoopIndex, InnerIndex))")));
+            "UKismetStringLibrary::Conv_IntToString((LoopIndex + InnerIndex))")));
     return true;
 }
 
@@ -539,7 +539,7 @@ bool FBPForLoopNestedIndexSubtractionTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("外側と内側Indexの減算"),
         Files.SourceContent.Contains(TEXT(
-            "UKismetStringLibrary::Conv_IntToString(UKismetMathLibrary::Subtract_IntInt(LoopIndex, InnerIndex))")));
+            "UKismetStringLibrary::Conv_IntToString((LoopIndex - InnerIndex))")));
     return true;
 }
 
@@ -621,7 +621,7 @@ bool FBPForLoopNestedIndexMultiplicationTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("外側と内側Indexの乗算"),
         Files.SourceContent.Contains(TEXT(
-            "UKismetStringLibrary::Conv_IntToString(UKismetMathLibrary::Multiply_IntInt(LoopIndex, InnerIndex))")));
+            "UKismetStringLibrary::Conv_IntToString((LoopIndex * InnerIndex))")));
     return true;
 }
 
@@ -1049,7 +1049,7 @@ bool FBPForLoopMultipleNestedComparisonsTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("外側比較"), Files.SourceContent.Contains(TEXT("if (LoopIndex < 5)")));
     TestTrue(TEXT("内側の多段算術比較"),
-        Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Multiply_IntInt(UKismetMathLibrary::Add_IntInt(LoopIndex, 1), 2) > 1")));
+        Files.SourceContent.Contains(TEXT("(LoopIndex + 1) * 2 > 1")));
     return true;
 }
 
@@ -1302,7 +1302,7 @@ bool FBPForLoopNestedArithmeticComparisonTest::RunTest(const FString& Parameters
         return false;
     }
     TestTrue(TEXT("多段算術式を保持"),
-        Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Multiply_IntInt(UKismetMathLibrary::Add_IntInt(LoopIndex, 1), 2) < 10")));
+        Files.SourceContent.Contains(TEXT("(LoopIndex + 1) * 2 < 10")));
     return true;
 }
 
@@ -1360,7 +1360,7 @@ bool FBPForLoopArithmeticComparisonBranchTest::RunTest(const FString& Parameters
         return false;
     }
     TestTrue(TEXT("Indexの加算を比較条件へ生成"),
-        Files.SourceContent.Contains(TEXT("UKismetMathLibrary::Add_IntInt(LoopIndex, 1) < 5")));
+        Files.SourceContent.Contains(TEXT("LoopIndex + 1 < 5")));
     return true;
 }
 
@@ -2788,7 +2788,7 @@ bool FBPForLoopNestedArithmeticPrintTest::RunTest(const FString& Parameters)
         return false;
     }
     TestTrue(TEXT("内側Indexの文字列変換を生成"),
-        Files.SourceContent.Contains(TEXT("Add_IntInt(InnerIndex, 10)")));
+        Files.SourceContent.Contains(TEXT("InnerIndex + 10")));
     return true;
 }
 
@@ -2946,7 +2946,7 @@ bool FBPForLoopNestedConcatArithmeticPrintTest::RunTest(const FString& Parameter
     }
     TestTrue(TEXT("内側Indexの文字列変換を生成"),
         Files.SourceContent.Contains(TEXT("Concat_StrStr(")) &&
-        Files.SourceContent.Contains(TEXT("Add_IntInt(InnerIndex, 10)")));
+        Files.SourceContent.Contains(TEXT("InnerIndex + 10")));
     return true;
 }
 

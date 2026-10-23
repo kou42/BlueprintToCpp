@@ -127,6 +127,13 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
     ReturnPin.Direction = EGPD_Output;
     ReturnPin.Category = UEdGraphSchema_K2::PC_Boolean;
     IR.Graphs[0].Nodes[0].Pins.Add(ReturnPin);
+    FBPIRPin CallSelf;
+    CallSelf.Id = FGuid::NewGuid();
+    CallSelf.Name = TEXT("self");
+    CallSelf.Direction = EGPD_Input;
+    CallSelf.Category = UEdGraphSchema_K2::PC_Object;
+    CallSelf.SubCategoryObjectPath = TEXT("/Script/Engine.Actor");
+    IR.Graphs[0].Nodes[0].Pins.Add(CallSelf);
     const FBPIRPin* OutputPin = IR.Graphs[0].Nodes[0].Pins.FindByPredicate(
         [](const FBPIRPin& Pin) { return Pin.Name == TEXT("SweepHitResult"); });
     if (TestNotNull(TEXT("SweepHitResult output pin"), OutputPin))
@@ -139,6 +146,13 @@ bool FBPConnectedFunctionCallEmitterTest::RunTest(const FString& Parameters)
         LocationSource.Id = FGuid::NewGuid();
         LocationSource.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
         LocationSource.FunctionName = TEXT("K2_GetActorLocation");
+        FBPIRPin LocationSelf;
+        LocationSelf.Id = FGuid::NewGuid();
+        LocationSelf.Name = TEXT("self");
+        LocationSelf.Direction = EGPD_Input;
+        LocationSelf.Category = UEdGraphSchema_K2::PC_Object;
+        LocationSelf.SubCategoryObjectPath = TEXT("/Script/Engine.Actor");
+        LocationSource.Pins.Add(LocationSelf);
         FBPIRPin LocationReturn;
         LocationReturn.Id = FGuid::NewGuid();
         LocationReturn.Name = TEXT("ReturnValue");
