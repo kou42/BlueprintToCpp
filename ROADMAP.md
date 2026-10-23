@@ -112,6 +112,8 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 - **ネスト整数式の識別子検証（新規・検証待ち）:** Concat内部の整数変数参照でC++識別子を明示検証し、重複したメンバーReflection照合を整理。不正な識別子をSourcePinId付きメンバーとして与える拒否テストを追加。UEビルド／Automation Testは未実施。
 
+- **整数式Emitter共通化（新規・検証待ち）:** PrintStringの直接Conv_IntToStringとConcat内部Conv_IntToStringで重複していた整数式再帰Emitterを`EmitPrintStringIntegerExpression`へ統合。int32型、コンテナ・参照修飾、ローカルスコープ、メンバーReflection、識別子、MathLibrary許可リスト、深さ制限を一箇所で検証。UEビルド／Automation Testは最新HEADでは未実施。
+
 ### 次の実装・検証順序
 
 1. PrintStringのネスト式（Concat／Conv_IntToString／整数演算）で、ローカルIndexとBlueprint／ネイティブメンバーの参照元・型を共通ルールで検証する。
