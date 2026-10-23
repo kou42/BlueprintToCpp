@@ -1096,6 +1096,66 @@ bool IsValidPrintStringLocalInt(const FBPSemanticExpression& Expression,
          (LocalElement.IsNone() == false && Expression.VariableName == LocalElement));
 }
 
+// PrintStringの直接ConvとConcat内Convで同じ整数式の検証・出力を使用する。
+// 許可したMathLibrary演算のみ再帰展開し、参照元・型・深さを毎段検証する。
+bool EmitPrintStringIntegerExpression(const FBPSemanticExpression& Expression,
+    const FString& ParentClassPath, const TArray<FBPSemanticVariable>* Variables,
+    const FName LocalIndex, const FName LocalElement,
+    const int32 Depth, FString& Result)
+{
+    if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::Int32 ||
+        Expression.Type.ContainerKind.IsEmpty() == false ||
+        Expression.Type.bIsReference || Expression.Type.bIsConst)
+    {
+        return false;
+    }
+    if (Expression.Kind == EBPSemanticExpressionKind::Literal)
+    {
+        int32 Value = 0;
+        if (LexTryParseString(Value, *Expression.LiteralValue) == false)
+        {
+            return false;
+        }
+        Result = LexToString(Value);
+        return true;
+    }
+    if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
+    {
+        if (IsIdentifier(Expression.VariableName.ToString()) == false ||
+            Expression.VariableName == TEXT("this") ||
+            (Expression.SourcePinId.IsValid()
+                ? IsCompatiblePrintStringIntMember(Expression.VariableName,
+                    ParentClassPath, Variables)
+                : IsValidPrintStringLocalInt(Expression, LocalIndex, LocalElement)) == false)
+        {
+            return false;
+        }
+        Result = Expression.SourcePinId.IsValid()
+            ? FString::Printf(TEXT("this->%s"), *Expression.VariableName.ToString())
+            : Expression.VariableName.ToString();
+        return true;
+    }
+    if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
+        Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
+        (Expression.FunctionName != TEXT("Add_IntInt") &&
+            Expression.FunctionName != TEXT("Subtract_IntInt") &&
+            Expression.FunctionName != TEXT("Multiply_IntInt")) ||
+        Expression.Arguments.Num() != 2)
+    {
+        return false;
+    }
+    FString Left;
+    FString Right;
+    if (EmitPrintStringIntegerExpression(Expression.Arguments[0], ParentClassPath,
+            Variables, LocalIndex, LocalElement, Depth + 1, Left) == false ||
+        EmitPrintStringIntegerExpression(Expression.Arguments[1], ParentClassPath,
+            Variables, LocalIndex, LocalElement, Depth + 1, Right) == false)
+    {
+        return false;
+    }
+    return FormatArithmeticOperator(Expression.FunctionName, Left, Right, Result);
+}
+
 bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
     const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
     TArray<FString>& Diagnostics, const TArray<FBPSemanticVariable>* Variables,
@@ -1209,73 +1269,11 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
                 Expression.FunctionName == TEXT("Conv_IntToString") &&
                 Expression.Arguments.Num() == 1)
             {
-                // Concatの内側でもIndexと整数演算を同じ規則で再帰生成する。
-                TFunction<bool(const FBPSemanticExpression&, int32, FString&)> EmitInteger;
-                EmitInteger = [&](const FBPSemanticExpression& Integer,
-                    int32 IntegerDepth, FString& Out) -> bool
-                {
-                    if (IntegerDepth > 16 ||
-                        Integer.Type.Kind != EBPSemanticTypeKind::Int32)
-                    {
-                        return false;
-                    }
-                    if (Integer.Kind == EBPSemanticExpressionKind::Literal)
-                    {
-                        int32 Value = 0;
-                        if (LexTryParseString(Value, *Integer.LiteralValue) == false)
-                        {
-                            return false;
-                        }
-                        Out = LexToString(Value);
-                        return true;
-                    }
-                    if (Integer.Kind == EBPSemanticExpressionKind::VariableReference)
-                    {
-                        // Concat内の整数参照も、直接Convと同じ識別子・型・
-                        // 参照元検証を通す。重複したReflection照合は行わない。
-                        if (IsIdentifier(Integer.VariableName.ToString()) == false ||
-                            Integer.VariableName == TEXT("this") ||
-                            Integer.Type.ContainerKind.IsEmpty() == false ||
-                            Integer.Type.bIsReference || Integer.Type.bIsConst ||
-                            (Integer.SourcePinId.IsValid()
-                                ? IsCompatiblePrintStringIntMember(Integer.VariableName,
-                                    ParentClassPath, Variables)
-                                : IsValidPrintStringLocalInt(Integer, LocalIndex, LocalElement)) == false)
-                        {
-                            return false;
-                        }
-                        // Getterの出力ピンIDは有効、ForLoop Indexは未設定。
-                        // 名前の接頭辞では判定せず、IR上の参照元で区別する。
-                        const FString Name = Integer.VariableName.ToString();
-                        Out = Integer.SourcePinId.IsValid()
-                            ? FString::Printf(TEXT("this->%s"), *Name) : Name;
-                        return true;
-                    }
-                    if (Integer.Kind != EBPSemanticExpressionKind::FunctionCall ||
-                        Integer.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
-                        (Integer.FunctionName != TEXT("Add_IntInt") &&
-                            Integer.FunctionName != TEXT("Subtract_IntInt") &&
-                            Integer.FunctionName != TEXT("Multiply_IntInt")) ||
-                        Integer.Arguments.Num() != 2)
-                    {
-                        return false;
-                    }
-                    FString Left;
-                    FString Right;
-                    if (EmitInteger(Integer.Arguments[0], IntegerDepth + 1, Left) == false ||
-                        EmitInteger(Integer.Arguments[1], IntegerDepth + 1, Right) == false)
-                    {
-                        return false;
-                    }
-                    if (FormatArithmeticOperator(Integer.FunctionName, Left, Right, Out) == false)
-                    {
-                        return false;
-                    }
-                    return true;
-                };
+                // Concat内部も直接Convと同じ検証済み整数式Emitterを使う。
                 FString IndexExpression;
-                if (EmitInteger(Expression.Arguments[0], Depth + 1,
-                        IndexExpression) == false)
+                if (EmitPrintStringIntegerExpression(Expression.Arguments[0],
+                        ParentClassPath, Variables, LocalIndex, LocalElement,
+                        Depth + 1, IndexExpression) == false)
                 {
                     return false;
                 }
@@ -1340,67 +1338,11 @@ bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
         TextArgument.FunctionName == TEXT("Conv_IntToString") &&
         TextArgument.Arguments.Num() == 1)
     {
-        // 二項演算を再帰的に展開する。深さ制限で循環的・異常なIRを拒否する。
-        // 変数参照は識別子検証し、関数名は許可リストで固定する。
-        TFunction<bool(const FBPSemanticExpression&, int32, FString&)> EmitInteger;
-        EmitInteger = [&](const FBPSemanticExpression& Expression,
-            int32 Depth, FString& Result) -> bool
-        {
-            if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::Int32)
-            {
-                return false;
-            }
-            if (Expression.Kind == EBPSemanticExpressionKind::Literal)
-            {
-                int32 Number = 0;
-                if (LexTryParseString(Number, *Expression.LiteralValue) == false)
-                {
-                    return false;
-                }
-                Result = LexToString(Number);
-                return true;
-            }
-            if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
-            {
-                if (IsIdentifier(Expression.VariableName.ToString()) == false ||
-                    Expression.Type.ContainerKind.IsEmpty() == false ||
-                    Expression.Type.bIsReference || Expression.Type.bIsConst ||
-                    (Expression.SourcePinId.IsValid()
-                        ? IsCompatiblePrintStringIntMember(Expression.VariableName,
-                            ParentClassPath, Variables)
-                        : IsValidPrintStringLocalInt(Expression, LocalIndex, LocalElement)) == false)
-                {
-                    return false;
-                }
-                Result = Expression.SourcePinId.IsValid()
-                    ? FString::Printf(TEXT("this->%s"), *Expression.VariableName.ToString())
-                    : Expression.VariableName.ToString();
-                return true;
-            }
-            if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
-                Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetMathLibrary") ||
-                (Expression.FunctionName != TEXT("Add_IntInt") &&
-                    Expression.FunctionName != TEXT("Subtract_IntInt") &&
-                    Expression.FunctionName != TEXT("Multiply_IntInt")) ||
-                Expression.Arguments.Num() != 2)
-            {
-                return false;
-            }
-            FString Left;
-            FString Right;
-            if (EmitInteger(Expression.Arguments[0], Depth + 1, Left) == false ||
-                EmitInteger(Expression.Arguments[1], Depth + 1, Right) == false)
-            {
-                return false;
-            }
-            if (FormatArithmeticOperator(Expression.FunctionName, Left, Right, Result) == false)
-            {
-                return false;
-            }
-            return true;
-        };
+        // 直接ConvもConcat内と同じ再帰検証を通し、型偽装とスコープ逸脱を拒否する。
         FString IntegerExpression;
-        if (EmitInteger(TextArgument.Arguments[0], 0, IntegerExpression) == false)
+        if (EmitPrintStringIntegerExpression(TextArgument.Arguments[0],
+                ParentClassPath, Variables, LocalIndex, LocalElement,
+                0, IntegerExpression) == false)
         {
             Diagnostics.Add(TEXT("Unsupported nested Index arithmetic expression"));
             return false;
