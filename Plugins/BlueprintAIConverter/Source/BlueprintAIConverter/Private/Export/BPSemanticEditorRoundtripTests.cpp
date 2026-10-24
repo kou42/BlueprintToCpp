@@ -357,7 +357,7 @@ bool FBPSemanticIntArrayEditorTest::RunTest(const FString& Parameters)
         TEXT("(R=0.000000,G=0.660000,B=1.000000,A=1.000000)"));
     Call.Arguments[4].Type.TypePath = TEXT("/Script/CoreUObject.LinearColor");
     AddLiteral(EBPSemanticTypeKind::Float, TEXT("2.0"));
-    AddLiteral(EBPSemanticTypeKind::String, TEXT(""));
+    AddLiteral(EBPSemanticTypeKind::Name, TEXT(""));
     Loop.LoopBodyStatements.Add(MoveTemp(Print));
     Block.Statements.Add(Loop);
     Function.Blocks.Add(Block);

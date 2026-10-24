@@ -111,7 +111,7 @@ for generated_file in result["files"]:
 
 ## Semantic JSON v2（J1・試験実装）
 
-既存のSnapshot JSON v1とは独立して、UE側の `FBPSemanticJsonSerializer::Serialize(IR, EngineVersion, OutJson)` でSemantic IRをJSON v2に変換できます。**現時点ではEditorのメニューや保存先への接続は未実装**です。
+既存のSnapshot JSON v1とは独立して、UE側の `FBPSemanticJsonSerializer::Serialize(IR, EngineVersion, OutJson)` でSemantic IRをJSON v2に変換できます。Editorメニューからのコピー／保存と、`Saved/BlueprintSemanticJson/`へのエクスポートに対応しています。
 
 Python側では以下のようにスキーマ検証できます。
 
@@ -133,7 +133,20 @@ Content BrowserでBlueprintを1つ選択し、右クリックから次を実行�
 - **Copy Semantic JSON v2 (Preview)**: ファイル保存せずJSON文字列をクリップボードへコピーします。
 - **Export Semantic JSON v2**: プロジェクトの `Saved/BlueprintSemanticJson/` に `.semantic.json` ファイルを保存します。
 
-現時点のSemantic LoweringはBeginPlay → PrintStringのMVPに限定されます。未対応Blueprintでも診断を含むJSONが出力されます。出力成功はC++変換成功を意味しません。UE 5.7.4でのコンパイルとAutomation Testは未確認です。
+未対応Blueprintでも診断を含むJSONが出力されます。出力成功はC++変換成功を意味しません。UE 5.7でのコンパイル、Automation Test、下記E2Eランナーで回帰確認します。
+
+### Editor export → Python CLI E2E
+
+実Editor APIで一時Blueprintを生成・コンパイル・Semantic JSONエクスポートし、その実ファイルをPythonのスキーマ検証とMock Provider境界へ渡すには、次のコマンドを実行します。
+
+```powershell
+cd PythonServer
+python -m app.semantic_editor_e2e `
+  --editor "C:\Program Files\Epic Games\UE_5.7\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
+  --project "D:\UE\MyProject2\MyProject2.uproject"
+```
+
+ランナーは`BlueprintAIConverter.SemanticJson.EditorRoundtrip`の成功ログから、その実行で生成された`SEMANTIC_ROUNDTRIP_ARTIFACT`だけを取得します。続いて`python -m app.semantic_roundtrip --provider mock`を別プロセスで実行し、両方が成功した場合だけ終了コード0とJSONレポートを返します。外部AIやネットワークは使用しません。
 
 ## A1: AI Provider共通インターフェース（Mock）
 

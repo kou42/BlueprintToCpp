@@ -33,10 +33,35 @@ bool FBPFunctionSignatureResolverTest::RunTest(const FString& Parameters)
     const UFunction* Print = UKismetSystemLibrary::StaticClass()->FindFunctionByName(TEXT("PrintString"));
     if (TestNotNull(TEXT("PrintString UFunction exists"), Print))
     {
-        TestFalse(TEXT("WorldContext metadata rejected"),
+        TestTrue(TEXT("検証可能なWorldContext metadataを受理"),
             FBPFunctionSignatureResolver::Resolve(Print, Signature, Diagnostics));
-        TestTrue(TEXT("Rejected function has diagnostics"), Diagnostics.IsEmpty() == false);
-        TestTrue(TEXT("Rejected signature is reset"), Signature.FunctionName.IsNone());
+        TestTrue(TEXT("WorldContext解決に診断なし"), Diagnostics.IsEmpty());
+        TestEqual(TEXT("PrintString関数名"), Signature.FunctionName, FName(TEXT("PrintString")));
+        TestTrue(TEXT("PrintStringはstatic"), Signature.bStatic);
+        TestTrue(TEXT("WorldContext引数を保持"), Signature.ParameterNames.IsEmpty() == false);
+        if (Signature.ParameterNames.IsEmpty() == false)
+        {
+            TestEqual(TEXT("先頭引数はWorldContextObject"),
+                Signature.ParameterNames[0], FName(TEXT("WorldContextObject")));
+            TestEqual(TEXT("WorldContextはObject型"), Signature.ParameterTypes[0].Kind,
+                EBPSemanticTypeKind::Object);
+        }
+        const int32 ContextIndex = Signature.ParameterNames.IndexOfByKey(
+            FName(TEXT("WorldContextObject")));
+        const int32 DurationIndex = Signature.ParameterNames.IndexOfByKey(
+            FName(TEXT("Duration")));
+        const int32 KeyIndex = Signature.ParameterNames.IndexOfByKey(FName(TEXT("Key")));
+        TestTrue(TEXT("既定値配列は引数配列と整列"),
+            Signature.bHasParameterDefaultValues.Num() == Signature.ParameterNames.Num() &&
+            Signature.ParameterDefaultValues.Num() == Signature.ParameterNames.Num());
+        TestTrue(TEXT("WorldContextには暗黙の既定値を捏造しない"),
+            ContextIndex != INDEX_NONE &&
+            Signature.bHasParameterDefaultValues[ContextIndex] == false);
+        TestTrue(TEXT("DurationのReflection既定値を保持"),
+            DurationIndex != INDEX_NONE &&
+            Signature.bHasParameterDefaultValues[DurationIndex]);
+        TestTrue(TEXT("KeyのReflection既定値を保持"),
+            KeyIndex != INDEX_NONE && Signature.bHasParameterDefaultValues[KeyIndex]);
     }
     return true;
 }

@@ -16,6 +16,10 @@ struct FBPResolvedFunctionSignature
     TArray<FName> ParameterNames;
     TArray<FBPSemanticType> ParameterTypes;
     TArray<bool> OutputParameters;
+    // UHTがUFunctionへ記録したCPP_Default_<ParameterName>のみを保持する。
+    // 空文字も既定値になり得るため、有無は別配列で表現する。
+    TArray<bool> bHasParameterDefaultValues;
+    TArray<FString> ParameterDefaultValues;
 };
 
 class BLUEPRINTAICONVERTER_API FBPFunctionSignatureResolver

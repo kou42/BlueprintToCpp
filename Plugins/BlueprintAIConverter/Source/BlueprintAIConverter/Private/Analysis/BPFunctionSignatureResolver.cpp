@@ -160,6 +160,12 @@ bool FBPFunctionSignatureResolver::Resolve(const UFunction* Function,
         // const参照の入力引数はOutParmが立つ場合もあるため、出力とは区別する。
         Candidate.OutputParameters.Add(Property->HasAnyPropertyFlags(CPF_OutParm) &&
             Property->HasAnyPropertyFlags(CPF_ConstParm) == false);
+        const FName DefaultMetadataKey(*FString::Printf(
+            TEXT("CPP_Default_%s"), *Property->GetName()));
+        const bool bHasDefault = Function->HasMetaData(DefaultMetadataKey);
+        Candidate.bHasParameterDefaultValues.Add(bHasDefault);
+        Candidate.ParameterDefaultValues.Add(
+            bHasDefault ? Function->GetMetaData(DefaultMetadataKey) : FString());
     }
 
     if (bValid == false)

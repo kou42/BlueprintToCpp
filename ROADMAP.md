@@ -31,12 +31,12 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 ### P0: 共通関数呼び出し経路を完成させる
 
-- [ ] PrintString専用Emitterと共通 `FBPReflectedCallResolver` 経路の対応差分を列挙する（WorldContext、引数のデフォルト値、文字列・数値・真偽値・色、変数、ループ内Index/Element、必要なinclude）。
-- [ ] Reflectionで `UFunction` の所有者、呼び出し対象、パラメータ方向・型、戻り値、デフォルト値を検証する共通Call IR／Emitterの責務を定める。
-- [ ] PrintStringを共通Emitterで生成できるようにし、専用分岐は段階的に削除する。特殊なWorldContextなどは関数名直書きではなく、根拠のあるメタデータ／明示的Policyで扱う。
-- [ ] PrintString以外の少なくとも2種類の関数（例: 静的関数とインスタンス関数）を同じ経路で生成・検証する。
-- [ ] PrintStringの既存ケースとForEachLoopのIndex/Element・Completed経路の回帰テストを通す。
-- [ ] `EmitPrintStringStatement` やPrintString専用分岐を残す場合は、理由・移行先・削除条件をこのファイルの「残存専用処理」に記録する。
+- [x] PrintString専用Emitterと共通 `FBPReflectedCallResolver` 経路の対応差分を列挙する（WorldContext、引数のデフォルト値、文字列・数値・真偽値・色、変数、ループ内Index/Element、必要なinclude）。
+- [x] Reflectionで `UFunction` の所有者、呼び出し対象、パラメータ方向・型、戻り値、デフォルト値を検証する共通Call IR／Emitterの責務を定める。
+- [x] PrintStringを共通Emitterで生成できるようにし、専用分岐は段階的に削除する。特殊なWorldContextなどは関数名直書きではなく、根拠のあるメタデータ／明示的Policyで扱う。
+- [x] PrintString以外の少なくとも2種類の関数（例: 静的関数とインスタンス関数）を同じ経路で生成・検証する。
+- [x] PrintStringの既存ケースとForEachLoopのIndex/Element・Completed経路の回帰テストを通す。
+- [x] `EmitPrintStringStatement` やPrintString専用分岐を残す場合は、理由・移行先・削除条件をこのファイルの「残存専用処理」に記録する。
 
 **完了条件:** PrintStringだけを特別扱いせずに、複数の異なるUFunction呼び出しを共通経路で生成できること。PrintStringの機能退行がないこと。
 
@@ -47,7 +47,7 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - [x] UObject通常関数で `Branch -> PrintString` を変換し、両枝のFunction Result到達も検証する統合テストを追加する。
 - [x] UObject通常関数で `ForLoop -> 関数呼び出し` を変換できる統合テストを追加する。
 - [x] ActorのBeginPlayおよびActor位置操作はActor専用Policyで検証し、非Actorへ誤適用しない。
-- [ ] 未対応グラフや複数の実行Entryを黙って無視せず、診断付きで拒否する。
+- [x] 未対応グラフや複数の実行Entryを黙って無視せず、診断付きで拒否する。
 
 **完了条件:** UObject通常関数で制御フローと共通関数呼び出しを組み合わせられ、Actorの既存変換も維持されること。
 
@@ -66,7 +66,7 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - [ ] 共通Call IR、制御フロー、複数関数、変数、引数・戻り値、親クラス情報、診断をJSONで欠落なく表現する。C++出力だけを先行してJSON出力を置き去りにしない。
 - [ ] `BPSemanticJsonSerializer` と `PythonServer/app/semantic_json.py` のスキーマ契約を同期する。互換性を壊す変更はバージョン方針と移行手順を明示する。
 - [ ] JSON出力の決定性（同じ入力で安定した結果）、型・GUID・参照関係、エラー時の診断をテストする。
-- [ ] JSONのgolden test、Python側schema validation、export→parse→必要に応じたroundtrip／C++生成の統合テストを追加・更新する。
+- [x] JSONのgolden test、Python側schema validation、export→parse→必要に応じたroundtrip／C++生成の統合テストを追加・更新する。
 - [ ] C++生成に対応する機能がJSONでも扱えるかをPRレビューの必須確認項目にする。
 
 **完了条件:** 対応済みのSemantic IR表現をJSONに損失なく出力し、Python側が同じスキーマで検証でき、対応する往復／回帰テストが通ること。
@@ -79,22 +79,22 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - [ ] Python側の固定親クラス許可リストとUnreal側Reflection解決の差を整理する。
 - [ ] 旧 `FBPActorCodeGenerator` のParity用途を確認し、置き換え完了後に削除を検討する。
 
-## P0進捗サマリー（2026-10-23）
+## P0進捗サマリー（2026-10-24）
 
-**状態: 実装進行中／検証待ち。P0完了条件は未達。** PR #111（`fix/p0-reflected-numeric-literals-20261023`、Draft・未マージ）で共通CallとPrintString参照検証を拡張中。
+**状態: P0実装・回帰検証・実export成果物のPython CLI E2E自動化まで完了。PRへの結果記録を残す。** PR #111（`fix/p0-reflected-numeric-literals-20261023`、Draft・未マージ）で作業中。
 
 | 領域 | 実装済みの範囲 | 残る課題 |
 | --- | --- | --- |
-| 共通Call | Reflectionに基づく署名・対象・WorldContext検証、文字列・数値・bool・LinearColorの一部リテラルと公開ネイティブプリミティブ参照 | PrintStringの全引数・式・デフォルト値を共通経路へ統合し、static／instance双方の回帰を確認 |
-| ForEachLoop | int32 Index／Elementの共通Call引数化、型偽装と継承メンバー名衝突の拒否、Completedの共通式文Emitter経由 | PrintString専用判定の除去、ループ変数のネスト式対応と正常系・拒否系テスト実行 |
-| PrintString | 直接・Concat内FString参照の型修飾検証、ネイティブReflection照合、Semantic変数宣言照合、未宣言名拒否 | 整数変換・演算などのネスト式参照元検証、専用Emitter削減、既存Parity回帰 |
-| JSON／Python | 今回のP0実装ではスキーマ変更なし | JSON export／Python validation／roundtripの既存契約を実行確認 |
+| 共通Call | Reflectionに基づく署名・対象・WorldContext検証、文字列式・数値・bool・LinearColor・FNameと公開ネイティブプリミティブ参照。末尾省略引数は`CPP_Default_*`が存在し、安全に型変換できる値だけを明示出力。static／instance双方を回帰確認 | 追加の対応範囲なし |
+| ForEachLoop | int32 Index／Elementの共通Call引数化、型偽装と継承メンバー名衝突の拒否、Completedの共通式文Emitter経由、関数名非依存のネスト式参照追跡 | int32以外の要素型を扱う場合の一般化 |
+| PrintString | WorldContextを含む全7引数をReflection署名で検証して共通Callから生成。専用Emitter／ディスパッチ／ForEach判定を削除し、既存Parityを維持 | 追加の対応範囲なし。共通Callの拡張に追従 |
+| JSON／Python | KeyをReflectionどおりFNameとして出力。Editor Automationが生成した実成果物パスを取得し、Python `semantic_roundtrip` CLIとMock Provider境界まで検証するE2Eランナーを追加 | UObject通常関数／Custom Eventを含む実アセット範囲の拡張 |
 
 ### 検証状況の区分
 
 - **ユーザー報告済み:** 2026-10-23時点でUEビルドに問題なし。ただし、報告以降の追加コミットを含む最新HEADのビルド成功を意味しない。
-- **未確認:** 最新HEADのUHT／UBTビルド、追加Automation Testの実行結果、既存PrintString Parity、ForEach正常系・拒否系、Semantic JSONとPythonの往復テスト。
-- **判定:** テスト未実施のためP0のチェックボックスは未完了のまま維持する。
+- **確認済み:** UE 5.7 UHT／UBTビルド成功。BlueprintAIConverter Automation Test全140件成功。既存PrintString Parity、ForEach正常系・拒否系、Reflection既定値の補完・必須引数省略拒否を含む。Python側schema／roundtrip／signature audit 39件成功。
+- **判定:** P0の共通Call完了条件と実export→Python CLI E2Eを満たす。PRへ最終結果を記録できる状態。
 
 ### P0追加実装（2026-10-23、検証待ち）
 
@@ -123,11 +123,8 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 ### 次の実装・検証順序
 
-1. PrintStringのネスト式（Concat／Conv_IntToString／整数演算）で、ローカルIndexとBlueprint／ネイティブメンバーの参照元・型を共通ルールで検証する。
-2. PrintStringの専用Emitterを共通Callへ段階移行する。WorldContext、LinearColor、必要include、既存Parityの互換性を先に確認する。
-3. UE Automation TestでPrintString、ForEach Index／Element、Completed、共通Callの正常系・拒否系を実行する。
-4. Semantic JSON export、Python schema validation、golden／roundtripを実行し、C++出力との整合性を確認する。
-5. 結果をPRへ記録し、残存専用処理を更新した後にP0完了を判定する。
+1. 結果をPRへ記録し、P0完了を確定する。
+2. P1のノード有無によるパターン振り分けを、関数グラフ単位Statement Loweringへ移行する。
 
 ## P0作業記録（2026-10-22〜2026-10-23）
 
@@ -155,15 +152,17 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - PrintStringの直接FStringメンバー参照とConcat内のFString参照に対し、親クラスのネイティブプロパティが存在する場合はReflectionでFString型・公開指定を検証。Actor::InitialLifeSpanの型偽装拒否テストを追加（未実行）。Blueprint独自変数は従来経路を維持。
 - PrintStringの直接/Concat内FString参照にSemantic IRの変数一覧を渡し、宣言済みBlueprint変数についてFString単一値・無修飾・C++型名を照合。int32変数のFString偽装拒否テストを追加（未実行）。未宣言名の一律拒否は既存互換性を踏まえ今後の課題。
 - PrintStringの未宣言FStringメンバー名をSemantic変数一覧・親クラスReflectionの双方で確認し、両方に存在しない場合は拒否。関数先行文・ForLoop内の式文にも変数一覧を渡し、未宣言参照拒否テストを追加（未実行）。
-- **検証待ち:** ユーザー報告による以前のUEビルド成功は確認済み。最新HEADのビルド、Automation Test、JSON往復テストは未確認。P0の完了チェックは変更しない。
+- PrintStringの`Conv_IntToString`／整数演算／Concat内整数式を共通の再帰Emitterへ集約。Getter由来int32をSemantic変数宣言または親クラスReflectionと照合し、`SourcePinId`なしの参照を現在のForLoop／ForEachスコープに存在するIndex／Elementだけに限定。ネストしたForLoopでは外側・内側双方のアクティブIndexを追跡する。型偽装・未宣言ローカル拒否テストを追加し、全139件のAutomation Test成功を確認。
+- PrintStringを`FBPReflectedCallResolver`経由の共通Callへ移行。FStringリテラル／Blueprint・ネイティブメンバー／Concat／Conv_IntToString、WorldContext、bool、LinearColor、float、FName KeyをReflection署名と照合して生成する。`EmitPrintStringStatement`、式文ディスパッチのPrintString分岐、ForEachのPrintString名判定を削除。KeyのSemantic型をStringからNameへ修正し、既存C++出力Parityを維持。
+- `FBPFunctionSignatureResolver`で各パラメータの`CPP_Default_<ParameterName>`有無と値を署名配列へ保持。Semantic Callで末尾引数が省略された場合、既定値が存在し、bool／整数／有限float・double／FString／FName／LinearColor／null Objectとして安全に変換できるものだけを共通Emitterが明示出力する。途中省略、出力・未対応参照、既定値なしの必須引数は拒否する。
+- `app.semantic_editor_e2e`を追加。UE Editor Automationを起動し、成功ログに含まれる今回のexport成果物を`app.semantic_roundtrip --provider mock`へ渡す。Editor失敗、成果物欠落、Python schema／Provider境界失敗を終了コード1にする。実環境で変数3件を含むSemantic JSONの一気通貫成功を確認。
+- `FBPSemanticLowering::Lower`のパターン振り分け前に共通Entry監査を追加。接続を持つグラフについてactive Entryなし、同一グラフの複数active Entry、EntryとGraph Kindの不一致、複数の実行Entryグラフをグラフ名・ノードID付き診断で早期拒否する。未接続の標準Eventと空Construction Scriptは引き続き許容する。
+- **検証済み:** 最新作業ツリーのUE 5.7ビルド、全142 Automation Test、Semantic関連Pythonテスト43件、実Editor export→Python CLI E2Eが成功。
 
 ## 残存専用処理（完了まで追跡）
 
 | 箇所 | 現状・問題 | 移行先／削除条件 |
 | --- | --- | --- |
-| `BPSemanticCodeGenerator.cpp::EmitPrintStringStatement` | PrintString専用出力。直接／Concat内のFString参照はReflection・Semantic宣言を照合するが、整数変換などのネスト式に検証差が残る | WorldContext・文字列式・LinearColor・既存Parityを共通UFunction Call Emitterで満たし、回帰テストが通れば削除 |
-| `BPSemanticCodeGenerator.cpp::EmitExpressionStatement` | PrintStringを共通解決より先に分岐 | 共通Call解決に一本化後、分岐を削除 |
-| `BPSemanticCodeGenerator.cpp` のForEachLoop出力 | Index／Elementの共通Call引数化とCompleted共通化は進捗。ただしPrintString名による判定が残る | ネストした式へのローカル変数伝播と回帰テストが通れば専用判定を削除 |
 | `BPSemanticLowering.cpp::Lower` | ノードの有無でパターンを選択 | 関数単位のEntry／Statement Loweringへ移行後に撤去 |
 | 複雑ForLoop／ForEachLoop Lowering | BeginPlay前提の検証 | 共通Entry解析とクラス固有Policyへ分離後に整理 |
 | `BPSemanticCodeGenerator.cpp::Generate` | 単一関数・単一Block制限 | 複数関数／CFG出力とテストが通れば撤去 |
@@ -171,6 +170,9 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 ## 最新の検証結果
 
+- 2026-10-24: PrintStringをReflection共通Callへ移行し、専用Emitter・式文分岐・ForEach専用判定を削除。KeyをFName型としてSemantic IR／JSONへ保持しつつ既存C++出力Parityを維持。UE 5.7 UHT／UBT成功、全139 Automation Test成功（Exit Code 0）、PythonのSemantic JSON／roundtrip／signature audit 39件成功。
+- 2026-10-24: `Lower`入口へ実行Entry監査を追加し、Entry欠落・同一グラフ複数Entry・Graph Kind不一致・複数実行グラフをパターン選択前に診断付きで拒否。UE 5.7ビルドと全141 Automation Test成功（Exit Code 0）。
+- 2026-10-24: PrintStringのネスト整数式について、Blueprint／ネイティブint32メンバーとForLoop／ForEachローカルの参照元・型・スコープ検証を追加。UE 5.7 UHT／UBTビルド成功、`BlueprintAIConverter` 全139件のAutomation Test成功（Exit Code 0）。WorldContext署名テストを現在の明示的受理Policyへ同期し、公開ネイティブboolの共通Call回帰を専用テストActorで安定化。
 - 2026-10-24: UE 5.7 `MyProject2Editor Win64 Development` のUHT／UBTビルド成功。
 - 2026-10-24: Graph IRの親クラスと実Blueprintの親クラス一致を共通Entry解析とActor位置経路で検証。UObjectへのBeginPlay、UObject／ActorComponentへのActor位置APIの誤適用、および親クラス改ざんを診断付きで拒否する統合テスト成功。
 - 2026-10-24: UObject通常関数の `ForLoop -> UGameplayStatics::SetSubtitlesEnabled(bool) -> Function Result` を反射署名とExec接続によりLowering。ForLoop内の式から所有クラスincludeを収集する経路と `FunctionForLoopCall` 統合テストも追加。

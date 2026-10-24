@@ -5,6 +5,7 @@
 #include "BPSemanticCodeGenerator.h"
 #include "BPSemanticLowering.h"
 #include "BPReflectedCallResolver.h"
+#include "Tests/BPEmitterTestActor.h"
 #include "Components/ActorComponent.h"
 #include "GameFramework/Pawn.h"
 
@@ -119,6 +120,9 @@ bool FBPSemanticGeneratorParityTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+    TestEqual(TEXT("PrintString KeyはReflectionどおりFName"),
+        Semantic.Functions[0].Blocks[0].Statements[0].Expression.Arguments[6].Type.Kind,
+        EBPSemanticTypeKind::Name);
     FBPGeneratedActorFiles NewFiles;
     TArray<FString> Diagnostics;
     if (TestTrue(TEXT("新Generator成功"),
@@ -509,6 +513,71 @@ bool FBPSemanticGeneratorOptionsParityTest::RunTest(const FString& Parameters)
     }
     TestEqual(TEXT("オプション付きヘッダー一致"), NewFiles.HeaderContent, LegacyFiles.HeaderContent);
     TestEqual(TEXT("オプション付きソース一致"), NewFiles.SourceContent, LegacyFiles.SourceContent);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorReflectedDefaultsTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ReflectedDefaults",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorReflectedDefaultsTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("PrintString Semantic IRを生成"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticExpression& Print =
+        Semantic.Functions[0].Blocks[0].Statements[0].Expression;
+    Print.Arguments.RemoveAt(Print.Arguments.Num() - 1);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("省略した末尾KeyをReflection既定値で補完"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedDefaultsActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("FName既定値を明示出力"),
+        Files.SourceContent.Contains(TEXT(", NAME_None);")));
+
+    Print.Arguments.SetNum(1);
+    FBPGeneratedActorFiles AllDefaultsFiles;
+    TArray<FString> AllDefaultsDiagnostics;
+    if (TestTrue(TEXT("対応型の末尾既定値をすべて補完"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AAllReflectedDefaultsActor"),
+            FString(), AllDefaultsFiles, AllDefaultsDiagnostics)) == false)
+    {
+        for (const FString& Diagnostic : AllDefaultsDiagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("文字列既定値を明示出力"),
+        AllDefaultsFiles.SourceContent.Contains(TEXT("TEXT(\"Hello\")")));
+    TestTrue(TEXT("LinearColor既定値を明示出力"),
+        AllDefaultsFiles.SourceContent.Contains(TEXT("FLinearColor(")));
+    TestTrue(TEXT("float既定値を明示出力"),
+        AllDefaultsFiles.SourceContent.Contains(TEXT(", 2.0f, NAME_None);")));
+
+    // 既定値を持たない必須bool引数は省略させない。
+    Print.FunctionOwnerPath = TEXT("/Script/Engine.Actor");
+    Print.FunctionName = TEXT("SetActorTickEnabled");
+    Print.Arguments.SetNum(1);
+    FBPGeneratedActorFiles InvalidFiles;
+    TArray<FString> InvalidDiagnostics;
+    TestFalse(TEXT("必須引数の省略を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AReflectedDefaultsActor"),
+            FString(), InvalidFiles, InvalidDiagnostics));
+    TestTrue(TEXT("必須引数省略の診断あり"), InvalidDiagnostics.IsEmpty() == false);
+    TestTrue(TEXT("拒否時に生成物を公開しない"), InvalidFiles.SourceContent.IsEmpty());
     return true;
 }
 
@@ -934,9 +1003,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorReflectedBoolMemberTest,
 
 bool FBPSemanticGeneratorReflectedBoolMemberTest::RunTest(const FString& Parameters)
 {
-    // Actorの公開ネイティブboolを、PrintString専用処理を経由せず共通Callへ渡す。
+    // テスト用Actorの公開ネイティブboolを、PrintString専用処理を経由せず共通Callへ渡す。
     FBPSemanticIR Semantic;
-    Semantic.ParentClassPath = TEXT("/Script/Engine.Actor");
+    Semantic.ParentClassPath = ABPEmitterTestActor::StaticClass()->GetPathName();
     FBPSemanticFunction Function;
     Function.Name = TEXT("BeginPlay");
     Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
@@ -957,7 +1026,7 @@ bool FBPSemanticGeneratorReflectedBoolMemberTest::RunTest(const FString& Paramet
     FBPSemanticExpression Argument;
     Argument.Kind = EBPSemanticExpressionKind::VariableReference;
     Argument.Type.Kind = EBPSemanticTypeKind::Bool;
-    Argument.VariableName = TEXT("bCanBeDamaged");
+    Argument.VariableName = TEXT("bTestEnabled");
     Call.Arguments.Add(Argument);
     Block.Statements.Add(Statement);
     Function.Blocks.Add(Block);
@@ -976,7 +1045,7 @@ bool FBPSemanticGeneratorReflectedBoolMemberTest::RunTest(const FString& Paramet
         return false;
     }
     TestTrue(TEXT("共通Callでboolメンバー参照を生成"),
-        Files.SourceContent.Contains(TEXT("this->SetActorTickEnabled(this->bCanBeDamaged);")));
+        Files.SourceContent.Contains(TEXT("this->SetActorTickEnabled(this->bTestEnabled);")));
 
     // Reflection上の型とIR型が異なる変数を安全に拒否する。
     Semantic.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1].VariableName =
@@ -1477,6 +1546,94 @@ bool FBPSemanticGeneratorPrintStringUnknownMemberTest::RunTest(const FString& Pa
             FString(), Files, Diagnostics));
     TestTrue(TEXT("未宣言参照の拒否時に生成物を公開しない"),
         Files.SourceContent.IsEmpty());
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorPrintStringIntegerExpressionTest,
+    "BlueprintAIConverter.SemanticIR.Generator.PrintStringIntegerExpression",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorPrintStringIntegerExpressionTest::RunTest(const FString& Parameters)
+{
+    // Conv_IntToStringの内側でも、Getter由来のメンバーとループローカルを
+    // SourcePinIdだけで信用せず、宣言型・Reflection・スコープと照合する。
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintStringのLowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), IR)) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticVariable Counter;
+    Counter.Name = TEXT("Counter");
+    Counter.Type.Kind = EBPSemanticTypeKind::Int32;
+    Counter.ReflectedCppType = TEXT("int32");
+    IR.Variables.Add(Counter);
+
+    FBPSemanticExpression Member;
+    Member.Kind = EBPSemanticExpressionKind::VariableReference;
+    Member.Type.Kind = EBPSemanticTypeKind::Int32;
+    Member.VariableName = Counter.Name;
+    Member.SourcePinId = FGuid::NewGuid();
+
+    FBPSemanticExpression One;
+    One.Kind = EBPSemanticExpressionKind::Literal;
+    One.Type.Kind = EBPSemanticTypeKind::Int32;
+    One.LiteralValue = TEXT("1");
+
+    FBPSemanticExpression Addition;
+    Addition.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Addition.Type.Kind = EBPSemanticTypeKind::Int32;
+    Addition.FunctionOwnerPath = TEXT("/Script/Engine.KismetMathLibrary");
+    Addition.FunctionName = TEXT("Add_IntInt");
+    Addition.Arguments.Add(Member);
+    Addition.Arguments.Add(One);
+
+    FBPSemanticExpression Conversion;
+    Conversion.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Conversion.Type.Kind = EBPSemanticTypeKind::String;
+    Conversion.FunctionOwnerPath = TEXT("/Script/Engine.KismetStringLibrary");
+    Conversion.FunctionName = TEXT("Conv_IntToString");
+    Conversion.Arguments.Add(Addition);
+    IR.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1] = Conversion;
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("宣言済みint32メンバーのネスト式を生成"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AIntegerExpressionActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("メンバー参照をthisで修飾"), Files.SourceContent.Contains(
+        TEXT("UKismetStringLibrary::Conv_IntToString((this->Counter + 1))")));
+
+    // 同じ式でActorのfloatメンバーをint32として偽装しても、
+    // 親クラスReflectionの実型と一致しないため拒否する。
+    FBPSemanticExpression& CheckedMember =
+        IR.Functions[0].Blocks[0].Statements[0].Expression.Arguments[1].Arguments[0].Arguments[0];
+    CheckedMember.VariableName = TEXT("InitialLifeSpan");
+    IR.Variables.Reset();
+    Diagnostics.Reset();
+    TestFalse(TEXT("ネスト式のネイティブメンバー型偽装を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AIntegerExpressionActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("型偽装時に生成物を公開しない"), Files.SourceContent.IsEmpty());
+
+    // SourcePinIdなしの名前は、実際のループスコープから渡された
+    // LocalIndex/LocalElementでなければローカル変数として扱わない。
+    CheckedMember.VariableName = TEXT("SpoofedLoopIndex");
+    CheckedMember.SourcePinId.Invalidate();
+    Diagnostics.Reset();
+    TestFalse(TEXT("スコープ外のローカルIndexを拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AIntegerExpressionActor"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("ローカル偽装時に生成物を公開しない"), Files.SourceContent.IsEmpty());
     return true;
 }
 

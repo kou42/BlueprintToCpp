@@ -32,6 +32,10 @@ public:
     UPROPERTY()
     FHitResult TestHitResult;
 
+    // 共通Call Emitterの公開ネイティブbool参照テスト用。
+    UPROPERTY()
+    bool bTestEnabled = true;
+
     UFUNCTION(BlueprintImplementableEvent)
     int32 MatchingSignature(const FString& Input, int32& Output) const;
 

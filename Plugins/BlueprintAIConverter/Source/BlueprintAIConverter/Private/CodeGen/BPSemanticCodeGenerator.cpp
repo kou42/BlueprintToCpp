@@ -75,6 +75,113 @@ FString DoubleLiteral(double Value)
     return Result;
 }
 
+bool EmitReflectedLiteralValue(const FString& RawValue, const FBPSemanticType& Type,
+    const bool bMetadataDefault, FString& OutValue, TArray<FString>& Diagnostics)
+{
+    if (Type.Kind == EBPSemanticTypeKind::Bool)
+    {
+        if (RawValue != TEXT("true") && RawValue != TEXT("false"))
+        {
+            Diagnostics.Add(TEXT("Invalid reflected bool literal"));
+            return false;
+        }
+        OutValue = RawValue;
+        return true;
+    }
+    if (Type.Kind == EBPSemanticTypeKind::Int32)
+    {
+        int32 Parsed = 0;
+        if (LexTryParseString(Parsed, *RawValue) == false)
+        {
+            Diagnostics.Add(TEXT("Invalid reflected int32 literal"));
+            return false;
+        }
+        OutValue = LexToString(Parsed);
+        return true;
+    }
+    if (Type.Kind == EBPSemanticTypeKind::Int64)
+    {
+        int64 Parsed = 0;
+        if (LexTryParseString(Parsed, *RawValue) == false)
+        {
+            Diagnostics.Add(TEXT("Invalid reflected int64 literal"));
+            return false;
+        }
+        OutValue = Parsed == MIN_int64
+            ? TEXT("(-9223372036854775807LL - 1)")
+            : LexToString(Parsed) + TEXT("LL");
+        return true;
+    }
+    if (Type.Kind == EBPSemanticTypeKind::Float ||
+        Type.Kind == EBPSemanticTypeKind::Double)
+    {
+        double Parsed = 0.0;
+        if (LexTryParseString(Parsed, *RawValue) == false || FMath::IsFinite(Parsed) == false)
+        {
+            Diagnostics.Add(TEXT("Invalid reflected floating-point literal"));
+            return false;
+        }
+        if (Type.Kind == EBPSemanticTypeKind::Float)
+        {
+            const float FloatValue = static_cast<float>(Parsed);
+            if (FMath::IsFinite(FloatValue) == false)
+            {
+                Diagnostics.Add(TEXT("Reflected float argument exceeds finite float range"));
+                return false;
+            }
+            OutValue = FloatLiteral(FloatValue);
+        }
+        else
+        {
+            OutValue = DoubleLiteral(Parsed);
+        }
+        return true;
+    }
+    if (Type.Kind == EBPSemanticTypeKind::Struct &&
+        Type.TypePath == TEXT("/Script/CoreUObject.LinearColor"))
+    {
+        FLinearColor Color;
+        if (Color.InitFromString(RawValue) == false ||
+            FMath::IsFinite(Color.R) == false || FMath::IsFinite(Color.G) == false ||
+            FMath::IsFinite(Color.B) == false || FMath::IsFinite(Color.A) == false)
+        {
+            Diagnostics.Add(TEXT("Invalid reflected LinearColor literal"));
+            return false;
+        }
+        OutValue = FString::Printf(TEXT("FLinearColor(%s, %s, %s, %s)"),
+            *FloatLiteral(Color.R), *FloatLiteral(Color.G),
+            *FloatLiteral(Color.B), *FloatLiteral(Color.A));
+        return true;
+    }
+    if (Type.Kind == EBPSemanticTypeKind::String || Type.Kind == EBPSemanticTypeKind::Name)
+    {
+        if (bMetadataDefault && Type.Kind == EBPSemanticTypeKind::Name &&
+            (RawValue.IsEmpty() || RawValue.Equals(TEXT("None"), ESearchCase::IgnoreCase)))
+        {
+            OutValue = TEXT("NAME_None");
+            return true;
+        }
+        FString Escaped;
+        if (EscapeString(RawValue, Escaped, Diagnostics) == false)
+        {
+            return false;
+        }
+        OutValue = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
+        return true;
+    }
+    if (bMetadataDefault && Type.Kind == EBPSemanticTypeKind::Object &&
+        (RawValue.Equals(TEXT("None"), ESearchCase::IgnoreCase) ||
+         RawValue.Equals(TEXT("nullptr"), ESearchCase::IgnoreCase)))
+    {
+        OutValue = TEXT("nullptr");
+        return true;
+    }
+    Diagnostics.Add(bMetadataDefault
+        ? TEXT("Reflected parameter default type is unsupported")
+        : TEXT("Reflected call argument type is unsupported"));
+    return false;
+}
+
 bool EmitFunctionType(const FBPSemanticType& Type, FString& OutType,
     TArray<FString>& Diagnostics, int32 Depth = 0)
 {
@@ -1012,7 +1119,7 @@ bool EmitBranchCondition(const FBPSemanticExpression& Expression,
 // PrintString専用経路ではBlueprint変数の宣言一覧を受け取らないため、
 // 少なくとも既存ネイティブプロパティと同名の場合はReflection型を照合する。
 // 見つからない名前は既存のBlueprint変数参照との互換性を維持する。
-bool IsCompatiblePrintStringMember(const FName Name, const FString& ParentClassPath,
+bool IsCompatibleStringMember(const FName Name, const FString& ParentClassPath,
     const TArray<FBPSemanticVariable>* Variables)
 {
     // Semantic変数一覧が渡された経路では、名前だけで任意の
@@ -1026,8 +1133,10 @@ bool IsCompatiblePrintStringMember(const FName Name, const FString& ParentClassP
             });
         if (Variable != nullptr)
         {
+            const bool bScalar = Variable->Type.ContainerKind.IsEmpty() ||
+                Variable->Type.ContainerKind == TEXT("none");
             return Variable->Type.Kind == EBPSemanticTypeKind::String &&
-                Variable->Type.ContainerKind.IsEmpty() &&
+                bScalar &&
                 Variable->Type.bIsReference == false &&
                 Variable->Type.bIsConst == false &&
                 Variable->ReflectedCppType == TEXT("FString");
@@ -1049,62 +1158,16 @@ bool IsCompatiblePrintStringMember(const FName Name, const FString& ParentClassP
         Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic);
 }
 
-// PrintString内の整数変換でも、メンバー参照は宣言とReflectionの両方で検証する。
-// SourcePinIdだけでは型の正当性を証明できないため、未宣言・型偽装を拒否する。
-bool IsCompatiblePrintStringIntMember(const FName Name, const FString& ParentClassPath,
-    const TArray<FBPSemanticVariable>* Variables)
-{
-    if (Variables != nullptr)
-    {
-        const FBPSemanticVariable* Variable = Variables->FindByPredicate(
-            [Name](const FBPSemanticVariable& Candidate)
-            {
-                return Candidate.Name == Name;
-            });
-        if (Variable != nullptr)
-        {
-            return Variable->Type.Kind == EBPSemanticTypeKind::Int32 &&
-                Variable->Type.ContainerKind.IsEmpty() &&
-                Variable->Type.bIsReference == false &&
-                Variable->Type.bIsConst == false &&
-                Variable->ReflectedCppType == TEXT("int32");
-        }
-    }
-    const UClass* ParentClass = FindObject<UClass>(nullptr, *ParentClassPath);
-    if (ParentClass == nullptr)
-    {
-        return false;
-    }
-    const FProperty* Member = ParentClass->FindPropertyByName(Name);
-    if (Member == nullptr)
-    {
-        return Variables == nullptr;
-    }
-    return CastField<FIntProperty>(Member) != nullptr &&
-        Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic);
-}
-
-// ローカル整数参照は現在のループスコープ内に存在する場合のみ許可する。
-bool IsValidPrintStringLocalInt(const FBPSemanticExpression& Expression,
-    const FName LocalIndex, const FName LocalElement)
-{
-    return Expression.SourcePinId.IsValid() == false &&
-        Expression.Type.Kind == EBPSemanticTypeKind::Int32 &&
-        Expression.Type.ContainerKind.IsEmpty() &&
-        Expression.Type.bIsReference == false && Expression.Type.bIsConst == false &&
-        ((LocalIndex.IsNone() == false && Expression.VariableName == LocalIndex) ||
-         (LocalElement.IsNone() == false && Expression.VariableName == LocalElement));
-}
-
-// PrintStringの直接ConvとConcat内Convで同じ整数式の検証・出力を使用する。
-// 許可したMathLibrary演算のみ再帰展開し、参照元・型・深さを毎段検証する。
-bool EmitPrintStringIntegerExpression(const FBPSemanticExpression& Expression,
+bool EmitVerifiedIntegerExpression(const FBPSemanticExpression& Expression,
     const FString& ParentClassPath, const TArray<FBPSemanticVariable>* Variables,
-    const FName LocalIndex, const FName LocalElement,
-    const int32 Depth, FString& Result)
+    const FName LocalIndex, const FName LocalElement, const int32 Depth,
+    FString& OutExpression, const TArray<FName>* LocalIntegerVariables = nullptr)
 {
+    OutExpression.Reset();
+    const bool bScalar = Expression.Type.ContainerKind.IsEmpty() ||
+        Expression.Type.ContainerKind == TEXT("none");
     if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::Int32 ||
-        Expression.Type.ContainerKind.IsEmpty() == false ||
+        bScalar == false ||
         Expression.Type.bIsReference || Expression.Type.bIsConst)
     {
         return false;
@@ -1116,23 +1179,77 @@ bool EmitPrintStringIntegerExpression(const FBPSemanticExpression& Expression,
         {
             return false;
         }
-        Result = LexToString(Value);
+        OutExpression = LexToString(Value);
         return true;
     }
     if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
     {
-        if (IsIdentifier(Expression.VariableName.ToString()) == false ||
+        if (Expression.VariableName.IsNone() ||
             Expression.VariableName == TEXT("this") ||
-            (Expression.SourcePinId.IsValid()
-                ? IsCompatiblePrintStringIntMember(Expression.VariableName,
-                    ParentClassPath, Variables)
-                : IsValidPrintStringLocalInt(Expression, LocalIndex, LocalElement)) == false)
+            IsIdentifier(Expression.VariableName.ToString()) == false)
         {
             return false;
         }
-        Result = Expression.SourcePinId.IsValid()
-            ? FString::Printf(TEXT("this->%s"), *Expression.VariableName.ToString())
-            : Expression.VariableName.ToString();
+
+        // SourcePinIdを持たない参照はループローカルに限定する。
+        // 任意の名前をローカル変数として出力すると、未宣言識別子や
+        // スコープ外のIndexを含むC++を生成できてしまう。
+        if (Expression.SourcePinId.IsValid() == false)
+        {
+            const bool bActiveLoopLocal = LocalIntegerVariables != nullptr &&
+                LocalIntegerVariables->Contains(Expression.VariableName);
+            if (bActiveLoopLocal == false && Expression.VariableName != LocalIndex &&
+                Expression.VariableName != LocalElement)
+            {
+                return false;
+            }
+            OutExpression = Expression.VariableName.ToString();
+            return true;
+        }
+
+        // Getter由来の参照はSemantic変数宣言または親クラスReflectionの
+        // どちらかとint32単一値として一致した場合だけメンバー式にする。
+        if (Variables != nullptr)
+        {
+            const FBPSemanticVariable* Variable = Variables->FindByPredicate(
+                [&Expression](const FBPSemanticVariable& Candidate)
+                {
+                    return Candidate.Name == Expression.VariableName;
+                });
+            if (Variable != nullptr)
+            {
+                const bool bVariableScalar = Variable->Type.ContainerKind.IsEmpty() ||
+                    Variable->Type.ContainerKind == TEXT("none");
+                if (Variable->Type.Kind != EBPSemanticTypeKind::Int32 ||
+                    bVariableScalar == false ||
+                    Variable->Type.bIsReference || Variable->Type.bIsConst ||
+                    Variable->ReflectedCppType != TEXT("int32"))
+                {
+                    return false;
+                }
+                OutExpression = FString::Printf(TEXT("this->%s"),
+                    *Expression.VariableName.ToString());
+                return true;
+            }
+        }
+        const UClass* ParentClass = FindObject<UClass>(nullptr, *ParentClassPath);
+        const FProperty* Member = ParentClass != nullptr
+            ? ParentClass->FindPropertyByName(Expression.VariableName) : nullptr;
+        if (Member == nullptr)
+        {
+            // 変数一覧を取得できない旧経路だけは従来互換を維持する。
+            if (Variables != nullptr)
+            {
+                return false;
+            }
+        }
+        else if (CastField<FIntProperty>(Member) == nullptr ||
+            Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic) == false)
+        {
+            return false;
+        }
+        OutExpression = FString::Printf(TEXT("this->%s"),
+            *Expression.VariableName.ToString());
         return true;
     }
     if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
@@ -1146,26 +1263,32 @@ bool EmitPrintStringIntegerExpression(const FBPSemanticExpression& Expression,
     }
     FString Left;
     FString Right;
-    if (EmitPrintStringIntegerExpression(Expression.Arguments[0], ParentClassPath,
-            Variables, LocalIndex, LocalElement, Depth + 1, Left) == false ||
-        EmitPrintStringIntegerExpression(Expression.Arguments[1], ParentClassPath,
-            Variables, LocalIndex, LocalElement, Depth + 1, Right) == false)
+    if (EmitVerifiedIntegerExpression(Expression.Arguments[0], ParentClassPath,
+            Variables, LocalIndex, LocalElement, Depth + 1, Left,
+            LocalIntegerVariables) == false ||
+        EmitVerifiedIntegerExpression(Expression.Arguments[1], ParentClassPath,
+            Variables, LocalIndex, LocalElement, Depth + 1, Right,
+            LocalIntegerVariables) == false)
     {
         return false;
     }
-    return FormatArithmeticOperator(Expression.FunctionName, Left, Right, Result);
+    return FormatArithmeticOperator(Expression.FunctionName, Left, Right, OutExpression);
 }
 
-// 文字列リテラル、メンバー、Concat、整数変換を単一の再帰Emitterで処理する。
-// 直接PrintString引数とConcatの子式に同じ型・参照元・深さ制限を適用する。
-bool EmitPrintStringTextExpression(const FBPSemanticExpression& Expression,
+// ReflectionでFString引数と確認されたCallから再利用する文字列式Emitter。
+// PrintStringという関数名には依存せず、許可したKismet文字列演算と
+// 検証済みメンバー／ループローカルだけをC++式へ変換する。
+bool EmitVerifiedStringExpression(const FBPSemanticExpression& Expression,
     const FString& ParentClassPath, const TArray<FBPSemanticVariable>* Variables,
-    const FName LocalIndex, const FName LocalElement,
-    const int32 Depth, FString& Result, TArray<FString>& Diagnostics)
+    const FName LocalIndex, const FName LocalElement, const int32 Depth,
+    FString& OutExpression, TArray<FString>& Diagnostics,
+    const TArray<FName>* LocalIntegerVariables = nullptr)
 {
+    OutExpression.Reset();
+    const bool bScalar = Expression.Type.ContainerKind.IsEmpty() ||
+        Expression.Type.ContainerKind == TEXT("none");
     if (Depth > 16 || Expression.Type.Kind != EBPSemanticTypeKind::String ||
-        Expression.Type.ContainerKind.IsEmpty() == false ||
-        Expression.Type.bIsReference || Expression.Type.bIsConst)
+        bScalar == false || Expression.Type.bIsReference || Expression.Type.bIsConst)
     {
         return false;
     }
@@ -1173,142 +1296,63 @@ bool EmitPrintStringTextExpression(const FBPSemanticExpression& Expression,
     {
         FString Value;
         FString Escaped;
-        if (ReadArgument(Expression, EBPSemanticTypeKind::String,
-                Value, Diagnostics) == false ||
+        if (ReadArgument(Expression, EBPSemanticTypeKind::String, Value, Diagnostics) == false ||
             EscapeString(Value, Escaped, Diagnostics) == false)
         {
             return false;
         }
-        Result = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
+        OutExpression = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
         return true;
     }
     if (Expression.Kind == EBPSemanticExpressionKind::VariableReference)
     {
         if (IsIdentifier(Expression.VariableName.ToString()) == false ||
             Expression.VariableName == TEXT("this") ||
-            IsCompatiblePrintStringMember(Expression.VariableName,
+            IsCompatibleStringMember(Expression.VariableName,
                 ParentClassPath, Variables) == false)
         {
             return false;
         }
-        Result = FString::Printf(TEXT("this->%s"), *Expression.VariableName.ToString());
+        OutExpression = FString::Printf(TEXT("this->%s"),
+            *Expression.VariableName.ToString());
         return true;
     }
-    if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
-        Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetStringLibrary"))
-    {
-        return false;
-    }
-    if (Expression.FunctionName == TEXT("Conv_IntToString") &&
+    if (Expression.Kind == EBPSemanticExpressionKind::FunctionCall &&
+        Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetStringLibrary") &&
+        Expression.FunctionName == TEXT("Conv_IntToString") &&
         Expression.Arguments.Num() == 1)
     {
         FString IntegerExpression;
-        if (EmitPrintStringIntegerExpression(Expression.Arguments[0],
+        if (EmitVerifiedIntegerExpression(Expression.Arguments[0],
                 ParentClassPath, Variables, LocalIndex, LocalElement,
-                Depth + 1, IntegerExpression) == false)
+                Depth + 1, IntegerExpression, LocalIntegerVariables) == false)
         {
             return false;
         }
-        Result = FString::Printf(TEXT("UKismetStringLibrary::Conv_IntToString(%s)"),
-            *IntegerExpression);
+        OutExpression = FString::Printf(
+            TEXT("UKismetStringLibrary::Conv_IntToString(%s)"), *IntegerExpression);
         return true;
     }
-    if (Expression.FunctionName != TEXT("Concat_StrStr") ||
+    if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall ||
+        Expression.FunctionOwnerPath != TEXT("/Script/Engine.KismetStringLibrary") ||
+        Expression.FunctionName != TEXT("Concat_StrStr") ||
         Expression.Arguments.Num() != 2)
     {
         return false;
     }
     FString Left;
     FString Right;
-    if (EmitPrintStringTextExpression(Expression.Arguments[0], ParentClassPath,
-            Variables, LocalIndex, LocalElement, Depth + 1, Left, Diagnostics) == false ||
-        EmitPrintStringTextExpression(Expression.Arguments[1], ParentClassPath,
-            Variables, LocalIndex, LocalElement, Depth + 1, Right, Diagnostics) == false)
+    if (EmitVerifiedStringExpression(Expression.Arguments[0], ParentClassPath,
+            Variables, LocalIndex, LocalElement, Depth + 1, Left, Diagnostics,
+            LocalIntegerVariables) == false ||
+        EmitVerifiedStringExpression(Expression.Arguments[1], ParentClassPath,
+            Variables, LocalIndex, LocalElement, Depth + 1, Right, Diagnostics,
+            LocalIntegerVariables) == false)
     {
         return false;
     }
-    Result = FString::Printf(TEXT("UKismetStringLibrary::Concat_StrStr(%s, %s)"),
+    OutExpression = FString::Printf(TEXT("UKismetStringLibrary::Concat_StrStr(%s, %s)"),
         *Left, *Right);
-    return true;
-}
-
-bool EmitPrintStringStatement(const FBPSemanticExpression& Call,
-    const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
-    TArray<FString>& Diagnostics, const TArray<FBPSemanticVariable>* Variables,
-    const FName LocalIndex, const FName LocalElement)
-{
-    OutStatement.Reset();
-    if (Call.Kind != EBPSemanticExpressionKind::FunctionCall ||
-        Call.Type.Kind != EBPSemanticTypeKind::Void ||
-        Call.FunctionName != TEXT("PrintString") ||
-        Call.FunctionOwnerPath != TEXT("/Script/Engine.KismetSystemLibrary") ||
-        Call.Arguments.Num() != 7)
-    {
-        Diagnostics.Add(TEXT("Unsupported PrintString semantic signature"));
-        return false;
-    }
-    const FBPSemanticExpression& Context = Call.Arguments[0];
-    if (Context.Kind != EBPSemanticExpressionKind::VariableReference ||
-        Context.VariableName != TEXT("this") ||
-        Context.Type.Kind != EBPSemanticTypeKind::Object ||
-        Context.Type.TypePath != ParentClassPath ||
-        Context.Type.bIsReference || Context.Type.bIsConst)
-    {
-        Diagnostics.Add(TEXT("Unsupported PrintString world context"));
-        return false;
-    }
-
-    FString TextExpression;
-    FString Screen;
-    FString Log;
-    FString Color;
-    FString DurationText;
-    FString Key;
-    // 文字列引数の全形状を共通Emitterに渡し、ネスト時だけ検証が
-    // 厳しくなる／緩くなるという経路差をなくす。
-    if (EmitPrintStringTextExpression(Call.Arguments[1], ParentClassPath,
-            Variables, LocalIndex, LocalElement, 0, TextExpression, Diagnostics) == false)
-    {
-        Diagnostics.Add(TEXT("Unsupported PrintString text expression"));
-        return false;
-    }
-    if (ReadArgument(Call.Arguments[2], EBPSemanticTypeKind::Bool, Screen, Diagnostics) == false ||
-        ReadArgument(Call.Arguments[3], EBPSemanticTypeKind::Bool, Log, Diagnostics) == false ||
-        ReadArgument(Call.Arguments[4], EBPSemanticTypeKind::Struct, Color, Diagnostics) == false ||
-        ReadArgument(Call.Arguments[5], EBPSemanticTypeKind::Float, DurationText, Diagnostics) == false ||
-        ReadArgument(Call.Arguments[6], EBPSemanticTypeKind::String, Key, Diagnostics) == false)
-    {
-        return false;
-    }
-    if ((Screen != TEXT("true") && Screen != TEXT("false")) ||
-        (Log != TEXT("true") && Log != TEXT("false")) ||
-        Call.Arguments[4].Type.TypePath != TEXT("/Script/CoreUObject.LinearColor"))
-    {
-        Diagnostics.Add(TEXT("Invalid PrintString boolean or color type"));
-        return false;
-    }
-    float Duration = 0.0f;
-    FLinearColor LinearColor;
-    if (LexTryParseString(Duration, *DurationText) == false ||
-        FMath::IsFinite(Duration) == false ||
-        LinearColor.InitFromString(Color) == false ||
-        FMath::IsFinite(LinearColor.R) == false || FMath::IsFinite(LinearColor.G) == false ||
-        FMath::IsFinite(LinearColor.B) == false || FMath::IsFinite(LinearColor.A) == false)
-    {
-        Diagnostics.Add(TEXT("Invalid PrintString duration or color"));
-        return false;
-    }
-    FString EscapedKey;
-    if (EscapeString(Key, EscapedKey, Diagnostics) == false)
-    {
-        return false;
-    }
-    OutStatement = FString::Printf(
-        TEXT("%sUKismetSystemLibrary::PrintString(this, %s, %s, %s, FLinearColor(%s, %s, %s, %s), %s, TEXT(\"%s\"));\n"),
-        *Indent, *TextExpression, *Screen, *Log,
-        *FloatLiteral(LinearColor.R), *FloatLiteral(LinearColor.G),
-        *FloatLiteral(LinearColor.B), *FloatLiteral(LinearColor.A),
-        *FloatLiteral(Duration), *EscapedKey);
     return true;
 }
 
@@ -1322,18 +1366,13 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
     const FString& ParentClassPath, const FString& Indent, FString& OutStatement,
     TArray<FString>& Diagnostics, const FName LocalIndex = NAME_None,
     const FName LocalElement = NAME_None,
-    const TArray<FBPSemanticVariable>* Variables = nullptr)
+    const TArray<FBPSemanticVariable>* Variables = nullptr,
+    const TArray<FName>* LocalIntegerVariables = nullptr)
 {
     if (Expression.Kind != EBPSemanticExpressionKind::FunctionCall)
     {
         Diagnostics.Add(TEXT("Expression statement requires a verified function call"));
         return false;
-    }
-    if (Expression.FunctionName == TEXT("PrintString") &&
-        Expression.FunctionOwnerPath == TEXT("/Script/Engine.KismetSystemLibrary"))
-    {
-        return EmitPrintStringStatement(Expression, ParentClassPath,
-            Indent, OutStatement, Diagnostics, Variables, LocalIndex, LocalElement);
     }
     if (Expression.FunctionName == TEXT("K2_SetActorLocation") &&
         Expression.FunctionOwnerPath == TEXT("/Script/Engine.Actor"))
@@ -1423,8 +1462,13 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 return false;
             }
         }
-        if (Expression.Arguments.Num() - FirstArgument !=
-            ResolvedCall.Signature.ParameterNames.Num())
+        const int32 ProvidedParameterCount = Expression.Arguments.Num() - FirstArgument;
+        const int32 ExpectedParameterCount = ResolvedCall.Signature.ParameterNames.Num();
+        if (ProvidedParameterCount < 0 || ProvidedParameterCount > ExpectedParameterCount ||
+            ResolvedCall.Signature.ParameterTypes.Num() != ExpectedParameterCount ||
+            ResolvedCall.Signature.OutputParameters.Num() != ExpectedParameterCount ||
+            ResolvedCall.Signature.bHasParameterDefaultValues.Num() != ExpectedParameterCount ||
+            ResolvedCall.Signature.ParameterDefaultValues.Num() != ExpectedParameterCount)
         {
             Diagnostics.Add(TEXT("Reflected function parameter count does not match semantic call"));
             return false;
@@ -1433,9 +1477,14 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
         {
             const FBPSemanticExpression& Argument = Expression.Arguments[Index];
             const int32 ParameterIndex = Index - FirstArgument;
+            const FBPSemanticType& ExpectedType =
+                ResolvedCall.Signature.ParameterTypes[ParameterIndex];
+            const bool bSupportedConstStringReference =
+                ExpectedType.Kind == EBPSemanticTypeKind::String &&
+                ExpectedType.bIsReference && ExpectedType.bIsConst;
             if (ResolvedCall.Signature.OutputParameters[ParameterIndex] ||
-                ResolvedCall.Signature.ParameterTypes[ParameterIndex].Kind != Argument.Type.Kind ||
-                ResolvedCall.Signature.ParameterTypes[ParameterIndex].bIsReference)
+                ExpectedType.Kind != Argument.Type.Kind ||
+                (ExpectedType.bIsReference && bSupportedConstStringReference == false))
             {
                 Diagnostics.Add(TEXT("Reflected parameter type or direction does not match semantic call"));
                 return false;
@@ -1451,48 +1500,24 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 Diagnostics.Add(TEXT("Reflected call argument has unsupported reference qualifiers"));
                 return false;
             }
-            // 共通CallのFString引数にも、PrintStringで検証済みの
-            // Concat/Conv_IntToString式を受け入れる。任意の関数式ではなく
-            // 文字列式Emitterの許可リストとスコープ検証を再利用する。
-            if (Argument.Kind == EBPSemanticExpressionKind::FunctionCall &&
-                Argument.Type.Kind == EBPSemanticTypeKind::String)
+            // ReflectionでFString入力と確認された引数は、関数名に依存しない
+            // 型付き文字列式Emitterへ渡す。リテラル、検証済みメンバー、
+            // Concat、Conv_IntToStringを同じ規則で扱う。
+            if (ExpectedType.Kind == EBPSemanticTypeKind::String)
             {
-                FString TextExpression;
-                if (EmitPrintStringTextExpression(Argument, ParentClassPath,
-                        Variables, LocalIndex, LocalElement, 0,
-                        TextExpression, Diagnostics) == false)
+                FString Value;
+                if (EmitVerifiedStringExpression(Argument, ParentClassPath, Variables,
+                        LocalIndex, LocalElement, 0, Value, Diagnostics,
+                        LocalIntegerVariables) == false)
                 {
-                    Diagnostics.Add(TEXT("Unsupported reflected FString expression"));
+                    Diagnostics.Add(TEXT("Reflected FString argument contains an unsupported expression"));
                     return false;
                 }
                 if (Index > FirstArgument)
                 {
                     Arguments += TEXT(", ");
                 }
-                Arguments += TextExpression;
-                continue;
-            }
-            // FStringのメンバー参照は親クラスの公開ネイティブプロパティに限定する。
-            // 変数名だけから任意のC++式を生成しないため、Reflectionで型と公開範囲を検証する。
-            if (Argument.Kind == EBPSemanticExpressionKind::VariableReference &&
-                Argument.Type.Kind == EBPSemanticTypeKind::String)
-            {
-                const FProperty* Member = ParentClass != nullptr
-                    ? ParentClass->FindPropertyByName(Argument.VariableName) : nullptr;
-                if (Member == nullptr || CastField<FStrProperty>(Member) == nullptr ||
-                    Member->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPublic) == false ||
-                    IsIdentifier(Argument.VariableName.ToString()) == false ||
-                    Argument.VariableName == TEXT("this"))
-                {
-                    Diagnostics.Add(TEXT("Reflected FString member is not a public native property"));
-                    return false;
-                }
-                if (Index > FirstArgument)
-                {
-                    Arguments += TEXT(", ");
-                }
-                Arguments += FString::Printf(TEXT("this->%s"),
-                    *Argument.VariableName.ToString());
+                Arguments += Value;
                 continue;
             }
             // ForEachのローカルIndex/Elementは、ループ構築側で型と名前の
@@ -1506,9 +1531,11 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
             {
                 // ループローカル名の型偽装を拒否し、同名のActorメンバーへ
                 // フォールバックさせない。宣言時のint32型と一致させる。
+                const bool bScalar = Argument.Type.ContainerKind.IsEmpty() ||
+                    Argument.Type.ContainerKind == TEXT("none");
                 if (Argument.SourcePinId.IsValid() ||
                     Argument.Type.Kind != EBPSemanticTypeKind::Int32 ||
-                    Argument.Type.ContainerKind.IsEmpty() == false ||
+                    bScalar == false ||
                     Argument.Type.bIsReference || Argument.Type.bIsConst ||
                     IsIdentifier(Argument.VariableName.ToString()) == false)
                 {
@@ -1576,6 +1603,7 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 int32 Parsed = 0;
                 if (LexTryParseString(Parsed, *Argument.LiteralValue) == false)
                 {
+                    Diagnostics.Add(TEXT("Invalid reflected int32 literal"));
                     return false;
                 }
                 Value = LexToString(Parsed);
@@ -1587,6 +1615,7 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 if (LexTryParseString(Parsed, *Argument.LiteralValue) == false ||
                     FMath::IsFinite(Parsed) == false)
                 {
+                    Diagnostics.Add(TEXT("Invalid reflected floating-point literal"));
                     return false;
                 }
                 // 検証済み数値を正規化して出力する。入力文字列に直接fを付けると、
@@ -1636,12 +1665,58 @@ bool EmitExpressionStatement(const FBPSemanticExpression& Expression,
                 }
                 Value = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
             }
+            else if (Argument.Type.Kind == EBPSemanticTypeKind::Name)
+            {
+                FString Escaped;
+                if (EscapeString(Argument.LiteralValue, Escaped, Diagnostics) == false)
+                {
+                    return false;
+                }
+                // 既存生成物との互換性を維持しつつ、Reflection上はFNameと照合する。
+                Value = FString::Printf(TEXT("TEXT(\"%s\")"), *Escaped);
+            }
             else
             {
                 Diagnostics.Add(TEXT("Reflected call argument type is unsupported"));
                 return false;
             }
             if (Index > FirstArgument)
+            {
+                Arguments += TEXT(", ");
+            }
+            Arguments += Value;
+        }
+        // Semantic IRで省略できるのは末尾の引数だけ。UHTのCPP_Defaultメタデータを
+        // Reflectionで確認し、安全に型付きC++へ変換できる場合に限って明示出力する。
+        // 生成C++をヘッダー側の暗黙デフォルトや任意文字列へ依存させない。
+        for (int32 ParameterIndex = ProvidedParameterCount;
+            ParameterIndex < ExpectedParameterCount; ++ParameterIndex)
+        {
+            const FBPSemanticType& ExpectedType =
+                ResolvedCall.Signature.ParameterTypes[ParameterIndex];
+            const bool bSupportedConstStringReference =
+                ExpectedType.Kind == EBPSemanticTypeKind::String &&
+                ExpectedType.bIsReference && ExpectedType.bIsConst;
+            if (ResolvedCall.Signature.OutputParameters[ParameterIndex] ||
+                (ExpectedType.bIsReference && bSupportedConstStringReference == false) ||
+                ResolvedCall.Signature.bHasParameterDefaultValues[ParameterIndex] == false)
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Missing reflected argument has no supported default: %s"),
+                    *ResolvedCall.Signature.ParameterNames[ParameterIndex].ToString()));
+                return false;
+            }
+            FString Value;
+            if (EmitReflectedLiteralValue(
+                    ResolvedCall.Signature.ParameterDefaultValues[ParameterIndex],
+                    ExpectedType, true, Value, Diagnostics) == false)
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Unsupported reflected default for parameter: %s"),
+                    *ResolvedCall.Signature.ParameterNames[ParameterIndex].ToString()));
+                return false;
+            }
+            if (ParameterIndex > 0)
             {
                 Arguments += TEXT(", ");
             }
@@ -1714,11 +1789,30 @@ void AppendExpressionIncludes(const FBPSemanticExpression& Expression, FString& 
     }
 }
 
+bool ExpressionReferencesVariable(const FBPSemanticExpression& Expression,
+    const FName VariableName, const int32 Depth = 0)
+{
+    if (Depth > 32)
+    {
+        return false;
+    }
+    if (Expression.Kind == EBPSemanticExpressionKind::VariableReference &&
+        Expression.VariableName == VariableName)
+    {
+        return true;
+    }
+    return Expression.Arguments.ContainsByPredicate(
+        [VariableName, Depth](const FBPSemanticExpression& Argument)
+        {
+            return ExpressionReferencesVariable(Argument, VariableName, Depth + 1);
+        });
+}
+
 // ForLoopのBranchを再帰的に生成する。対応する葉は共通の式文Emitterへ渡し、
 // 深さ制限で異常なSemantic IRによる過度な再帰を防ぐ。
 bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
     const FString& ParentClassPath, const TArray<FBPSemanticVariable>& Variables,
-    const FName LocalIndex, const FString& Indent, int32 Depth,
+    const TArray<FName>& LocalIndices, const FString& Indent, int32 Depth,
     FString& OutCode, TArray<FString>& Diagnostics)
 {
     if (Depth > 16)
@@ -1728,8 +1822,11 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
     }
     if (Statement.Kind == EBPSemanticStatementKind::Expression)
     {
+        const FName LocalIndex = LocalIndices.IsEmpty()
+            ? NAME_None : LocalIndices.Last();
         return EmitExpressionStatement(Statement.Expression, ParentClassPath,
-            Indent, OutCode, Diagnostics, LocalIndex, NAME_None, &Variables);
+            Indent, OutCode, Diagnostics, LocalIndex, NAME_None, &Variables,
+            &LocalIndices);
     }
     if (Statement.Kind == EBPSemanticStatementKind::ForLoop)
     {
@@ -1739,7 +1836,7 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
         int32 Last = 0;
         if (Statement.LoopIndexVariable.IsNone() ||
             IsIdentifier(Statement.LoopIndexVariable.ToString()) == false ||
-            Statement.LoopIndexVariable == LocalIndex ||
+            LocalIndices.Contains(Statement.LoopIndexVariable) ||
             Statement.LoopFirstIndex.Kind != EBPSemanticExpressionKind::Literal ||
             Statement.LoopFirstIndex.Type.Kind != EBPSemanticTypeKind::Int32 ||
             Statement.LoopLastIndex.Kind != EBPSemanticExpressionKind::Literal ||
@@ -1753,11 +1850,13 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
         }
         const FString InnerIndent = Indent + TEXT("    ");
         FString InnerCode;
+        TArray<FName> NestedLocalIndices = LocalIndices;
+        NestedLocalIndices.Add(Statement.LoopIndexVariable);
         for (const FBPSemanticStatement& Body : Statement.LoopBodyStatements)
         {
             FString Part;
             if (EmitForLoopBodyStatement(Body, ParentClassPath, Variables,
-                    Statement.LoopIndexVariable, InnerIndent, Depth + 1,
+                    NestedLocalIndices, InnerIndent, Depth + 1,
                     Part, Diagnostics) == false)
             {
                 return false;
@@ -1774,7 +1873,7 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
         {
             FString Part;
             if (EmitForLoopBodyStatement(Completed, ParentClassPath, Variables,
-                    LocalIndex, Indent, Depth + 1, Part, Diagnostics) == false)
+                    LocalIndices, Indent, Depth + 1, Part, Diagnostics) == false)
             {
                 Diagnostics.Add(TEXT("Nested ForLoop Completed contains an unsupported semantic statement"));
                 return false;
@@ -1791,6 +1890,8 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
     FString Condition;
     FString ThenCode;
     FString ElseCode;
+    const FName LocalIndex = LocalIndices.IsEmpty()
+        ? NAME_None : LocalIndices.Last();
     // 通常Branchでは既存の条件式検証を維持し、ループ内ではIndex参照を許可する。
     const bool bConditionValid = LocalIndex.IsNone()
         ? EmitBranchCondition(Statement.Expression, Variables, Condition, Diagnostics)
@@ -1804,7 +1905,7 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
     {
         FString Part;
         if (EmitForLoopBodyStatement(Child, ParentClassPath, Variables,
-                LocalIndex, Indent + TEXT("    "), Depth + 1, Part, Diagnostics) == false)
+                LocalIndices, Indent + TEXT("    "), Depth + 1, Part, Diagnostics) == false)
         {
             return false;
         }
@@ -1814,7 +1915,7 @@ bool EmitForLoopBodyStatement(const FBPSemanticStatement& Statement,
     {
         FString Part;
         if (EmitForLoopBodyStatement(Child, ParentClassPath, Variables,
-                LocalIndex, Indent + TEXT("    "), Depth + 1, Part, Diagnostics) == false)
+                LocalIndices, Indent + TEXT("    "), Depth + 1, Part, Diagnostics) == false)
         {
             return false;
         }
@@ -1971,7 +2072,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         if (LeadingStatement.Kind == EBPSemanticStatementKind::Branch)
         {
             if (EmitForLoopBodyStatement(LeadingStatement, IR.ParentClassPath,
-                    IR.Variables, NAME_None, TEXT("    "), 0, Part, OutDiagnostics) == false)
+                    IR.Variables, TArray<FName>(), TEXT("    "), 0, Part,
+                    OutDiagnostics) == false)
             {
                 return false;
             }
@@ -2060,8 +2162,6 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
                 OutDiagnostics.Add(TEXT("ForEachLoop body contains an unsupported semantic statement"));
                 return false;
             }
-            // PrintString固有の式形状制限を撤廃する。Concatや整数演算の
-            // 再帰的な型・参照元検証はEmitExpressionStatement側に一本化する。
             if (EmitExpressionStatement(Body.Expression, IR.ParentClassPath,
                     TEXT("        "), Part, OutDiagnostics,
                     Statement.LoopIndexVariable, Statement.LoopElementVariable,
@@ -2069,35 +2169,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
             {
                 return false;
             }
-            // ElementはConcat/Conv_IntToString/算術式の深い位置にも現れる。
-            // 実際に参照される場合のみループ内で要素変数を宣言する。
-            TFunction<bool(const FBPSemanticExpression&, int32)> UsesElement;
-            UsesElement = [&](const FBPSemanticExpression& Current, int32 Depth) -> bool
-            {
-                if (Depth > 32)
-                {
-                    return false;
-                }
-                if (Current.Kind == EBPSemanticExpressionKind::VariableReference &&
-                    Current.VariableName == Statement.LoopElementVariable &&
-                    Current.Type.Kind == EBPSemanticTypeKind::Int32 &&
-                    Current.SourcePinId.IsValid() == false)
-                {
-                    return true;
-                }
-                for (const FBPSemanticExpression& Child : Current.Arguments)
-                {
-                    if (UsesElement(Child, Depth + 1))
-                    {
-                        return true;
-                    }
-                }
-                return false;
-            };
-            if (UsesElement(Body.Expression, 0))
-            {
-                bUsesElement = true;
-            }
+            // 関数名や引数の深さに依存せず、式ツリー内のElement参照を追跡する。
+            bUsesElement = bUsesElement || ExpressionReferencesVariable(
+                Body.Expression, Statement.LoopElementVariable);
             BodyCode += Part;
         }
         FString CompletedCode;
@@ -2105,8 +2179,6 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         {
             FString Part;
             // Completedはループ外の通常の式文として共通の入口で検証する。
-            // PrintStringだけをここでリテラル限定すると、既存の専用Emitterが
-            // 検証可能なメンバー参照・文字列式まで不必要に拒否してしまう。
             if (Completed.Kind != EBPSemanticStatementKind::Expression ||
                 EmitExpressionStatement(Completed.Expression, IR.ParentClassPath,
                     TEXT("    "), Part, OutDiagnostics,
@@ -2182,7 +2254,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         {
             FString StatementCode;
             if (EmitForLoopBodyStatement(BodyStatement, IR.ParentClassPath,
-                    IR.Variables, Statement.LoopIndexVariable, TEXT("        "),
+                    IR.Variables, TArray<FName>{Statement.LoopIndexVariable}, TEXT("        "),
                     0, StatementCode, OutDiagnostics) == false)
             {
                 return false;
@@ -2195,9 +2267,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         for (const FBPSemanticStatement& CompletedStatement : Statement.CompletedStatements)
         {
             FString StatementCode;
-            // Completedはforの外側で実行されるため、Indexを有効なローカル名として渡さない。
             if (EmitForLoopBodyStatement(CompletedStatement, IR.ParentClassPath,
-                    IR.Variables, NAME_None, TEXT("    "),
+                    IR.Variables, TArray<FName>(), TEXT("    "),
                     0, StatementCode, OutDiagnostics) == false)
             {
                 OutDiagnostics.Add(TEXT("ForLoop Completed contains an unsupported semantic statement"));
@@ -2281,7 +2352,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         // LoopIndexを参照しない通常Branchでは名前を空にして評価する。
         FString BranchCode;
         if (EmitForLoopBodyStatement(Statement, IR.ParentClassPath, IR.Variables,
-                NAME_None, TEXT("    "), 0, BranchCode, OutDiagnostics) == false)
+                TArray<FName>(), TEXT("    "), 0, BranchCode, OutDiagnostics) == false)
         {
             return false;
         }

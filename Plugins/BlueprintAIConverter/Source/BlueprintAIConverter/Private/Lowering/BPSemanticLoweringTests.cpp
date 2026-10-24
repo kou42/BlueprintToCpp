@@ -211,6 +211,75 @@ bool FBPSemanticLoweringGraphDiagnosticsTest::RunTest(const FString& Parameters)
         FBPSemanticLowering::LowerPrintString(IR, Semantic));
     TestTrue(TEXT("診断をSemantic IRへ引き継ぐ"), Semantic.HasErrors());
     TestTrue(TEXT("不完全な関数を残さない"), Semantic.Functions.IsEmpty());
+    TestFalse(TEXT("共通LowerもGraph IR診断を振り分け前に拒否"),
+        FBPSemanticLowering::Lower(nullptr, IR, Semantic));
+    TestTrue(TEXT("共通Lowerが元の診断を保持"),
+        Semantic.Diagnostics.ContainsByPredicate(
+            [](const FBPSemanticDiagnostic& Diagnostic)
+            {
+                return Diagnostic.Message == TEXT("Graph IR contains unsupported data");
+            }));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticExecutableEntryAuditTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.ExecutableEntryAudit",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticExecutableEntryAuditTest::RunTest(const FString& Parameters)
+{
+    auto HasDiagnostic = [](const FBPSemanticIR& IR, const FString& Text)
+    {
+        return IR.Diagnostics.ContainsByPredicate(
+            [&Text](const FBPSemanticDiagnostic& Diagnostic)
+            {
+                return Diagnostic.Message.Contains(Text);
+            });
+    };
+
+    FBPSemanticIR Semantic;
+    FBPGraphIR MissingEntry = MakeSemanticTestGraph();
+    MissingEntry.Graphs[0].Nodes.RemoveAt(0);
+    TestFalse(TEXT("Entryのない実行グラフを拒否"),
+        FBPSemanticLowering::Lower(nullptr, MissingEntry, Semantic));
+    TestTrue(TEXT("Entry欠落の具体的診断"),
+        HasDiagnostic(Semantic, TEXT("no active execution entry")));
+
+    FBPGraphIR MultipleEntries = MakeSemanticTestGraph();
+    FBPIRNode SecondEntry;
+    SecondEntry.Id = FGuid::NewGuid();
+    SecondEntry.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CustomEvent");
+    SecondEntry.FunctionName = TEXT("SecondEvent");
+    FBPIRNode SecondPrint;
+    SecondPrint.Id = FGuid::NewGuid();
+    SecondPrint.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    SecondPrint.FunctionName = TEXT("PrintString");
+    FBPIRLink SecondEdge;
+    SecondEdge.SourceNode = SecondEntry.Id;
+    SecondEdge.TargetNode = SecondPrint.Id;
+    MultipleEntries.Graphs[0].Nodes.Add(MoveTemp(SecondEntry));
+    MultipleEntries.Graphs[0].Nodes.Add(MoveTemp(SecondPrint));
+    MultipleEntries.Graphs[0].ExecEdges.Add(SecondEdge);
+    TestFalse(TEXT("同一グラフの複数active Entryを拒否"),
+        FBPSemanticLowering::Lower(nullptr, MultipleEntries, Semantic));
+    TestTrue(TEXT("複数Entryの具体的診断"),
+        HasDiagnostic(Semantic, TEXT("multiple active execution entries")));
+
+    FBPGraphIR MultipleGraphs = MakeSemanticTestGraph();
+    FBPGraphIR Other = MakeSemanticTestGraph();
+    Other.Graphs[0].Name = TEXT("OtherEventGraph");
+    MultipleGraphs.Graphs.Add(MoveTemp(Other.Graphs[0]));
+    TestFalse(TEXT("複数の実行Entryグラフを拒否"),
+        FBPSemanticLowering::Lower(nullptr, MultipleGraphs, Semantic));
+    TestTrue(TEXT("複数実行グラフの名前付き診断"),
+        HasDiagnostic(Semantic, TEXT("EventGraph and OtherEventGraph")));
+
+    FBPGraphIR WrongKind = MakeSemanticTestGraph();
+    WrongKind.Graphs[0].Kind = TEXT("function");
+    TestFalse(TEXT("EntryとGraph Kindの不一致を拒否"),
+        FBPSemanticLowering::Lower(nullptr, WrongKind, Semantic));
+    TestTrue(TEXT("Graph Kind不一致の具体的診断"),
+        HasDiagnostic(Semantic, TEXT("does not match its graph kind")));
     return true;
 }
 

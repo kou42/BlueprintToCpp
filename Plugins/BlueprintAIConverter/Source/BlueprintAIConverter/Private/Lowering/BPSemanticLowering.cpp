@@ -174,7 +174,7 @@ bool LowerPrintStringImpl(const FBPGraphIR& GraphIR, const bool bAllowBlueprintV
     CallExpression.Arguments.Add(MoveTemp(Color));
     CallExpression.Arguments.Add(Literal(EBPSemanticTypeKind::Float,
         FString::SanitizeFloat(Call.Duration), *Print, TEXT("Duration")));
-    CallExpression.Arguments.Add(Literal(EBPSemanticTypeKind::String, Call.Key, *Print, TEXT("Key")));
+    CallExpression.Arguments.Add(Literal(EBPSemanticTypeKind::Name, Call.Key, *Print, TEXT("Key")));
     Block.Statements.Add(MoveTemp(Statement));
     Function.Blocks.Add(MoveTemp(Block));
     OutIR.Functions.Add(MoveTemp(Function));
@@ -220,7 +220,7 @@ FBPSemanticExpression MakePrintStringExpression(const FBPPrintStringCall& Values
     Call.Arguments.Add(MoveTemp(Color));
     Call.Arguments.Add(Literal(EBPSemanticTypeKind::Float,
         FString::SanitizeFloat(Values.Duration), Print, TEXT("Duration")));
-    Call.Arguments.Add(Literal(EBPSemanticTypeKind::String,
+    Call.Arguments.Add(Literal(EBPSemanticTypeKind::Name,
         Values.Key, Print, TEXT("Key")));
     return Call;
 }
@@ -285,6 +285,81 @@ bool ValidateBlueprintParent(const UBlueprint* Blueprint,
             TEXT("Graph IR parent class does not match the source Blueprint: %s != %s"),
             *ParentClass.ClassPath, *BlueprintParentPath));
         return false;
+    }
+    return true;
+}
+
+bool IsExecutionEntryNode(const FBPIRNode& Node)
+{
+    return Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry") ||
+        Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent") ||
+        Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event");
+}
+
+// パターン振り分けより前に、変換対象となる実行グラフの入口を一意にする。
+// 未接続の標準Eventや空Construction Scriptは許容するが、実行／データ接続を
+// 持つグラフをEntryなしで推測したり、複数のEntry／グラフから一つだけを選ばない。
+bool ValidateExecutableGraphEntries(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+{
+    const FBPIRGraph* ActiveGraph = nullptr;
+    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    {
+        if (Graph.ExecEdges.IsEmpty() && Graph.DataEdges.IsEmpty())
+        {
+            continue;
+        }
+
+        TArray<const FBPIRNode*> ActiveEntries;
+        for (const FBPIRNode& Node : Graph.Nodes)
+        {
+            if (IsExecutionEntryNode(Node) == false)
+            {
+                continue;
+            }
+            const bool bStartsExecution = Graph.ExecEdges.ContainsByPredicate(
+                [&Node](const FBPIRLink& Edge)
+                {
+                    return Edge.SourceNode == Node.Id;
+                });
+            if (bStartsExecution)
+            {
+                ActiveEntries.Add(&Node);
+            }
+        }
+        if (ActiveEntries.IsEmpty())
+        {
+            AddDiagnostic(OutIR, Graph.Name, FGuid(),
+                TEXT("Executable graph has no active execution entry"));
+            return false;
+        }
+        if (ActiveEntries.Num() != 1)
+        {
+            AddDiagnostic(OutIR, Graph.Name, ActiveEntries[1]->Id,
+                TEXT("Executable graph contains multiple active execution entries"));
+            return false;
+        }
+
+        const FBPIRNode& Entry = *ActiveEntries[0];
+        const bool bFunctionEntry =
+            Entry.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry");
+        const bool bEventEntry =
+            Entry.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent") ||
+            Entry.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event");
+        if ((bFunctionEntry && Graph.Kind != TEXT("function")) ||
+            (bEventEntry && Graph.Kind != TEXT("event")))
+        {
+            AddDiagnostic(OutIR, Graph.Name, Entry.Id,
+                TEXT("Active execution entry kind does not match its graph kind"));
+            return false;
+        }
+        if (ActiveGraph != nullptr)
+        {
+            AddDiagnostic(OutIR, Graph.Name, Entry.Id, FString::Printf(
+                TEXT("Multiple executable entry graphs cannot be lowered together: %s and %s"),
+                *ActiveGraph->Name, *Graph.Name));
+            return false;
+        }
+        ActiveGraph = &Graph;
     }
     return true;
 }
@@ -5350,6 +5425,21 @@ bool LowerSequenceImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
 bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
     const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
+    OutIR = FBPSemanticIR();
+    OutIR.AssetPath = GraphIR.AssetPath;
+    OutIR.ParentClassPath = GraphIR.ParentClassPath;
+    if (GraphIR.Diagnostics.IsEmpty() == false)
+    {
+        for (const FString& Message : GraphIR.Diagnostics)
+        {
+            AddDiagnostic(OutIR, FString(), FGuid(), Message);
+        }
+        return false;
+    }
+    if (ValidateExecutableGraphEntries(GraphIR, OutIR) == false)
+    {
+        return false;
+    }
     bool bHasPrintString = false;
     bool bHasGetActorLocation = false;
     bool bHasSetActorLocation = false;

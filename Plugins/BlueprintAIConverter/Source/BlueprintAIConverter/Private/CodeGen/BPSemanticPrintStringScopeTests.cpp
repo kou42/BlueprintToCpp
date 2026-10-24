@@ -52,7 +52,7 @@ FBPSemanticStatement MakePrintIndex(const FName IndexName)
     Color.Type.TypePath = TEXT("/Script/CoreUObject.LinearColor");
     Call.Arguments.Add(Color);
     Call.Arguments.Add(MakeLiteral(EBPSemanticTypeKind::Float, TEXT("2.0")));
-    Call.Arguments.Add(MakeLiteral(EBPSemanticTypeKind::String, TEXT("")));
+    Call.Arguments.Add(MakeLiteral(EBPSemanticTypeKind::Name, TEXT("")));
     return Statement;
 }
 
