@@ -1320,6 +1320,17 @@ bool FBPSemanticGeneratorForEachInt32ArgumentsTest::RunTest(const FString& Param
         Files.SourceContent.Contains(TEXT("const int32 LoopElement = Numbers[LoopIndex];")));
     TestTrue(TEXT("共通CallにIndex/Elementを渡す"),
         Files.SourceContent.Contains(TEXT("this->SetMouseLocation(LoopIndex, LoopElement);")));
+
+    // SourcePinIdを持つ参照はループローカルではなくGetter由来と扱う。
+    // 名前が一致するだけでローカルへ解決すると参照元の偽装を許してしまう。
+    FBPSemanticExpression& SpoofedElement = IR.Functions[0].Blocks[0].Statements[0]
+        .LoopBodyStatements[0].Expression.Arguments[2];
+    SpoofedElement.SourcePinId = FGuid::NewGuid();
+    Diagnostics.Reset();
+    TestFalse(TEXT("SourcePinId付きElementのローカル偽装を拒否"),
+        FBPSemanticCodeGenerator::Generate(IR, TEXT("AForEachInt32PlayerController"),
+            FString(), Files, Diagnostics, EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("偽装拒否時に生成物を公開しない"), Files.SourceContent.IsEmpty());
     return true;
 }
 

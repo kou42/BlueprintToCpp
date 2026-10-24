@@ -96,6 +96,31 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - **未確認:** 最新HEADのUHT／UBTビルド、追加Automation Testの実行結果、既存PrintString Parity、ForEach正常系・拒否系、Semantic JSONとPythonの往復テスト。
 - **判定:** テスト未実施のためP0のチェックボックスは未完了のまま維持する。
 
+### P0追加実装（2026-10-23、検証待ち）
+
+- PrintStringのConv_IntToStringとConcat内整数演算で、SourcePinId付きint32メンバー参照をSemantic変数宣言または親クラスReflectionと照合する。未宣言・型偽装・コンテナ／参照／const修飾を拒否する。
+- 整数演算経由のメンバー参照は検証後にthis->参照として出力する。SourcePinIdのないローカル参照は既存互換性を維持し、ループスコープ検証は次の作業で共通化する。
+- UEビルド・Automation Test・JSON往復テストは未実施。P0完了とは判定しない。
+
+- **追加変更（検証待ち）:** PrintStringの整数変換・Concat内整数演算で、SourcePinIdのないローカル整数参照をForLoop／ForEachLoopの有効なIndex／Element名に限定。ForLoopの式文にもLocalIndexを伝播。既存の正常系・拒否系Automation TestとUEビルドは未実施。
+
+- **回帰テスト追加（実行待ち）:** `BPSemanticPrintStringScopeTests.cpp` にForLoop内Indexの正常系、未宣言Index拒否、Completedのスコープ外参照拒否を追加。併せてConcat内の文字列メンバー参照の誤った整数判定を修正。テスト実行・UEコンパイルは未確認。
+
+- **ユーザー報告:** 前回コミットまでの動作チェックは問題なし（2026-10-23の会話）。確認対象の個別Automation Test名や実行ログは未受領。
+- **追加回帰テスト（新規変更・実行待ち）:** `BPSemanticPrintStringScopeTests.cpp` にConcat→Conv_IntToString→Add_IntIntの正常系、未宣言ローカル名拒否、SourcePinId付き未宣言メンバー拒否を追加。既存のネスト式Emitterを公開Generate入口から検証する。Semantic IR／JSON schemaは変更なし。
+
+- **ForEachネスト式対応（新規変更・検証待ち）:** ForEachLoopのPrintString専用「リテラル／直接Conv_IntToString」制限を除去し、既存の検証済み式Emitterに統一。Concat／整数演算の内部までElement使用を再帰走査し、必要な場合にのみ要素変数を宣言する。既存のループ変数・Reflection検証は維持。UEビルド／Automation Testは新コミットに対して未実施。
+
+- **ForEach回帰テスト拡充（新規・検証待ち）:** `BPSemanticPrintStringScopeTests.cpp` にForEach内Concat→Conv_IntToString→Add_IntIntのElement正常系、Index正常系、Element未使用時の宣言省略、未宣言ローカル拒否、CompletedからのElement参照拒否を追加。公開Generate入口で検証。最新HEADのUEビルドとAutomation Testは未実施。
+
+- **ネスト整数式の識別子検証（新規・検証待ち）:** Concat内部の整数変数参照でC++識別子を明示検証し、重複したメンバーReflection照合を整理。不正な識別子をSourcePinId付きメンバーとして与える拒否テストを追加。UEビルド／Automation Testは未実施。
+
+- **整数式Emitter共通化（新規・検証待ち）:** PrintStringの直接Conv_IntToStringとConcat内部Conv_IntToStringで重複していた整数式再帰Emitterを`EmitPrintStringIntegerExpression`へ統合。int32型、コンテナ・参照修飾、ローカルスコープ、メンバーReflection、識別子、MathLibrary許可リスト、深さ制限を一箇所で検証。UEビルド／Automation Testは最新HEADでは未実施。
+
+- **文字列式Emitter共通化（新規・検証待ち）:** PrintStringの文字列リテラル・メンバー参照・Concat_StrStr・Conv_IntToStringを`EmitPrintStringTextExpression`に統合。直接引数とConcat内部の型・識別子・Reflection・深さ制限を統一し、整数式は既存の共通ヘルパーを再利用。既存のPrintString/ForEach回帰テストで確認予定。最新HEADのUEビルド／Automation Testは未実施。
+
+- **共通CallのFStringネスト式対応（新規・検証待ち）:** Reflection共通CallのFString引数に`EmitPrintStringTextExpression`を再利用し、Concat_StrStr／Conv_IntToString／整数式の検証済み再帰生成を導入。共通CallのForEach Index/ElementではSourcePinId付き参照をローカルと誤認しないよう拒否し、Element偽装の回帰テストを追加。共通FStringネスト式自体の正常系Automation Testおよび最新HEADのUEビルドは未実施。
+
 ### 次の実装・検証順序
 
 1. PrintStringのネスト式（Concat／Conv_IntToString／整数演算）で、ローカルIndexとBlueprint／ネイティブメンバーの参照元・型を共通ルールで検証する。
