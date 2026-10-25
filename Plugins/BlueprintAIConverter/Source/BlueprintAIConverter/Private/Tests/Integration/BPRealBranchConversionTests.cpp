@@ -231,7 +231,15 @@ bool FBPRealBranchConversionTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("枝欠落の診断を保持"), RejectedSemanticIR.HasErrors());
 
     FBPGraphIR ExtraDataIR = GraphIR;
-    ExtraDataIR.Graphs[EventGraphIndex].DataEdges.Add(FBPIRLink());
+    FBPIRLink ReachableDataEdge;
+    ReachableDataEdge.SourceNode = FGuid::NewGuid();
+    ReachableDataEdge.SourcePin = FGuid::NewGuid();
+    ReachableDataEdge.TargetNode =
+        ExtraDataIR.Graphs[EventGraphIndex].Nodes[BranchNodeIndex].Id;
+    ReachableDataEdge.TargetPin =
+        ExtraDataIR.Graphs[EventGraphIndex].Nodes[BranchNodeIndex]
+            .Pins[ConditionPinIndex].Id;
+    ExtraDataIR.Graphs[EventGraphIndex].DataEdges.Add(ReachableDataEdge);
     RejectedSemanticIR = FBPSemanticIR();
     TestFalse(TEXT("余分なData接続をLoweringで拒否"),
         FBPSemanticLowering::Lower(Blueprint, ExtraDataIR, RejectedSemanticIR));
@@ -396,6 +404,39 @@ bool FBPRealFunctionBranchConversionTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+    FBPIRGraph* FunctionGraphIR = GraphIR.Graphs.FindByPredicate(
+        [FunctionName](const FBPIRGraph& Graph)
+        {
+            return Graph.Kind == TEXT("function") &&
+                Graph.Name == FunctionName.ToString();
+        });
+    if (TestNotNull(TEXT("到達可能性検証用の関数Graph"), FunctionGraphIR) == false)
+    {
+        return false;
+    }
+    FBPIRNode DisconnectedBranch;
+    DisconnectedBranch.Id = FGuid::NewGuid();
+    DisconnectedBranch.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
+    FunctionGraphIR->Nodes.Add(DisconnectedBranch);
+    FBPIRNode DisconnectedLoop;
+    DisconnectedLoop.Id = FGuid::NewGuid();
+    DisconnectedLoop.MacroGraphName = TEXT("ForLoop");
+    FunctionGraphIR->Nodes.Add(DisconnectedLoop);
+    FBPIRNode DisconnectedDataSource;
+    DisconnectedDataSource.Id = FGuid::NewGuid();
+    DisconnectedDataSource.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_VariableGet");
+    FunctionGraphIR->Nodes.Add(DisconnectedDataSource);
+    FBPIRNode DisconnectedDataTarget;
+    DisconnectedDataTarget.Id = FGuid::NewGuid();
+    DisconnectedDataTarget.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    FunctionGraphIR->Nodes.Add(DisconnectedDataTarget);
+    FBPIRLink DisconnectedDataEdge;
+    DisconnectedDataEdge.SourceNode = DisconnectedDataSource.Id;
+    DisconnectedDataEdge.SourcePin = FGuid::NewGuid();
+    DisconnectedDataEdge.TargetNode = DisconnectedDataTarget.Id;
+    DisconnectedDataEdge.TargetPin = FGuid::NewGuid();
+    FunctionGraphIR->DataEdges.Add(DisconnectedDataEdge);
+
     FBPSemanticIR SemanticIR;
     if (TestTrue(TEXT("関数単位でBranchをLowering"),
         FBPSemanticLowering::Lower(Blueprint, GraphIR, SemanticIR)) == false)

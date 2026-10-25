@@ -126,6 +126,16 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 1. 結果をPRへ記録し、P0完了を確定する。
 2. P1のノード有無によるパターン振り分けを、関数グラフ単位Statement Loweringへ移行する。
 
+### P1追加実装（2026-10-26、検証済み）
+
+- `Lower` のパターン分類対象をBlueprint全体から、共通Entry監査で確定した唯一の実行グラフへ限定。未接続の標準Event、Construction Script、補助グラフに存在するBranch／Sequence／ForLoop／ForEachLoopが、実際の関数のStatement Lowering選択へ干渉しないようにした。
+- EntryからExec edgeを前向きに、各StatementへのData edgeを上流へ再帰走査し、到達可能なStatementと純粋式だけを分類対象にした。同じ関数グラフ内に残った未接続ノードもパターン選択へ干渉しない。
+- 単一PrintStringの関数／Custom Event Lowererを到達可能ノード集合へ移行し、同じグラフ内と別の未接続グラフ内のBranch／Sequence／ForLoop／ForEachLoopを無視する回帰テストを追加。
+- Sequence Lowererの対象グラフ選択、ノード検証、Data／Exec edge数検証を到達可能領域へ移行。同じグラフ内の孤立Branch／ForLoopと孤立Data islandを無視する一方、到達可能なPrintString入力への不正Data接続は引き続き拒否する統合テストを追加。
+- Branch Lowererの対象グラフ選択、単一／ネストBranchのノード・Exec edge・Data edge・訪問数検証を到達可能領域へ移行。同じグラフ内の孤立Branch／ForLoopと孤立Data islandを無視し、到達可能なConditionへの不正Data接続は引き続き拒否する統合テストを追加。Loop系Lowererの統合は未完了のため、P1チェック項目は継続扱いとする。
+- EntryなしForEachの既存診断fixtureは、active graphが存在しない場合に限り元ノードGUIDとMacro名を保持する互換診断を維持。active graphがある場合は未接続グラフを分類対象にしない。
+- UE 5.7 UHT／UBTビルド成功。該当ForEach診断テストおよび`BlueprintAIConverter`全142件のAutomation Test成功（Exit Code 0）。
+
 ## P0作業記録（2026-10-22〜2026-10-23）
 
 - 共通CallのReflection解決失敗時に、Resolverが返した具体的な診断を呼び出し元へ伝播する変更を追加。従来の一般的な未対応診断も維持する。
@@ -170,6 +180,7 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 ## 最新の検証結果
 
+- 2026-10-26: `Lower` のパターン分類を共通Entry監査で確定した実行グラフの到達可能Statement領域へ限定し、同一／別グラフ内の未接続制御ノードによる誤振り分けを防止。単一PrintString、Sequence、Branch Lowererを同じ到達可能ノード集合へ移行。UE 5.7 UHT／UBT成功、`BlueprintAIConverter` 全142件のAutomation Test成功（Exit Code 0）。
 - 2026-10-24: PrintStringをReflection共通Callへ移行し、専用Emitter・式文分岐・ForEach専用判定を削除。KeyをFName型としてSemantic IR／JSONへ保持しつつ既存C++出力Parityを維持。UE 5.7 UHT／UBT成功、全139 Automation Test成功（Exit Code 0）、PythonのSemantic JSON／roundtrip／signature audit 39件成功。
 - 2026-10-24: `Lower`入口へ実行Entry監査を追加し、Entry欠落・同一グラフ複数Entry・Graph Kind不一致・複数実行グラフをパターン選択前に診断付きで拒否。UE 5.7ビルドと全141 Automation Test成功（Exit Code 0）。
 - 2026-10-24: PrintStringのネスト整数式について、Blueprint／ネイティブint32メンバーとForLoop／ForEachローカルの参照元・型・スコープ検証を追加。UE 5.7 UHT／UBTビルド成功、`BlueprintAIConverter` 全139件のAutomation Test成功（Exit Code 0）。WorldContext署名テストを現在の明示的受理Policyへ同期し、公開ネイティブboolの共通Call回帰を専用テストActorで安定化。

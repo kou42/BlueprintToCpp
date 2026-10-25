@@ -206,7 +206,29 @@ bool FBPRealSequenceConversionTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("未接続出力の診断を保持"), RejectedSemantic.HasErrors());
 
     FBPGraphIR ExtraDataIR = GraphIR;
-    ExtraDataIR.Graphs[EventGraphIndex].DataEdges.Add(FBPIRLink());
+    FBPIRNode* ReachablePrint = ExtraDataIR.Graphs[EventGraphIndex].Nodes.FindByPredicate(
+        [](const FBPIRNode& Node)
+        {
+            return Node.FunctionName == TEXT("PrintString");
+        });
+    const FBPIRPin* ReachableTextPin = ReachablePrint != nullptr
+        ? ReachablePrint->Pins.FindByPredicate(
+            [](const FBPIRPin& Pin)
+            {
+                return Pin.Name == TEXT("InString") && Pin.Direction == EGPD_Input;
+            })
+        : nullptr;
+    if (TestNotNull(TEXT("Data接続拒否用PrintString"), ReachablePrint) == false ||
+        TestNotNull(TEXT("Data接続拒否用InString"), ReachableTextPin) == false)
+    {
+        return false;
+    }
+    FBPIRLink ReachableDataEdge;
+    ReachableDataEdge.SourceNode = FGuid::NewGuid();
+    ReachableDataEdge.SourcePin = FGuid::NewGuid();
+    ReachableDataEdge.TargetNode = ReachablePrint->Id;
+    ReachableDataEdge.TargetPin = ReachableTextPin->Id;
+    ExtraDataIR.Graphs[EventGraphIndex].DataEdges.Add(ReachableDataEdge);
     RejectedSemantic = FBPSemanticIR();
     TestFalse(TEXT("余分なData接続を拒否"),
         FBPSemanticLowering::Lower(Blueprint, ExtraDataIR, RejectedSemantic));
@@ -318,6 +340,39 @@ bool FBPRealFunctionSequenceConversionTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+    FBPIRGraph* FunctionGraphIR = GraphIR.Graphs.FindByPredicate(
+        [FunctionName](const FBPIRGraph& Graph)
+        {
+            return Graph.Kind == TEXT("function") &&
+                Graph.Name == FunctionName.ToString();
+        });
+    if (TestNotNull(TEXT("到達可能性検証用の関数Graph"), FunctionGraphIR) == false)
+    {
+        return false;
+    }
+    FBPIRNode DisconnectedBranch;
+    DisconnectedBranch.Id = FGuid::NewGuid();
+    DisconnectedBranch.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
+    FunctionGraphIR->Nodes.Add(DisconnectedBranch);
+    FBPIRNode DisconnectedLoop;
+    DisconnectedLoop.Id = FGuid::NewGuid();
+    DisconnectedLoop.MacroGraphName = TEXT("ForLoop");
+    FunctionGraphIR->Nodes.Add(DisconnectedLoop);
+    FBPIRNode DisconnectedDataSource;
+    DisconnectedDataSource.Id = FGuid::NewGuid();
+    DisconnectedDataSource.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_VariableGet");
+    FunctionGraphIR->Nodes.Add(DisconnectedDataSource);
+    FBPIRNode DisconnectedDataTarget;
+    DisconnectedDataTarget.Id = FGuid::NewGuid();
+    DisconnectedDataTarget.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    FunctionGraphIR->Nodes.Add(DisconnectedDataTarget);
+    FBPIRLink DisconnectedDataEdge;
+    DisconnectedDataEdge.SourceNode = DisconnectedDataSource.Id;
+    DisconnectedDataEdge.SourcePin = FGuid::NewGuid();
+    DisconnectedDataEdge.TargetNode = DisconnectedDataTarget.Id;
+    DisconnectedDataEdge.TargetPin = FGuid::NewGuid();
+    FunctionGraphIR->DataEdges.Add(DisconnectedDataEdge);
+
     FBPSemanticIR SemanticIR;
     if (TestTrue(TEXT("関数単位でSequenceをLowering"),
         FBPSemanticLowering::Lower(Blueprint, GraphIR, SemanticIR)) == false)

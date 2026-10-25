@@ -299,9 +299,11 @@ bool IsExecutionEntryNode(const FBPIRNode& Node)
 // パターン振り分けより前に、変換対象となる実行グラフの入口を一意にする。
 // 未接続の標準Eventや空Construction Scriptは許容するが、実行／データ接続を
 // 持つグラフをEntryなしで推測したり、複数のEntry／グラフから一つだけを選ばない。
-bool ValidateExecutableGraphEntries(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+bool ValidateExecutableGraphEntries(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR,
+    const FBPIRGraph*& OutActiveGraph, const FBPIRNode*& OutActiveEntry)
 {
-    const FBPIRGraph* ActiveGraph = nullptr;
+    OutActiveGraph = nullptr;
+    OutActiveEntry = nullptr;
     for (const FBPIRGraph& Graph : GraphIR.Graphs)
     {
         if (Graph.ExecEdges.IsEmpty() && Graph.DataEdges.IsEmpty())
@@ -352,16 +354,49 @@ bool ValidateExecutableGraphEntries(const FBPGraphIR& GraphIR, FBPSemanticIR& Ou
                 TEXT("Active execution entry kind does not match its graph kind"));
             return false;
         }
-        if (ActiveGraph != nullptr)
+        if (OutActiveGraph != nullptr)
         {
             AddDiagnostic(OutIR, Graph.Name, Entry.Id, FString::Printf(
                 TEXT("Multiple executable entry graphs cannot be lowered together: %s and %s"),
-                *ActiveGraph->Name, *Graph.Name));
+                *OutActiveGraph->Name, *Graph.Name));
             return false;
         }
-        ActiveGraph = &Graph;
+        OutActiveGraph = &Graph;
+        OutActiveEntry = &Entry;
     }
     return true;
+}
+
+// 実行EntryからExecを前向きにたどり、そのStatementへ流れ込む純粋式を
+// Data edgeで遡る。グラフ内に残った未接続ノードはLowering選択に含めない。
+void CollectReachableStatementNodeIds(const FBPIRGraph& Graph,
+    const FBPIRNode& Entry, TSet<FGuid>& OutNodeIds)
+{
+    TArray<FGuid> Pending;
+    Pending.Add(Entry.Id);
+    while (Pending.IsEmpty() == false)
+    {
+        const FGuid Current = Pending.Pop(EAllowShrinking::No);
+        if (OutNodeIds.Contains(Current))
+        {
+            continue;
+        }
+        OutNodeIds.Add(Current);
+        for (const FBPIRLink& Edge : Graph.ExecEdges)
+        {
+            if (Edge.SourceNode == Current)
+            {
+                Pending.Add(Edge.TargetNode);
+            }
+        }
+        for (const FBPIRLink& Edge : Graph.DataEdges)
+        {
+            if (Edge.TargetNode == Current)
+            {
+                Pending.Add(Edge.SourceNode);
+            }
+        }
+    }
 }
 
 bool ResolveEntryFunction(const UBlueprint* Blueprint, const FBPIRGraph& Graph,
@@ -474,12 +509,31 @@ bool LowerSingleEntryPrintStringImpl(const UBlueprint* Blueprint,
     const FBPIRNode* Result = nullptr;
     for (const FBPIRGraph& Graph : GraphIR.Graphs)
     {
+        const FBPIRNode* GraphEntry = Graph.Nodes.FindByPredicate(
+            [&Graph](const FBPIRNode& Node)
+            {
+                return IsExecutionEntryNode(Node) &&
+                    Graph.ExecEdges.ContainsByPredicate(
+                        [&Node](const FBPIRLink& Edge)
+                        {
+                            return Edge.SourceNode == Node.Id;
+                        });
+            });
+        TSet<FGuid> ReachableNodeIds;
+        if (GraphEntry != nullptr)
+        {
+            CollectReachableStatementNodeIds(Graph, *GraphEntry, ReachableNodeIds);
+        }
         const FBPIRNode* CandidateEntry = nullptr;
         const FBPIRNode* CandidatePrint = nullptr;
         const FBPIRNode* CandidateResult = nullptr;
         bool bUnsupportedNode = false;
         for (const FBPIRNode& Node : Graph.Nodes)
         {
+            if (ReachableNodeIds.Contains(Node.Id) == false)
+            {
+                continue;
+            }
             if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") ||
                 Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent") ||
                 Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry"))
@@ -1067,10 +1121,26 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     const FBPIRGraph* TargetGraph = nullptr;
     for (const FBPIRGraph& Graph : GraphIR.Graphs)
     {
-        const bool bContainsBranch = Graph.Nodes.ContainsByPredicate(
-            [](const FBPIRNode& Node)
+        const FBPIRNode* GraphEntry = Graph.Nodes.FindByPredicate(
+            [&Graph](const FBPIRNode& Node)
             {
-                return Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
+                return IsExecutionEntryNode(Node) &&
+                    Graph.ExecEdges.ContainsByPredicate(
+                        [&Node](const FBPIRLink& Edge)
+                        {
+                            return Edge.SourceNode == Node.Id;
+                        });
+            });
+        TSet<FGuid> ReachableNodeIds;
+        if (GraphEntry != nullptr)
+        {
+            CollectReachableStatementNodeIds(Graph, *GraphEntry, ReachableNodeIds);
+        }
+        const bool bContainsBranch = Graph.Nodes.ContainsByPredicate(
+            [&ReachableNodeIds](const FBPIRNode& Node)
+            {
+                return ReachableNodeIds.Contains(Node.Id) &&
+                    Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
             });
         if (bContainsBranch)
         {
@@ -1103,8 +1173,39 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     TArray<const FBPIRNode*> Prints;
     TArray<const FBPIRNode*> VariableGets;
     TArray<const FBPIRNode*> ArithmeticNodes;
+    const FBPIRNode* ReachabilityEntry = Graph.Nodes.FindByPredicate(
+        [&Graph](const FBPIRNode& Node)
+        {
+            return IsExecutionEntryNode(Node) &&
+                Graph.ExecEdges.ContainsByPredicate(
+                    [&Node](const FBPIRLink& Edge)
+                    {
+                        return Edge.SourceNode == Node.Id;
+                    });
+        });
+    TSet<FGuid> ReachableNodeIds;
+    if (ReachabilityEntry != nullptr)
+    {
+        CollectReachableStatementNodeIds(
+            Graph, *ReachabilityEntry, ReachableNodeIds);
+    }
+    const int32 ReachableExecEdgeCount = Graph.ExecEdges.FilterByPredicate(
+        [&ReachableNodeIds](const FBPIRLink& Edge)
+        {
+            return ReachableNodeIds.Contains(Edge.SourceNode) &&
+                ReachableNodeIds.Contains(Edge.TargetNode);
+        }).Num();
+    const bool bHasReachableDataEdges = Graph.DataEdges.ContainsByPredicate(
+        [&ReachableNodeIds](const FBPIRLink& Edge)
+        {
+            return ReachableNodeIds.Contains(Edge.TargetNode);
+        });
     for (const FBPIRNode& Node : Graph.Nodes)
     {
+        if (ReachableNodeIds.Contains(Node.Id) == false)
+        {
+            continue;
+        }
         if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") ||
             Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent") ||
             Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry"))
@@ -1280,7 +1381,8 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     int32 BranchCount = 0;
     for (const FBPIRNode& Node : Graph.Nodes)
     {
-        if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse"))
+        if (ReachableNodeIds.Contains(Node.Id) &&
+            Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_IfThenElse"))
         {
             ++BranchCount;
         }
@@ -1300,7 +1402,7 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
             return false;
         }
         const FBPIRPin* EntryThen = FindPin(*Entry, UEdGraphSchema_K2::PN_Then, EGPD_Output);
-        if (EntryThen == nullptr || Graph.DataEdges.IsEmpty() == false)
+        if (EntryThen == nullptr || bHasReachableDataEdges)
         {
             AddDiagnostic(OutIR, Graph.Name, Entry->Id,
                 TEXT("Nested Branch does not support linked data inputs"));
@@ -1701,8 +1803,8 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         Block.SourceEntryNodeId = Entry->Id;
         ++ConsumedEdges;
         if (Walk(*Root, FGuid(), 0, Block.Statements) == false ||
-            ConsumedEdges != Graph.ExecEdges.Num() ||
-            Visited.Num() != Graph.Nodes.Num() - 1)
+            ConsumedEdges != ReachableExecEdgeCount ||
+            Visited.Num() != ReachableNodeIds.Num() - 1)
         {
             AddDiagnostic(OutIR, Graph.Name, FGuid(),
                 TEXT("Nested Branch contains a shared, cyclic, disconnected or unsupported Exec path"));
@@ -1716,9 +1818,9 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     const int32 ExpectedExecEdges = bFunctionGraph ? 5 : 3;
     if (Entry == nullptr || Branch == nullptr || Prints.Num() != 2 ||
         Results.Num() != ExpectedResultCount ||
-        Graph.ExecEdges.Num() != ExpectedExecEdges ||
+        ReachableExecEdgeCount != ExpectedExecEdges ||
         (Comparison == nullptr &&
-            (Graph.DataEdges.IsEmpty() == false || VariableGets.IsEmpty() == false)))
+            (bHasReachableDataEdges || VariableGets.IsEmpty() == false)))
     {
         AddDiagnostic(OutIR, Graph.Name, FGuid(),
             TEXT("Branch conversion requires one supported condition, two PrintString calls, and complete return paths"));
@@ -5135,10 +5237,25 @@ bool LowerSequenceImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     const FBPIRGraph* TargetGraph = nullptr;
     for (const FBPIRGraph& Graph : GraphIR.Graphs)
     {
-        const bool bContainsSequence = Graph.Nodes.ContainsByPredicate(
-            [](const FBPIRNode& Node)
+        const FBPIRNode* GraphEntry = Graph.Nodes.FindByPredicate(
+            [&Graph](const FBPIRNode& Node)
             {
-                return Node.ClassPath ==
+                return IsExecutionEntryNode(Node) &&
+                    Graph.ExecEdges.ContainsByPredicate(
+                        [&Node](const FBPIRLink& Edge)
+                        {
+                            return Edge.SourceNode == Node.Id;
+                        });
+            });
+        TSet<FGuid> ReachableNodeIds;
+        if (GraphEntry != nullptr)
+        {
+            CollectReachableStatementNodeIds(Graph, *GraphEntry, ReachableNodeIds);
+        }
+        const bool bContainsSequence = Graph.Nodes.ContainsByPredicate(
+            [&ReachableNodeIds](const FBPIRNode& Node)
+            {
+                return ReachableNodeIds.Contains(Node.Id) && Node.ClassPath ==
                     TEXT("/Script/BlueprintGraph.K2Node_ExecutionSequence");
             });
         if (bContainsSequence)
@@ -5173,8 +5290,28 @@ bool LowerSequenceImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     const FBPIRNode* Sequence = nullptr;
     const FBPIRNode* Result = nullptr;
     TArray<const FBPIRNode*> Prints;
+    const FBPIRNode* ReachabilityEntry = Graph.Nodes.FindByPredicate(
+        [&Graph](const FBPIRNode& Node)
+        {
+            return IsExecutionEntryNode(Node) &&
+                Graph.ExecEdges.ContainsByPredicate(
+                    [&Node](const FBPIRLink& Edge)
+                    {
+                        return Edge.SourceNode == Node.Id;
+                    });
+        });
+    TSet<FGuid> ReachableNodeIds;
+    if (ReachabilityEntry != nullptr)
+    {
+        CollectReachableStatementNodeIds(
+            Graph, *ReachabilityEntry, ReachableNodeIds);
+    }
     for (const FBPIRNode& Node : Graph.Nodes)
     {
+        if (ReachableNodeIds.Contains(Node.Id) == false)
+        {
+            continue;
+        }
         if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") ||
             Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent") ||
             Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry"))
@@ -5224,8 +5361,13 @@ bool LowerSequenceImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     const bool bEventGraph = Graph.Kind == TEXT("event") && Entry != nullptr &&
         (Entry->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") ||
             Entry->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent"));
+    const bool bHasReachableDataEdges = Graph.DataEdges.ContainsByPredicate(
+        [&ReachableNodeIds](const FBPIRLink& Edge)
+        {
+            return ReachableNodeIds.Contains(Edge.TargetNode);
+        });
     if (Entry == nullptr || Sequence == nullptr || Prints.Num() < 2 ||
-        Prints.Num() > 16 || Graph.DataEdges.IsEmpty() == false)
+        Prints.Num() > 16 || bHasReachableDataEdges)
     {
         AddDiagnostic(OutIR, Graph.Name, FGuid(),
             TEXT("Sequence conversion requires one entry, one Sequence, two to sixteen PrintString calls, and no data links"));
@@ -5308,7 +5450,13 @@ bool LowerSequenceImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         }
     }
     const int32 ExpectedExecEdges = Outputs.Num() + 1 + (Result != nullptr ? 1 : 0);
-    if (EntryEdgeCount != 1 || Graph.ExecEdges.Num() != ExpectedExecEdges)
+    const int32 ReachableExecEdgeCount = Graph.ExecEdges.FilterByPredicate(
+        [&ReachableNodeIds](const FBPIRLink& Edge)
+        {
+            return ReachableNodeIds.Contains(Edge.SourceNode) &&
+                ReachableNodeIds.Contains(Edge.TargetNode);
+        }).Num();
+    if (EntryEdgeCount != 1 || ReachableExecEdgeCount != ExpectedExecEdges)
     {
         AddDiagnostic(OutIR, Graph.Name, Sequence->Id,
             TEXT("Sequence Exec topology contains a missing or extra connection"));
@@ -5436,7 +5584,10 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
         }
         return false;
     }
-    if (ValidateExecutableGraphEntries(GraphIR, OutIR) == false)
+    const FBPIRGraph* ActiveGraph = nullptr;
+    const FBPIRNode* ActiveEntry = nullptr;
+    if (ValidateExecutableGraphEntries(
+        GraphIR, OutIR, ActiveGraph, ActiveEntry) == false)
     {
         return false;
     }
@@ -5446,10 +5597,22 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
     bool bHasBranch = false;
     bool bHasForLoop = false;
     bool bHasSequence = false;
-    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    // Entry監査で確定した関数グラフだけを分類する。未接続の標準Event、
+    // Construction Script、補助グラフに存在するノードは振り分けへ影響させない。
+    TSet<FGuid> ReachableNodeIds;
+    if (ActiveGraph != nullptr && ActiveEntry != nullptr)
     {
-        for (const FBPIRNode& Node : Graph.Nodes)
+        CollectReachableStatementNodeIds(
+            *ActiveGraph, *ActiveEntry, ReachableNodeIds);
+    }
+    if (ActiveGraph != nullptr)
+    {
+        for (const FBPIRNode& Node : ActiveGraph->Nodes)
         {
+            if (ReachableNodeIds.Contains(Node.Id) == false)
+            {
+                continue;
+            }
             bHasPrintString |= Node.FunctionName == TEXT("PrintString");
             bHasGetActorLocation |= Node.FunctionName == TEXT("K2_GetActorLocation");
             bHasSetActorLocation |= Node.FunctionName == TEXT("K2_SetActorLocation");
@@ -5460,10 +5623,33 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
     }
     // ForEachLoopは配列要素型・配列の供給元・Exec経路の検証が必要。
     // 未対応の段階で通常のPrintString経路へ誤振り分けしない。
-    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    // 実行Entryのない単独ForEach fixtureにも、従来どおり元ノード付きの
+    // 未解決診断を返す。ただしactive graphがある場合はその外側を見ない。
+    if (ActiveGraph == nullptr)
     {
-        for (const FBPIRNode& Node : Graph.Nodes)
+        for (const FBPIRGraph& Graph : GraphIR.Graphs)
         {
+            for (const FBPIRNode& Node : Graph.Nodes)
+            {
+                if (Node.MacroGraphName == TEXT("ForEachLoop") ||
+                    Node.MacroGraphName == TEXT("ForEachLoopWithBreak"))
+                {
+                    AddDiagnostic(OutIR, Graph.Name, Node.Id, FString::Printf(
+                        TEXT("%s requires a compiled Blueprint for array type resolution"),
+                        *Node.MacroGraphName));
+                    return false;
+                }
+            }
+        }
+    }
+    if (ActiveGraph != nullptr)
+    {
+        for (const FBPIRNode& Node : ActiveGraph->Nodes)
+        {
+            if (ReachableNodeIds.Contains(Node.Id) == false)
+            {
+                continue;
+            }
             if (Node.MacroGraphName == TEXT("ForEachLoop") ||
                 Node.MacroGraphName == TEXT("ForEachLoopWithBreak"))
             {
@@ -5474,7 +5660,7 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
                 {
                     if (Blueprint == nullptr)
                     {
-                        AddDiagnostic(OutIR, Graph.Name, Node.Id,
+                        AddDiagnostic(OutIR, ActiveGraph->Name, Node.Id,
                             TEXT("ForEachLoop requires a compiled Blueprint for array type resolution"));
                         return false;
                     }
@@ -5482,7 +5668,7 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
                 }
                 if (Blueprint == nullptr)
                 {
-                    AddDiagnostic(OutIR, Graph.Name, Node.Id,
+                    AddDiagnostic(OutIR, ActiveGraph->Name, Node.Id,
                         TEXT("ForEachLoopWithBreak requires a compiled Blueprint for array type resolution"));
                     return false;
                 }
@@ -5511,30 +5697,11 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
         // Function Entry / Custom EventはBeginPlay専用経路より先に判定する。
         // UObjectなどBeginPlayを持たないクラスの通常関数を、Actorの
         // ライフサイクル前提で誤って検証しないための振り分けである。
-        bool bHasNonBeginPlayEntry = false;
-        for (const FBPIRGraph& Graph : GraphIR.Graphs)
-        {
-            // 空のConstruction Script等のEntryだけでは通常関数扱いしない。
-            if (Graph.ExecEdges.IsEmpty() && Graph.DataEdges.IsEmpty())
-            {
-                continue;
-            }
-            for (const FBPIRNode& Node : Graph.Nodes)
-            {
-                if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry") ||
-                    Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent") ||
-                    (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
-                        Node.FunctionName != TEXT("ReceiveBeginPlay")))
-                {
-                    bHasNonBeginPlayEntry = true;
-                    break;
-                }
-            }
-            if (bHasNonBeginPlayEntry)
-            {
-                break;
-            }
-        }
+        const bool bHasNonBeginPlayEntry = ActiveEntry != nullptr &&
+            (ActiveEntry->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry") ||
+                ActiveEntry->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_CustomEvent") ||
+                (ActiveEntry->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
+                    ActiveEntry->FunctionName != TEXT("ReceiveBeginPlay")));
         if (bHasNonBeginPlayEntry)
         {
             // 対象外の実行グラフがあれば既存Loweringが診断付きで拒否する。

@@ -345,6 +345,45 @@ bool FBPSemanticFunctionGraphRoundtripTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+
+    // 同じグラフ内または別の未接続グラフに残った制御ノードは、実行Entryを持つ
+    // RunConversionのStatement Lowering選択へ影響してはならない。
+    const auto AddDisconnectedPatterns = [](FBPIRGraph& Target)
+    {
+        FBPIRNode InactiveBranch;
+        InactiveBranch.Id = FGuid::NewGuid();
+        InactiveBranch.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
+        Target.Nodes.Add(MoveTemp(InactiveBranch));
+        FBPIRNode InactiveSequence;
+        InactiveSequence.Id = FGuid::NewGuid();
+        InactiveSequence.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_ExecutionSequence");
+        Target.Nodes.Add(MoveTemp(InactiveSequence));
+        FBPIRNode InactiveForLoop;
+        InactiveForLoop.Id = FGuid::NewGuid();
+        InactiveForLoop.MacroGraphName = TEXT("ForLoop");
+        Target.Nodes.Add(MoveTemp(InactiveForLoop));
+        FBPIRNode InactiveForEach;
+        InactiveForEach.Id = FGuid::NewGuid();
+        InactiveForEach.MacroGraphName = TEXT("ForEachLoop");
+        Target.Nodes.Add(MoveTemp(InactiveForEach));
+    };
+    FBPIRGraph* ActiveFunctionGraph = GraphIR.Graphs.FindByPredicate(
+        [](const FBPIRGraph& Graph)
+        {
+            return Graph.Name == TEXT("RunConversion");
+        });
+    if (TestNotNull(TEXT("到達可能性テストのFunction Graph"), ActiveFunctionGraph) == false)
+    {
+        return false;
+    }
+    AddDisconnectedPatterns(*ActiveFunctionGraph);
+
+    FBPIRGraph InactiveGraph;
+    InactiveGraph.Name = TEXT("InactivePatterns");
+    InactiveGraph.Kind = TEXT("function");
+    AddDisconnectedPatterns(InactiveGraph);
+    GraphIR.Graphs.Add(MoveTemp(InactiveGraph));
+
     FBPSemanticIR Semantic;
     if (TestTrue(TEXT("Function GraphをSemantic Lowering"),
         FBPSemanticLowering::Lower(Blueprint, GraphIR, Semantic)) == false)
