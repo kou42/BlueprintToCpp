@@ -98,9 +98,26 @@ struct FBPSemanticStatement
     FBPSemanticType LoopElementType;
 };
 
+// BasicBlockの末尾から次に進む制御フローを明示する。
+// Unspecifiedは既存の単一Block IRとの互換用で、複数Blockでは受理しない。
+enum class EBPSemanticBlockTerminatorKind : uint8
+{
+    Unspecified,
+    End,
+    Fallthrough,
+    Return,
+    Branch,
+    Loop
+};
+
 struct FBPSemanticBasicBlock
 {
+    // SourceEntryNodeIdは由来追跡、BlockIdはSemantic CFG内の参照先として使う。
+    FGuid BlockId;
     FGuid SourceEntryNodeId;
+    EBPSemanticBlockTerminatorKind Terminator =
+        EBPSemanticBlockTerminatorKind::Unspecified;
+    TArray<FGuid> SuccessorBlockIds;
     TArray<FBPSemanticStatement> Statements;
 };
 

@@ -252,6 +252,54 @@ bool FBPForLoopConversionTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Completedをfor文後へ生成"), Files.SourceContent.Contains(TEXT("Loop completed")));
     TestTrue(TEXT("Completedの生成順"),
         Files.SourceContent.Find(TEXT("Loop completed")) > Files.SourceContent.Find(TEXT("Conv_IntToString")));
+
+    FBPGraphIR IsolatedNodesGraph = GraphIR;
+    FBPIRGraph& IsolatedEvent = IsolatedNodesGraph.Graphs[0];
+    FBPIRNode IsolatedBranch;
+    IsolatedBranch.Id = FGuid::NewGuid();
+    IsolatedBranch.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
+    IsolatedEvent.Nodes.Add(MoveTemp(IsolatedBranch));
+    FBPIRNode IsolatedDataSource;
+    IsolatedDataSource.Id = FGuid::NewGuid();
+    IsolatedDataSource.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_VariableGet");
+    FBPIRNode IsolatedDataTarget;
+    IsolatedDataTarget.Id = FGuid::NewGuid();
+    IsolatedDataTarget.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    FBPIRLink IsolatedDataEdge;
+    IsolatedDataEdge.SourceNode = IsolatedDataSource.Id;
+    IsolatedDataEdge.SourcePin = FGuid::NewGuid();
+    IsolatedDataEdge.TargetNode = IsolatedDataTarget.Id;
+    IsolatedDataEdge.TargetPin = FGuid::NewGuid();
+    IsolatedEvent.Nodes.Add(MoveTemp(IsolatedDataSource));
+    IsolatedEvent.Nodes.Add(MoveTemp(IsolatedDataTarget));
+    IsolatedEvent.DataEdges.Add(IsolatedDataEdge);
+    FBPIRGraph IsolatedHelperGraph;
+    IsolatedHelperGraph.Name = TEXT("UnusedLoopEvent");
+    IsolatedHelperGraph.Kind = TEXT("event");
+    FBPIRNode IsolatedLoop;
+    IsolatedLoop.Id = FGuid::NewGuid();
+    IsolatedLoop.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+    IsolatedLoop.MacroGraphName = TEXT("ForLoop");
+    IsolatedHelperGraph.Nodes.Add(MoveTemp(IsolatedLoop));
+    IsolatedNodesGraph.Graphs.Add(MoveTemp(IsolatedHelperGraph));
+
+    FBPSemanticIR IsolatedNodesIR;
+    if (TestTrue(TEXT("孤立Node・Data island・補助ForLoop Graphを無視"),
+        FBPSemanticLowering::LowerForLoop(
+            IsolatedNodesGraph, IsolatedNodesIR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : IsolatedNodesIR.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("孤立Nodeを除外してActor ForLoopを保持"),
+        IsolatedNodesIR.Functions.Num() == 1 &&
+        IsolatedNodesIR.Functions[0].Blocks.Num() == 1 &&
+        IsolatedNodesIR.Functions[0].Blocks[0].Statements.Num() == 1 &&
+        IsolatedNodesIR.Functions[0].Blocks[0].Statements[0].Kind ==
+            EBPSemanticStatementKind::ForLoop);
     return true;
 }
 
@@ -2193,6 +2241,54 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     {
         return false;
     }
+
+    FBPGraphIR IsolatedNodesGraph = GraphIR;
+    FBPIRGraph& IsolatedNodesEvent = IsolatedNodesGraph.Graphs[0];
+    FBPIRNode IsolatedBranch;
+    IsolatedBranch.Id = FGuid::NewGuid();
+    IsolatedBranch.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
+    IsolatedNodesEvent.Nodes.Add(MoveTemp(IsolatedBranch));
+    FBPIRNode IsolatedDataSource;
+    IsolatedDataSource.Id = FGuid::NewGuid();
+    IsolatedDataSource.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_VariableGet");
+    FBPIRNode IsolatedDataTarget;
+    IsolatedDataTarget.Id = FGuid::NewGuid();
+    IsolatedDataTarget.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_CallFunction");
+    FBPIRLink IsolatedDataEdge;
+    IsolatedDataEdge.SourceNode = IsolatedDataSource.Id;
+    IsolatedDataEdge.SourcePin = FGuid::NewGuid();
+    IsolatedDataEdge.TargetNode = IsolatedDataTarget.Id;
+    IsolatedDataEdge.TargetPin = FGuid::NewGuid();
+    IsolatedNodesEvent.Nodes.Add(MoveTemp(IsolatedDataSource));
+    IsolatedNodesEvent.Nodes.Add(MoveTemp(IsolatedDataTarget));
+    IsolatedNodesEvent.DataEdges.Add(IsolatedDataEdge);
+    FBPIRGraph IsolatedEventGraph;
+    IsolatedEventGraph.Name = TEXT("UnusedForEachEvent");
+    IsolatedEventGraph.Kind = TEXT("event");
+    FBPIRNode IsolatedForEach;
+    IsolatedForEach.Id = FGuid::NewGuid();
+    IsolatedForEach.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+    IsolatedForEach.MacroGraphName = TEXT("ForEachLoop");
+    IsolatedEventGraph.Nodes.Add(MoveTemp(IsolatedForEach));
+    IsolatedNodesGraph.Graphs.Add(MoveTemp(IsolatedEventGraph));
+
+    FBPSemanticIR IsolatedNodesIR;
+    if (TestTrue(TEXT("未接続の制御Node・Data island・補助ForEach Graphを無視"),
+        FBPSemanticLowering::Lower(
+            Blueprint, IsolatedNodesGraph, IsolatedNodesIR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : IsolatedNodesIR.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("孤立Nodeを除外してForEach文を保持"),
+        IsolatedNodesIR.Functions.Num() == 1 &&
+        IsolatedNodesIR.Functions[0].Blocks.Num() == 1 &&
+        IsolatedNodesIR.Functions[0].Blocks[0].Statements.Num() == 1 &&
+        IsolatedNodesIR.Functions[0].Blocks[0].Statements[0].Kind ==
+            EBPSemanticStatementKind::ForEachLoop);
 
     // 実Blueprintで現れる BeginPlay -> PrintString -> ForEachLoop を再現する。
     // ループ前の文を保持しつつ、続くForEachを同じBlockへLoweringできることを検証する。

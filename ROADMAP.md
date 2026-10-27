@@ -53,12 +53,21 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 ### P2: 複数関数・制御フローの生成
 
-- [ ] `Generate` から単一関数制約を除去し、関数ごとに宣言・定義・includeを組み立てる。
+- [x] `Generate` から単一関数制約を除去し、関数ごとに宣言・定義・includeを組み立てる。
 - [ ] BasicBlock間の接続、Branch合流、Loop、Returnの意味をSemantic IRで明示する。
 - [ ] 同名関数、override、引数／戻り値、可視性、重複宣言を検証する。
 - [ ] 複数関数を持つUObject Blueprintを一つのUCLASSとして生成する統合テストを追加する。
 
 **完了条件:** 複数の通常関数・イベントを一つのクラスに安全に生成できること。
+
+#### P2進捗（2026-10-28、検証済み）
+
+- 複数の通常関数／イベントをIR順に一つのUCLASSへ生成し、関数ごとの宣言・定義・依存includeを構築する。ForLoop／ForEachLoopを含む複数関数、Semantic JSONへの複数関数保持を回帰確認した。
+- Semantic関数名の重複、クラス名との衝突、BlueprintNativeEventの`_Implementation`と通常関数の生成C++名衝突を、生成物公開前に診断付きで拒否する。
+- 最終Return文を持つ非void関数を単一／複数関数経路で生成する。リテラル、関数引数参照、検証済みpure関数式を扱い、戻り値欠落、途中Return、型不一致、void関数からの値返却を拒否する。
+- `FBPSemanticBasicBlock`にBlock ID、終端種別、後続Block IDを追加した。Generatorは明示的なFallthroughで接続された直列BasicBlockを順序検証して生成し、重複ID、未知／順序不一致の後続、曖昧な終端を拒否する。Branch／LoopによるBlock間CFG生成は未対応のため、P2の制御フロー項目は継続扱いとする。
+- Semantic JSON v2へ`block_id`、`terminator`、`successor_block_ids`を追加し、旧v2入力を維持しながらPython側でGUID、重複、参照先を検証する。
+- UE 5.7 UHT／UBTビルド成功。`BlueprintAIConverter` Automation Test全144件成功（Exit Code 0）。Python Semantic JSON／roundtrip対象36件成功。Python全234件は`test_behavior_api.py`の待機が継続したため中断し、今回の対象外テストを含む全件完走は未確認。
 
 ### P2並行: Semantic JSON出力・Python連携（必須）
 

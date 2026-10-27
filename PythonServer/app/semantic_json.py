@@ -13,6 +13,8 @@ TYPE_KINDS = frozenset(("unresolved", "void", "bool", "int32", "int64",
                         "float", "double", "string", "name", "text", "object", "struct"))
 EXPRESSION_KINDS = frozenset(("literal", "variable_reference", "function_call"))
 STATEMENT_KINDS = frozenset(("expression", "assignment", "return"))
+BLOCK_TERMINATORS = frozenset(("unspecified", "end", "fallthrough",
+                               "return", "branch", "loop"))
 STATUSES = frozenset(("complete", "partial", "unsupported"))
 SEVERITIES = frozenset(("info", "warning", "error"))
 
@@ -214,11 +216,42 @@ def parse_semantic_json(raw: Any) -> dict:
             if return_count > 1:
                 raise SemanticJsonError(f"{path}: multiple return parameters")
 
-        for bi, block in enumerate(_array(f["blocks"], path + ".blocks")):
+        blocks = _array(f["blocks"], path + ".blocks")
+        control_fields = ("block_id", "terminator", "successor_block_ids")
+        uses_block_control = any(
+            any(name in _object(block, f"{path}.blocks[{bi}]")
+                for name in control_fields)
+            for bi, block in enumerate(blocks)
+        )
+        block_ids: set[str] = set()
+        successor_references: list[tuple[str, str]] = []
+        for bi, block in enumerate(blocks):
             bp = f"{path}.blocks[{bi}]"
             b = _object(block, bp)
             _required(b, ("source_entry_node_id", "statements"), bp)
             _guid(b["source_entry_node_id"], bp + ".source_entry_node_id")
+            if uses_block_control:
+                _required(b, control_fields, bp)
+                _guid(b["block_id"], bp + ".block_id")
+                if len(blocks) > 1 and b["block_id"] is None:
+                    raise SemanticJsonError(f"{bp}.block_id: required for multiple blocks")
+                if b["block_id"] is not None:
+                    block_id = b["block_id"].lower()
+                    if block_id in block_ids:
+                        raise SemanticJsonError(f"{bp}.block_id: duplicate block ID")
+                    block_ids.add(block_id)
+                terminator = _enum(
+                    b["terminator"], BLOCK_TERMINATORS, bp + ".terminator")
+                if len(blocks) > 1 and terminator == "unspecified":
+                    raise SemanticJsonError(
+                        f"{bp}.terminator: multiple blocks require an explicit terminator")
+                for si, successor in enumerate(_array(
+                        b["successor_block_ids"], bp + ".successor_block_ids")):
+                    successor_path = f"{bp}.successor_block_ids[{si}]"
+                    _guid(successor, successor_path)
+                    if successor is None:
+                        raise SemanticJsonError(f"{successor_path}: successor cannot be null")
+                    successor_references.append((successor.lower(), successor_path))
             for si, statement in enumerate(_array(b["statements"], bp + ".statements")):
                 sp = f"{bp}.statements[{si}]"
                 s = _object(statement, sp)
@@ -227,6 +260,10 @@ def parse_semantic_json(raw: Any) -> dict:
                 _guid(s["source_node_id"], sp + ".source_node_id")
                 _nullable_string(s["assignment_target"], sp + ".assignment_target")
                 _expression(s["expression"], sp + ".expression")
+        for successor, successor_path in successor_references:
+            if successor not in block_ids:
+                raise SemanticJsonError(
+                    f"{successor_path}: references an unknown block ID")
     has_error = False
     for i, diagnostic in enumerate(_array(root["diagnostics"], "diagnostics")):
         path = f"diagnostics[{i}]"

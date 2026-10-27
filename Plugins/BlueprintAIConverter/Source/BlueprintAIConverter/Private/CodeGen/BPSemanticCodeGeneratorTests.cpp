@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "BPActorCodeGenerator.h"
 #include "BPSemanticCodeGenerator.h"
+#include "BPSemanticJsonSerializer.h"
 #include "BPSemanticLowering.h"
 #include "BPReflectedCallResolver.h"
 #include "Tests/BPEmitterTestActor.h"
@@ -745,6 +746,339 @@ bool FBPSemanticGeneratorParentClassTest::RunTest(const FString& Parameters)
         TEXT("virtual void BeginDestroy() override;")));
     TestTrue(TEXT("lifecycleのSuper呼び出し"), Files.SourceContent.Contains(
         TEXT("Super::BeginDestroy();")));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorMultipleFunctionsTest,
+    "BlueprintAIConverter.SemanticIR.Generator.MultipleFunctions",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorMultipleFunctionsTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("複数関数テスト用Lowering成功"),
+        FBPSemanticLowering::LowerPrintString(
+            MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+    if (TestEqual(TEXT("元Semantic関数数"), Semantic.Functions.Num(), 1) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticFunction SecondFunction = Semantic.Functions[0];
+    SecondFunction.Name = TEXT("RunSecond");
+    SecondFunction.bIsEventGraph = false;
+    SecondFunction.bIsBlueprintEvent = false;
+    SecondFunction.bIsOverride = false;
+    SecondFunction.OverriddenFunctionPath.Reset();
+    FBPSemanticStatement LoopBody =
+        SecondFunction.Blocks[0].Statements[0];
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForLoop;
+    Loop.LoopIndexVariable = TEXT("FunctionLoopIndex");
+    Loop.LoopFirstIndex.Kind = EBPSemanticExpressionKind::Literal;
+    Loop.LoopFirstIndex.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopFirstIndex.LiteralValue = TEXT("0");
+    Loop.LoopLastIndex.Kind = EBPSemanticExpressionKind::Literal;
+    Loop.LoopLastIndex.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopLastIndex.LiteralValue = TEXT("2");
+    Loop.LoopBodyStatements.Add(MoveTemp(LoopBody));
+    SecondFunction.Blocks[0].Statements.Reset();
+    SecondFunction.Blocks[0].Statements.Add(MoveTemp(Loop));
+    Semantic.Functions.Add(MoveTemp(SecondFunction));
+
+    FBPSemanticFunction ForEachFunction = Semantic.Functions[0];
+    ForEachFunction.Name = TEXT("RunForEach");
+    ForEachFunction.bIsEventGraph = false;
+    ForEachFunction.bIsBlueprintEvent = false;
+    ForEachFunction.bIsOverride = false;
+    ForEachFunction.OverriddenFunctionPath.Reset();
+    FBPSemanticStatement ForEachBody =
+        ForEachFunction.Blocks[0].Statements[0];
+    FBPSemanticStatement ForEach;
+    ForEach.Kind = EBPSemanticStatementKind::ForEachLoop;
+    ForEach.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    ForEach.LoopArray.VariableName = TEXT("Numbers");
+    ForEach.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    ForEach.LoopArray.Type.ContainerKind = TEXT("array");
+    ForEach.LoopIndexVariable = TEXT("ForEachIndex");
+    ForEach.LoopElementVariable = TEXT("ForEachElement");
+    ForEach.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    ForEach.LoopBodyStatements.Add(MoveTemp(ForEachBody));
+    ForEachFunction.Blocks[0].Statements.Reset();
+    ForEachFunction.Blocks[0].Statements.Add(MoveTemp(ForEach));
+    Semantic.Functions.Add(MoveTemp(ForEachFunction));
+    FBPSemanticVariable Numbers;
+    Numbers.Name = TEXT("Numbers");
+    Numbers.Type.Kind = EBPSemanticTypeKind::Int32;
+    Numbers.Type.ContainerKind = TEXT("array");
+    Numbers.ReflectedCppType = TEXT("TArray<int32>");
+    Semantic.Variables.Add(MoveTemp(Numbers));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("複数関数を一つのUCLASSとして生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AMultipleFunctionActor"), TEXT("TEST_API"),
+            Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("BeginPlay宣言を生成"), Files.HeaderContent.Contains(
+        TEXT("virtual void BeginPlay() override;")));
+    TestTrue(TEXT("通常関数宣言を生成"), Files.HeaderContent.Contains(
+        TEXT("UFUNCTION(BlueprintCallable)\n    void RunSecond();")));
+    TestTrue(TEXT("BeginPlay定義を生成"), Files.SourceContent.Contains(
+        TEXT("void AMultipleFunctionActor::BeginPlay()")));
+    TestTrue(TEXT("通常関数定義を生成"), Files.SourceContent.Contains(
+        TEXT("void AMultipleFunctionActor::RunSecond()")));
+    TestTrue(TEXT("通常関数内のForLoopを生成"), Files.SourceContent.Contains(
+        TEXT("for (int32 FunctionLoopIndex = 0; FunctionLoopIndex <= 2; ++FunctionLoopIndex)")));
+    TestTrue(TEXT("ForEach関数宣言を生成"), Files.HeaderContent.Contains(
+        TEXT("void RunForEach();")));
+    TestTrue(TEXT("通常関数内のForEachLoopを生成"), Files.SourceContent.Contains(
+        TEXT("for (int32 ForEachIndex = 0; ForEachIndex < Numbers.Num(); ++ForEachIndex)")));
+    TestTrue(TEXT("ForEach関数定義を生成"), Files.SourceContent.Contains(
+        TEXT("void AMultipleFunctionActor::RunForEach()")));
+    const FString PrintCall(TEXT("UKismetSystemLibrary::PrintString"));
+    TestTrue(TEXT("両関数のPrintStringを生成"),
+        Files.SourceContent.Find(PrintCall) !=
+            Files.SourceContent.Find(PrintCall, ESearchCase::CaseSensitive,
+                ESearchDir::FromEnd));
+    const FString SystemInclude(
+        TEXT("#include \"Kismet/KismetSystemLibrary.h\""));
+    TestTrue(TEXT("依存includeを重複生成しない"),
+        Files.SourceContent.Find(SystemInclude) != INDEX_NONE &&
+        Files.SourceContent.Find(SystemInclude) ==
+            Files.SourceContent.Find(SystemInclude, ESearchCase::CaseSensitive,
+                ESearchDir::FromEnd));
+
+    FString SemanticJson;
+    TestTrue(TEXT("複数関数Semantic JSONを生成"),
+        FBPSemanticJsonSerializer::Serialize(
+            Semantic, TEXT("5.7"), SemanticJson));
+    TestTrue(TEXT("JSONにBeginPlayを保持"),
+        SemanticJson.Contains(TEXT("\"name\": \"BeginPlay\"")));
+    TestTrue(TEXT("JSONに通常関数を保持"),
+        SemanticJson.Contains(TEXT("\"name\": \"RunSecond\"")));
+    TestTrue(TEXT("JSONにForEach関数を保持"),
+        SemanticJson.Contains(TEXT("\"name\": \"RunForEach\"")));
+
+    Semantic.Functions[1].Name = Semantic.Functions[0].Name;
+    Diagnostics.Reset();
+    TestFalse(TEXT("同名関数を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AMultipleFunctionActor"), TEXT("TEST_API"),
+            Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("同名拒否時に生成物を公開しない"),
+        Files.HeaderContent.IsEmpty() && Files.SourceContent.IsEmpty());
+    TestTrue(TEXT("同名拒否理由を保持"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("class-conflicting semantic function name"));
+        }));
+
+    Semantic.Functions[1].Name = TEXT("OnCollision");
+    Semantic.Functions[1].bIsEventGraph = true;
+    Semantic.Functions[1].bIsBlueprintEvent = true;
+    Semantic.Functions[2].Name = TEXT("OnCollision_Implementation");
+    Semantic.Functions[2].bIsEventGraph = false;
+    Semantic.Functions[2].bIsBlueprintEvent = false;
+    Diagnostics.Reset();
+    TestFalse(TEXT("イベントImplementationと通常関数のC++名衝突を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AMultipleFunctionActor"), TEXT("TEST_API"),
+            Files, Diagnostics,
+            EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("生成C++名衝突時に生成物を公開しない"),
+        Files.HeaderContent.IsEmpty() && Files.SourceContent.IsEmpty());
+    TestTrue(TEXT("生成C++名の衝突理由を保持"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(
+                TEXT("Generated C++ function definition name collision"));
+        }));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorReturnStatementsTest,
+    "BlueprintAIConverter.SemanticIR.Generator.ReturnStatements",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorReturnStatementsTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("Returnテスト用Lowering成功"),
+        FBPSemanticLowering::LowerPrintString(
+            MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticFunction EchoFunction = Semantic.Functions[0];
+    EchoFunction.Name = TEXT("EchoValue");
+    EchoFunction.ReturnType.Kind = EBPSemanticTypeKind::Int32;
+    EchoFunction.bIsEventGraph = false;
+    EchoFunction.bIsBlueprintEvent = false;
+    EchoFunction.bIsOverride = false;
+    EchoFunction.OverriddenFunctionPath.Reset();
+    EchoFunction.Parameters.Reset();
+    FBPSemanticParameter Input;
+    Input.Name = TEXT("InputValue");
+    Input.Type.Kind = EBPSemanticTypeKind::Int32;
+    Input.DeclarationIndex = 0;
+    EchoFunction.Parameters.Add(Input);
+    const FBPSemanticStatement OriginalExpression =
+        Semantic.Functions[0].Blocks[0].Statements[0];
+    FBPSemanticStatement Return;
+    Return.Kind = EBPSemanticStatementKind::Return;
+    Return.Expression.Kind = EBPSemanticExpressionKind::VariableReference;
+    Return.Expression.Type.Kind = EBPSemanticTypeKind::Int32;
+    Return.Expression.VariableName = Input.Name;
+    FBPSemanticBasicBlock ExpressionBlock;
+    ExpressionBlock.BlockId = FGuid::NewGuid();
+    ExpressionBlock.Terminator = EBPSemanticBlockTerminatorKind::Fallthrough;
+    ExpressionBlock.Statements.Add(OriginalExpression);
+    FBPSemanticBasicBlock ReturnBlock;
+    ReturnBlock.BlockId = FGuid::NewGuid();
+    ReturnBlock.Terminator = EBPSemanticBlockTerminatorKind::Return;
+    ReturnBlock.Statements.Add(Return);
+    ExpressionBlock.SuccessorBlockIds.Add(ReturnBlock.BlockId);
+    EchoFunction.Blocks.Reset();
+    EchoFunction.Blocks.Add(ExpressionBlock);
+    EchoFunction.Blocks.Add(ReturnBlock);
+    Semantic.Functions.Add(EchoFunction);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("複数関数内の非void Returnを生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AReturnFunctionActor"), TEXT("TEST_API"),
+            Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("戻り値付き宣言を生成"), Files.HeaderContent.Contains(
+        TEXT("int32 EchoValue(int32 InputValue);")));
+    TestTrue(TEXT("戻り値付き定義を生成"), Files.SourceContent.Contains(
+        TEXT("int32 AReturnFunctionActor::EchoValue(int32 InputValue)")));
+    TestTrue(TEXT("引数を返すReturnを生成"), Files.SourceContent.Contains(
+        TEXT("return InputValue;")));
+    TestTrue(TEXT("直列BasicBlockの先行式を生成"),
+        Files.SourceContent.Find(TEXT("UKismetSystemLibrary::PrintString")) <
+        Files.SourceContent.Find(TEXT("return InputValue;")));
+
+    FString SemanticJson;
+    TestTrue(TEXT("Returnを含むSemantic JSONを生成"),
+        FBPSemanticJsonSerializer::Serialize(
+            Semantic, TEXT("5.7"), SemanticJson));
+    TestTrue(TEXT("JSONにReturn文を保持"),
+        SemanticJson.Contains(TEXT("\"kind\": \"return\"")));
+    TestTrue(TEXT("JSONにBlock IDを保持"),
+        SemanticJson.Contains(TEXT("\"block_id\":")));
+    TestTrue(TEXT("JSONにFallthroughを保持"),
+        SemanticJson.Contains(TEXT("\"terminator\": \"fallthrough\"")));
+    TestTrue(TEXT("JSONにBlock後続を保持"),
+        SemanticJson.Contains(TEXT("\"successor_block_ids\":")));
+
+    FBPSemanticIR SingleFunctionSemantic = Semantic;
+    SingleFunctionSemantic.Functions.RemoveAt(0);
+    Diagnostics.Reset();
+    TestTrue(TEXT("単一非void関数でもReturnを生成"),
+        FBPSemanticCodeGenerator::Generate(SingleFunctionSemantic,
+            TEXT("AReturnOnlyActor"), TEXT("TEST_API"),
+            Files, Diagnostics));
+    TestTrue(TEXT("単一関数のReturnを保持"), Files.SourceContent.Contains(
+        TEXT("return InputValue;")));
+
+    Semantic.Functions[1].Blocks.Last().Statements[0] = OriginalExpression;
+    Diagnostics.Reset();
+    TestFalse(TEXT("非void関数のReturn欠落を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AReturnFunctionActor"), TEXT("TEST_API"),
+            Files, Diagnostics));
+    TestTrue(TEXT("Return欠落理由を保持"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("requires a terminal Return statement"));
+        }));
+    TestTrue(TEXT("Return欠落時に生成物を公開しない"),
+        Files.HeaderContent.IsEmpty() && Files.SourceContent.IsEmpty());
+
+    FBPSemanticBasicBlock InvalidBlock;
+    Return.Expression.Type.Kind = EBPSemanticTypeKind::Bool;
+    InvalidBlock.Statements.Add(Return);
+    Semantic.Functions[1].Blocks.Reset();
+    Semantic.Functions[1].Blocks.Add(InvalidBlock);
+    Diagnostics.Reset();
+    TestFalse(TEXT("Return型不一致を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AReturnFunctionActor"), TEXT("TEST_API"),
+            Files, Diagnostics));
+    TestTrue(TEXT("Return型不一致理由を保持"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("Return expression type does not match"));
+        }));
+
+    Return.Expression.Type.Kind = EBPSemanticTypeKind::Int32;
+    Semantic.Functions[1].Blocks[0].Statements.Reset();
+    Semantic.Functions[1].Blocks[0].Statements.Add(Return);
+    Semantic.Functions[1].Blocks[0].Statements.Add(OriginalExpression);
+    Diagnostics.Reset();
+    TestFalse(TEXT("途中Returnを拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AReturnFunctionActor"), TEXT("TEST_API"),
+            Files, Diagnostics));
+    TestTrue(TEXT("途中Return理由を保持"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("non-terminal Return statement"));
+        }));
+
+    Semantic.Functions[1] = EchoFunction;
+    Semantic.Functions[1].Blocks[0].SuccessorBlockIds[0] = FGuid::NewGuid();
+    Diagnostics.Reset();
+    TestFalse(TEXT("不正なBasicBlock後続を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AReturnFunctionActor"), TEXT("TEST_API"),
+            Files, Diagnostics));
+    TestTrue(TEXT("BasicBlock後続の拒否理由を保持"),
+        Diagnostics.ContainsByPredicate(
+            [](const FString& Message)
+            {
+                return Message.Contains(TEXT("invalid BasicBlock successor"));
+            }));
+
+    Semantic.Functions[1] = EchoFunction;
+    Semantic.Functions[1].ReturnType.Kind = EBPSemanticTypeKind::Void;
+    Semantic.Functions[1].Blocks.Reset();
+    InvalidBlock.Statements.Reset();
+    InvalidBlock.Statements.Add(Return);
+    Semantic.Functions[1].Blocks.Add(InvalidBlock);
+    Diagnostics.Reset();
+    TestFalse(TEXT("void関数が値を返すReturnを拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AReturnFunctionActor"), TEXT("TEST_API"),
+            Files, Diagnostics));
+    TestTrue(TEXT("void Return値の拒否理由を保持"),
+        Diagnostics.ContainsByPredicate(
+            [](const FString& Message)
+            {
+                return Message.Contains(TEXT("Void semantic function cannot return a value"));
+            }));
     return true;
 }
 

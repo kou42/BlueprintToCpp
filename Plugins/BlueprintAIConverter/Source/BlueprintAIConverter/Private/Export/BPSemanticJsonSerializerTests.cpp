@@ -85,7 +85,9 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     Output.DefaultValueStatus = TEXT("absent");
     Function.Parameters.Add(Output);
     FBPSemanticBasicBlock Block;
+    Block.BlockId = FGuid(21, 22, 23, 24);
     Block.SourceEntryNodeId = FGuid(1, 2, 3, 4);
+    Block.Terminator = EBPSemanticBlockTerminatorKind::End;
     FBPSemanticStatement Statement;
     Statement.SourceNodeId = FGuid(5, 6, 7, 8);
     Statement.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
@@ -200,8 +202,15 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("入力型"), JsonParameters[0]->AsObject()->GetObjectField(TEXT("type"))->GetStringField(TEXT("kind")),
         FString(TEXT("int32")));
     TestTrue(TEXT("戻り値フラグ"), JsonParameters[5]->AsObject()->GetBoolField(TEXT("is_return")));
-    const TSharedPtr<FJsonObject> Expression = Functions[0]->AsObject()
-        ->GetArrayField(TEXT("blocks"))[0]->AsObject()
+    const TSharedPtr<FJsonObject> BlockJson = Functions[0]->AsObject()
+        ->GetArrayField(TEXT("blocks"))[0]->AsObject();
+    TestEqual(TEXT("BasicBlock ID"), BlockJson->GetStringField(TEXT("block_id")),
+        Block.BlockId.ToString(EGuidFormats::DigitsWithHyphens));
+    TestEqual(TEXT("BasicBlock終端"), BlockJson->GetStringField(TEXT("terminator")),
+        FString(TEXT("end")));
+    TestTrue(TEXT("BasicBlock後続なし"),
+        BlockJson->GetArrayField(TEXT("successor_block_ids")).IsEmpty());
+    const TSharedPtr<FJsonObject> Expression = BlockJson
         ->GetArrayField(TEXT("statements"))[0]->AsObject()
         ->GetObjectField(TEXT("expression"));
     TestEqual(TEXT("関数名"), Expression->GetStringField(TEXT("function_name")), FString(TEXT("PrintString")));

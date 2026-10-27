@@ -57,6 +57,20 @@ FString StatementKindName(EBPSemanticStatementKind Kind)
     return TEXT("expression");
 }
 
+FString BlockTerminatorKindName(EBPSemanticBlockTerminatorKind Kind)
+{
+    switch (Kind)
+    {
+    case EBPSemanticBlockTerminatorKind::Unspecified: return TEXT("unspecified");
+    case EBPSemanticBlockTerminatorKind::End: return TEXT("end");
+    case EBPSemanticBlockTerminatorKind::Fallthrough: return TEXT("fallthrough");
+    case EBPSemanticBlockTerminatorKind::Return: return TEXT("return");
+    case EBPSemanticBlockTerminatorKind::Branch: return TEXT("branch");
+    case EBPSemanticBlockTerminatorKind::Loop: return TEXT("loop");
+    }
+    return TEXT("unspecified");
+}
+
 // 無効GUIDをゼロGUIDとして偽装せず、出典が存在しないことをnullで示す。
 TSharedPtr<FJsonValue> GuidValue(const FGuid& Id)
 {
@@ -334,7 +348,16 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
         for (const FBPSemanticBasicBlock& Block : Function.Blocks)
         {
             TSharedRef<FJsonObject> BlockJson = MakeShared<FJsonObject>();
+            BlockJson->SetField(TEXT("block_id"), GuidValue(Block.BlockId));
             BlockJson->SetField(TEXT("source_entry_node_id"), GuidValue(Block.SourceEntryNodeId));
+            BlockJson->SetStringField(TEXT("terminator"),
+                BlockTerminatorKindName(Block.Terminator));
+            TArray<TSharedPtr<FJsonValue>> SuccessorBlockIds;
+            for (const FGuid& SuccessorBlockId : Block.SuccessorBlockIds)
+            {
+                SuccessorBlockIds.Add(GuidValue(SuccessorBlockId));
+            }
+            BlockJson->SetArrayField(TEXT("successor_block_ids"), SuccessorBlockIds);
             TArray<TSharedPtr<FJsonValue>> Statements;
             for (const FBPSemanticStatement& Statement : Block.Statements)
             {

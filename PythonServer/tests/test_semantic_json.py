@@ -17,7 +17,10 @@ def sample():
             "name": "BeginPlay",
             "return_type": {"kind": "void", "type_path": "", "is_reference": False, "is_const": False},
             "blocks": [{
+                "block_id": "00000000-0000-0000-0000-000000000004",
                 "source_entry_node_id": "00000000-0000-0000-0000-000000000001",
+                "terminator": "end",
+                "successor_block_ids": [],
                 "statements": [{
                     "kind": "expression",
                     "source_node_id": "00000000-0000-0000-0000-000000000002",
@@ -74,12 +77,39 @@ def test_valid_nested_expression():
     assert parse_semantic_json(data) is data
 
 
+def test_block_control_flow_references():
+    data = sample()
+    first = data["functions"][0]["blocks"][0]
+    second = copy.deepcopy(first)
+    second["block_id"] = "00000000-0000-0000-0000-000000000005"
+    second["source_entry_node_id"] = "00000000-0000-0000-0000-000000000006"
+    second["terminator"] = "end"
+    first["terminator"] = "fallthrough"
+    first["successor_block_ids"] = [second["block_id"]]
+    data["functions"][0]["blocks"].append(second)
+    assert parse_semantic_json(data) is data
+
+    unknown = copy.deepcopy(data)
+    unknown["functions"][0]["blocks"][0]["successor_block_ids"] = [
+        "00000000-0000-0000-0000-000000000007"]
+    with pytest.raises(SemanticJsonError, match="unknown block ID"):
+        parse_semantic_json(unknown)
+
+    duplicate = copy.deepcopy(data)
+    duplicate["functions"][0]["blocks"][1]["block_id"] = first["block_id"]
+    with pytest.raises(SemanticJsonError, match="duplicate block ID"):
+        parse_semantic_json(duplicate)
+
+
 @pytest.mark.parametrize("change", [
     lambda d: d.update(schema_version=1),
     lambda d: d.update(format="other"),
     lambda d: d.pop("functions"),
     lambda d: d["functions"][0]["return_type"].update(kind="unknown"),
     lambda d: d["functions"][0]["blocks"][0].update(source_entry_node_id="bad"),
+    lambda d: d["functions"][0]["blocks"][0].update(terminator="unknown"),
+    lambda d: d["functions"][0]["blocks"][0].update(successor_block_ids=["bad"]),
+    lambda d: d["functions"][0]["blocks"][0].pop("block_id"),
     lambda d: d["functions"][0]["blocks"][0]["statements"][0]["expression"].pop("arguments"),
     lambda d: d["functions"].append(copy.deepcopy(d["functions"][0])),
 ])

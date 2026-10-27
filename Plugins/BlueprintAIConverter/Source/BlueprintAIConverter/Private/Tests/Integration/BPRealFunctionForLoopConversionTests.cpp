@@ -178,6 +178,45 @@ bool FBPRealFunctionForLoopConversionTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("所有クラスのincludeを生成"),
         Files.SourceContent.Contains(TEXT("#include \"Kismet/GameplayStatics.h\"")));
 
+    FBPGraphIR IsolatedNodesIR = GraphIR;
+    FBPIRGraph* IsolatedTargetGraph = IsolatedNodesIR.Graphs.FindByPredicate(
+        [FunctionName](const FBPIRGraph& Graph)
+        {
+            return Graph.Kind == TEXT("function") && Graph.Name == FunctionName.ToString();
+        });
+    if (TestNotNull(TEXT("孤立Node検証用の関数Graph"), IsolatedTargetGraph) == false)
+    {
+        return false;
+    }
+    FBPIRNode IsolatedBranch;
+    IsolatedBranch.Id = FGuid::NewGuid();
+    IsolatedBranch.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_IfThenElse");
+    IsolatedTargetGraph->Nodes.Add(MoveTemp(IsolatedBranch));
+
+    FBPIRGraph IsolatedFunctionGraph;
+    IsolatedFunctionGraph.Name = TEXT("UnusedLoopHelper");
+    IsolatedFunctionGraph.Kind = TEXT("function");
+    FBPIRNode IsolatedLoop;
+    IsolatedLoop.Id = FGuid::NewGuid();
+    IsolatedLoop.ClassPath = TEXT("/Script/BlueprintGraph.K2Node_MacroInstance");
+    IsolatedLoop.MacroGraphName = TEXT("ForLoop");
+    IsolatedFunctionGraph.Nodes.Add(MoveTemp(IsolatedLoop));
+    IsolatedNodesIR.Graphs.Add(MoveTemp(IsolatedFunctionGraph));
+
+    FBPSemanticIR IsolatedNodesSemanticIR;
+    if (TestTrue(TEXT("未接続の制御Nodeと補助ForLoop Graphを無視"),
+        FBPSemanticLowering::Lower(
+            Blueprint, IsolatedNodesIR, IsolatedNodesSemanticIR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : IsolatedNodesSemanticIR.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    TestEqual(TEXT("孤立Nodeを除外したSemantic関数数"),
+        IsolatedNodesSemanticIR.Functions.Num(), 1);
+
     FBPGraphIR MissingResultIR = GraphIR;
     FBPIRGraph* TargetGraph = MissingResultIR.Graphs.FindByPredicate(
         [FunctionName](const FBPIRGraph& Graph)

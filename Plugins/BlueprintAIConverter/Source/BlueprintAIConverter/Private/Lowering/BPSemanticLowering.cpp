@@ -2300,29 +2300,23 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
         return false;
     }
     const FBPIRGraph* Event = nullptr;
-    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    const FBPIRNode* ActiveEntry = nullptr;
+    if (ValidateExecutableGraphEntries(
+            GraphIR, OutIR, Event, ActiveEntry) == false)
     {
-        if (Graph.Kind == TEXT("event"))
-        {
-            if (Event != nullptr)
-            {
-                AddDiagnostic(OutIR, Graph.Name, FGuid(), TEXT("ForEachLoop requires one event graph"));
-                return false;
-            }
-            Event = &Graph;
-        }
-        else if (Graph.Name != TEXT("UserConstructionScript") ||
-            Graph.ExecEdges.IsEmpty() == false || Graph.DataEdges.IsEmpty() == false)
-        {
-            AddDiagnostic(OutIR, Graph.Name, FGuid(), TEXT("ForEachLoop has an unsupported graph"));
-            return false;
-        }
-    }
-    if (Event == nullptr)
-    {
-        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("ForEachLoop event graph is missing"));
         return false;
     }
+    if (Event == nullptr || ActiveEntry == nullptr || Event->Kind != TEXT("event") ||
+        ActiveEntry->ClassPath != TEXT("/Script/BlueprintGraph.K2Node_Event") ||
+        ActiveEntry->FunctionName != TEXT("ReceiveBeginPlay"))
+    {
+        AddDiagnostic(OutIR, Event != nullptr ? Event->Name : FString(),
+            ActiveEntry != nullptr ? ActiveEntry->Id : FGuid(),
+            TEXT("ForEachLoop requires an active BeginPlay event graph"));
+        return false;
+    }
+    TSet<FGuid> ReachableNodeIds;
+    CollectReachableStatementNodeIds(*Event, *ActiveEntry, ReachableNodeIds);
     const FBPIRNode* Begin = nullptr;
     const FBPIRNode* Loop = nullptr;
     const FBPIRNode* Getter = nullptr;
@@ -2331,6 +2325,10 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     const FBPIRNode* ElementConverter = nullptr;
     for (const FBPIRNode& Node : Event->Nodes)
     {
+        if (ReachableNodeIds.Contains(Node.Id) == false)
+        {
+            continue;
+        }
         if (Node.FunctionName == TEXT("ReceiveBeginPlay") &&
             Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event"))
         {
@@ -2423,6 +2421,10 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     // 最大2つの変換ノードを、実際の接続元（Array Index / Array Element）で識別する。
     // ノード列挙順や関数名だけでは要素とIndexを区別できない。
     const FBPIRNode* Converters[2] = { IndexConverter, ElementConverter };
+    const auto IsReachableDataEdge = [&ReachableNodeIds](const FBPIRLink& Edge)
+    {
+        return ReachableNodeIds.Contains(Edge.TargetNode);
+    };
     int32 ExpectedDataEdges = 1;
     for (const FBPIRNode* Converter : Converters)
     {
@@ -2431,7 +2433,9 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
             ExpectedDataEdges += 2;
         }
     }
-    if (Event->DataEdges.Num() != ExpectedDataEdges)
+    const int32 ReachableDataEdgeCount = Event->DataEdges.FilterByPredicate(
+        IsReachableDataEdge).Num();
+    if (ReachableDataEdgeCount != ExpectedDataEdges)
     {
         AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop data link count is unsupported"));
         return false;
@@ -2439,6 +2443,10 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     int32 ArrayLinks = 0;
     for (const FBPIRLink& Edge : Event->DataEdges)
     {
+        if (IsReachableDataEdge(Edge) == false)
+        {
+            continue;
+        }
         if (Edge.SourceNode == Getter->Id && Edge.SourcePin == GetterValue->Id &&
             Edge.TargetNode == Loop->Id && Edge.TargetPin == ArrayPin->Id)
         {
@@ -2450,6 +2458,10 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     // リンク数だけの検証では、別の接続を同数だけ混入させた場合に見逃す。
     for (const FBPIRLink& Edge : Event->DataEdges)
     {
+        if (IsReachableDataEdge(Edge) == false)
+        {
+            continue;
+        }
         bool bRecognized = Edge.SourceNode == Getter->Id &&
             Edge.SourcePin == GetterValue->Id && Edge.TargetNode == Loop->Id &&
             Edge.TargetPin == ArrayPin->Id;
@@ -2511,6 +2523,10 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
         int32 OutputLinks = 0;
         for (const FBPIRLink& Edge : Event->DataEdges)
         {
+            if (IsReachableDataEdge(Edge) == false)
+            {
+                continue;
+            }
             if (Edge.TargetNode == Converter->Id && Edge.TargetPin == Input->Id &&
                 Edge.SourceNode == Loop->Id)
             {
@@ -2657,12 +2673,18 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     };
     bool bBodyEndsWithBreak = false;
     bool bCompletedEndsWithBreak = false;
+    const int32 ReachableExecEdgeCount = Event->ExecEdges.FilterByPredicate(
+        [&ReachableNodeIds](const FBPIRLink& Edge)
+        {
+            return ReachableNodeIds.Contains(Edge.SourceNode) &&
+                ReachableNodeIds.Contains(Edge.TargetNode);
+        }).Num();
     if (ReadEntryChain() == false ||
         ReadChain(BodyPin, bWithBreak, BodyPrints, bBodyEndsWithBreak) == false ||
         ReadChain(CompletedPin, false, CompletedPrints, bCompletedEndsWithBreak) == false ||
         BodyPrints.IsEmpty() || Visited.Num() != Prints.Num() ||
         bCompletedEndsWithBreak || bBodyEndsWithBreak != bWithBreak ||
-        Event->ExecEdges.Num() != Visited.Num() + 1 + (bBodyEndsWithBreak ? 1 : 0))
+        ReachableExecEdgeCount != Visited.Num() + 1 + (bBodyEndsWithBreak ? 1 : 0))
     {
         AddDiagnostic(OutIR, Event->Name, Loop->Id, TEXT("ForEachLoop Exec chains are ambiguous or disconnected"));
         return false;
@@ -2736,6 +2758,10 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
                     {
                         for (const FBPIRLink& Edge : Event->DataEdges)
                         {
+                            if (IsReachableDataEdge(Edge) == false)
+                            {
+                                continue;
+                            }
                             if (Edge.SourceNode == Converter->Id &&
                                 Edge.TargetNode == Print->Id)
                             {
@@ -2799,10 +2825,27 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
     const FBPIRGraph* FunctionLoopGraph = nullptr;
     for (const FBPIRGraph& Graph : GraphIR.Graphs)
     {
-        const bool bContainsForLoop = Graph.Nodes.ContainsByPredicate(
-            [](const FBPIRNode& Node)
+        const FBPIRNode* GraphEntry = Graph.Nodes.FindByPredicate(
+            [&Graph](const FBPIRNode& Node)
             {
-                return Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
+                return IsExecutionEntryNode(Node) &&
+                    Graph.ExecEdges.ContainsByPredicate(
+                        [&Node](const FBPIRLink& Edge)
+                        {
+                            return Edge.SourceNode == Node.Id;
+                        });
+            });
+        TSet<FGuid> GraphReachableNodeIds;
+        if (GraphEntry != nullptr)
+        {
+            CollectReachableStatementNodeIds(
+                Graph, *GraphEntry, GraphReachableNodeIds);
+        }
+        const bool bContainsForLoop = Graph.Nodes.ContainsByPredicate(
+            [&GraphReachableNodeIds](const FBPIRNode& Node)
+            {
+                return GraphReachableNodeIds.Contains(Node.Id) &&
+                    Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
                     Node.MacroGraphName == TEXT("ForLoop");
             });
         if (Graph.Kind == TEXT("function") && bContainsForLoop)
@@ -2845,8 +2888,28 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
         const FBPIRNode* Loop = nullptr;
         const FBPIRNode* BodyCall = nullptr;
         const FBPIRNode* Result = nullptr;
+        const FBPIRNode* ReachabilityEntry = FunctionLoopGraph->Nodes.FindByPredicate(
+            [FunctionLoopGraph](const FBPIRNode& Node)
+            {
+                return IsExecutionEntryNode(Node) &&
+                    FunctionLoopGraph->ExecEdges.ContainsByPredicate(
+                        [&Node](const FBPIRLink& Edge)
+                        {
+                            return Edge.SourceNode == Node.Id;
+                        });
+            });
+        TSet<FGuid> ReachableNodeIds;
+        if (ReachabilityEntry != nullptr)
+        {
+            CollectReachableStatementNodeIds(
+                *FunctionLoopGraph, *ReachabilityEntry, ReachableNodeIds);
+        }
         for (const FBPIRNode& Node : FunctionLoopGraph->Nodes)
         {
+            if (ReachableNodeIds.Contains(Node.Id) == false)
+            {
+                continue;
+            }
             if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionEntry"))
             {
                 if (Entry != nullptr)
@@ -2895,9 +2958,20 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                 return false;
             }
         }
+        const int32 ReachableExecEdgeCount = FunctionLoopGraph->ExecEdges.FilterByPredicate(
+            [&ReachableNodeIds](const FBPIRLink& Edge)
+            {
+                return ReachableNodeIds.Contains(Edge.SourceNode) &&
+                    ReachableNodeIds.Contains(Edge.TargetNode);
+            }).Num();
+        const bool bHasReachableDataEdges = FunctionLoopGraph->DataEdges.ContainsByPredicate(
+            [&ReachableNodeIds](const FBPIRLink& Edge)
+            {
+                return ReachableNodeIds.Contains(Edge.TargetNode);
+            });
         if (Entry == nullptr || Loop == nullptr || BodyCall == nullptr || Result == nullptr ||
-            FunctionLoopGraph->Nodes.Num() != 4 || FunctionLoopGraph->ExecEdges.Num() != 3 ||
-            FunctionLoopGraph->DataEdges.IsEmpty() == false)
+            ReachableNodeIds.Num() != 4 || ReachableExecEdgeCount != 3 ||
+            bHasReachableDataEdges)
         {
             AddDiagnostic(OutIR, FunctionLoopGraph->Name, FGuid(),
                 TEXT("Function ForLoop requires Entry, one loop body call, and Function Result"));
@@ -3112,31 +3186,37 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
     }
 
     const FBPIRGraph* EventGraph = nullptr;
-    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    const FBPIRNode* ActiveEntry = nullptr;
+    if (ValidateExecutableGraphEntries(
+            GraphIR, OutIR, EventGraph, ActiveEntry) == false)
     {
-        if (Graph.Kind == TEXT("event"))
-        {
-            if (EventGraph != nullptr)
-            {
-                AddDiagnostic(OutIR, Graph.Name, FGuid(),
-                    TEXT("ForLoop conversion requires exactly one event graph"));
-                return false;
-            }
-            EventGraph = &Graph;
-        }
-        else if (Graph.Name != TEXT("UserConstructionScript") ||
-            Graph.ExecEdges.IsEmpty() == false || Graph.DataEdges.IsEmpty() == false)
-        {
-            AddDiagnostic(OutIR, Graph.Name, FGuid(),
-                TEXT("ForLoop conversion contains an unsupported graph"));
-            return false;
-        }
-    }
-    if (EventGraph == nullptr)
-    {
-        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("ForLoop event graph is missing"));
         return false;
     }
+    if (EventGraph == nullptr || ActiveEntry == nullptr ||
+        EventGraph->Kind != TEXT("event") ||
+        ActiveEntry->ClassPath != TEXT("/Script/BlueprintGraph.K2Node_Event") ||
+        ActiveEntry->FunctionName != TEXT("ReceiveBeginPlay"))
+    {
+        AddDiagnostic(OutIR, EventGraph != nullptr ? EventGraph->Name : FString(),
+            ActiveEntry != nullptr ? ActiveEntry->Id : FGuid(),
+            TEXT("ForLoop requires an active BeginPlay event graph"));
+        return false;
+    }
+    TSet<FGuid> ReachableNodeIds;
+    CollectReachableStatementNodeIds(
+        *EventGraph, *ActiveEntry, ReachableNodeIds);
+    const int32 ReachableNodeCount = ReachableNodeIds.Num();
+    const int32 ReachableExecEdgeCount = EventGraph->ExecEdges.FilterByPredicate(
+        [&ReachableNodeIds](const FBPIRLink& Edge)
+        {
+            return ReachableNodeIds.Contains(Edge.SourceNode) &&
+                ReachableNodeIds.Contains(Edge.TargetNode);
+        }).Num();
+    const int32 ReachableDataEdgeCount = EventGraph->DataEdges.FilterByPredicate(
+        [&ReachableNodeIds](const FBPIRLink& Edge)
+        {
+            return ReachableNodeIds.Contains(Edge.TargetNode);
+        }).Num();
 
     // 二重ForLoopの最小構造を先に解析する。既存の単一ForLoop経路には影響させない。
     // 対応形状: BeginPlay -> 外側LoopBody -> 内側LoopBody -> PrintString。
@@ -3144,6 +3224,10 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
     TArray<const FBPIRNode*> NestedLoops;
     for (const FBPIRNode& Node : EventGraph->Nodes)
     {
+        if (ReachableNodeIds.Contains(Node.Id) == false)
+        {
+            continue;
+        }
         if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_MacroInstance") &&
             Node.MacroGraphName == TEXT("ForLoop"))
         {
@@ -3163,6 +3247,10 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
         bool bSupportedNodes = true;
         for (const FBPIRNode& Node : EventGraph->Nodes)
         {
+            if (ReachableNodeIds.Contains(Node.Id) == false)
+            {
+                continue;
+            }
             if (Node.FunctionName == TEXT("ReceiveBeginPlay") &&
                 Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event"))
             {
@@ -3201,7 +3289,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
             }
         }
         if (bSupportedNodes && Entry != nullptr && PrintCount > 0 &&
-            EventGraph->Nodes.Num() == PrintCount + ConverterCount + ArithmeticCount + AppendCount + GetterCount + NestedLoops.Num() + 1)
+            ReachableNodeCount == PrintCount + ConverterCount + ArithmeticCount + AppendCount + GetterCount + NestedLoops.Num() + 1)
         {
             const auto NextExec = [EventGraph](const FBPIRNode& Source,
                 const FName PinName, const FBPIRNode*& Next) -> bool
@@ -3860,10 +3948,10 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
             Block.SourceEntryNodeId = Entry->Id;
             if (NextExec(*Entry, UEdGraphSchema_K2::PN_Then, First) &&
                 First != nullptr && LowerChain(First, Block.Statements, 0) &&
-                Visited.Num() + UsedConverters.Num() == EventGraph->Nodes.Num() - 1 &&
-                EventGraph->ExecEdges.Num() == Visited.Num() &&
+                Visited.Num() + UsedConverters.Num() == ReachableNodeCount - 1 &&
+                ReachableExecEdgeCount == Visited.Num() &&
                 UsedConverters.Num() == ConverterCount + ArithmeticCount + AppendCount + GetterCount &&
-                EventGraph->DataEdges.Num() >= ConverterCount * 2 + AppendCount &&
+                ReachableDataEdgeCount >= ConverterCount * 2 + AppendCount &&
                 Block.Statements.Num() == 1 &&
                 Block.Statements[0].Kind == EBPSemanticStatementKind::ForLoop)
             {
@@ -3883,6 +3971,10 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
         TArray<const FBPIRNode*> IndexAdditions;
         for (const FBPIRNode& Node : EventGraph->Nodes)
         {
+            if (ReachableNodeIds.Contains(Node.Id) == false)
+            {
+                continue;
+            }
             if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
                 Node.FunctionName == TEXT("ReceiveBeginPlay"))
             {
@@ -3909,10 +4001,10 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
             }
         }
         if (Entry == nullptr || PrintsInNestedGraph.IsEmpty() ||
-            EventGraph->Nodes.Num() != 3 + PrintsInNestedGraph.Num() +
+            ReachableNodeCount != 3 + PrintsInNestedGraph.Num() +
                 IndexConverters.Num() + IndexAdditions.Num() ||
-            EventGraph->ExecEdges.Num() != 2 + PrintsInNestedGraph.Num() ||
-            EventGraph->DataEdges.Num() != IndexConverters.Num() * 2 +
+            ReachableExecEdgeCount != 2 + PrintsInNestedGraph.Num() ||
+            ReachableDataEdgeCount != IndexConverters.Num() * 2 +
                 IndexAdditions.Num() * 2)
         {
             AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
@@ -4302,6 +4394,10 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
     TArray<const FBPIRNode*> Prints;
     for (const FBPIRNode& Node : EventGraph->Nodes)
     {
+        if (ReachableNodeIds.Contains(Node.Id) == false)
+        {
+            continue;
+        }
         if (Node.ClassPath == TEXT("/Script/BlueprintGraph.K2Node_Event") &&
             Node.FunctionName == TEXT("ReceiveBeginPlay"))
         {
@@ -4352,15 +4448,15 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
         }
     }
     if (BeginPlay == nullptr || Loop == nullptr || Prints.IsEmpty() ||
-        EventGraph->Nodes.Num() != 2 + Prints.Num() + (IndexToString != nullptr ? 1 : 0) +
+        ReachableNodeCount != 2 + Prints.Num() + (IndexToString != nullptr ? 1 : 0) +
             BranchNodes.Num() + ComparisonNodes.Num() +
             BodyArithmeticNodes.Num() ||
-        EventGraph->ExecEdges.Num() != 1 + Prints.Num() + BranchNodes.Num() ||
+        ReachableExecEdgeCount != 1 + Prints.Num() + BranchNodes.Num() ||
         (BodyBranch != nullptr && IndexToString != nullptr) ||
         (ComparisonNodes.IsEmpty()
-            ? (IndexToString == nullptr ? EventGraph->DataEdges.IsEmpty() == false : EventGraph->DataEdges.Num() != 2)
-            : (EventGraph->DataEdges.Num() < ComparisonNodes.Num() ||
-                EventGraph->DataEdges.Num() > ComparisonNodes.Num() * 3 +
+            ? (IndexToString == nullptr ? ReachableDataEdgeCount != 0 : ReachableDataEdgeCount != 2)
+            : (ReachableDataEdgeCount < ComparisonNodes.Num() ||
+                ReachableDataEdgeCount > ComparisonNodes.Num() * 3 +
                     BodyArithmeticNodes.Num() * 3)))
     {
         AddDiagnostic(OutIR, EventGraph->Name, FGuid(),
@@ -4568,7 +4664,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
     if (BranchNodes.Num() > 1)
     {
         if (IndexToString != nullptr || BodyPrint != nullptr || BranchNodes.Num() > 16 ||
-            (ComparisonNodes.IsEmpty() && EventGraph->DataEdges.IsEmpty() == false))
+            (ComparisonNodes.IsEmpty() && ReachableDataEdgeCount != 0))
         {
             AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
                 TEXT("Nested ForLoop Branch supports bool literals and int32 comparisons"));
@@ -4860,7 +4956,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
             VisitedPrints.Num() + OrderedCompletedPrints.Num() != Prints.Num() ||
             UsedComparisons.Num() != ComparisonNodes.Num() ||
             UsedArithmeticNodes.Num() != BodyArithmeticNodes.Num() ||
-            ConsumedConditionEdges != EventGraph->DataEdges.Num())
+            ConsumedConditionEdges != ReachableDataEdgeCount)
         {
             AddDiagnostic(OutIR, EventGraph->Name, Loop->Id,
                 TEXT("Nested ForLoop Branch has a cycle, shared target or unsupported Exec flow"));
@@ -5076,7 +5172,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
                 }
                 BranchStatement.Expression.Arguments.Add(MoveTemp(Argument));
             }
-            if (ConsumedArithmeticEdges + 1 != EventGraph->DataEdges.Num() ||
+            if (ConsumedArithmeticEdges + 1 != ReachableDataEdgeCount ||
                 UsedArithmeticNodes.Num() != BodyArithmeticNodes.Num())
             {
                 AddDiagnostic(OutIR, EventGraph->Name, BodyComparison->Id,
