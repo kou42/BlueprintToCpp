@@ -1027,6 +1027,132 @@ bool FBPSemanticGeneratorParentClassTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorFunctionSignatureValidationTest,
+    "BlueprintAIConverter.SemanticIR.Generator.FunctionSignatureValidation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorFunctionSignatureValidationTest::RunTest(
+    const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("関数署名検証用Lowering成功"),
+        FBPSemanticLowering::LowerPrintString(
+            MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticFunction& Function = Semantic.Functions[0];
+    Function.Name = TEXT("RunValidated");
+    Function.bIsEventGraph = false;
+    Function.bIsBlueprintEvent = false;
+    Function.bIsOverride = false;
+    Function.bIsInterfaceImplementation = false;
+    Function.OverriddenFunctionPath.Reset();
+    Function.InterfaceClassPath.Reset();
+    Function.InterfaceFunctionPath.Reset();
+    Function.Parameters.Reset();
+    FBPSemanticParameter First;
+    First.Name = TEXT("FirstValue");
+    First.Type.Kind = EBPSemanticTypeKind::Int32;
+    First.DeclarationIndex = 0;
+    FBPSemanticParameter Second = First;
+    Second.Name = TEXT("SecondValue");
+    Second.DeclarationIndex = 1;
+    Function.Parameters.Add(First);
+    Function.Parameters.Add(Second);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    TestTrue(TEXT("連続した一意な引数順を生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("引数宣言順を保持"), Files.HeaderContent.Contains(
+        TEXT("void RunValidated(int32 FirstValue, int32 SecondValue);")));
+
+    Function.Parameters[1].Name = Function.Parameters[0].Name;
+    Diagnostics.Reset();
+    TestFalse(TEXT("重複引数名を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("重複引数名の理由を保持"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("duplicate parameter name"));
+        }));
+    TestTrue(TEXT("重複引数名拒否時に生成物を公開しない"),
+        Files.HeaderContent.IsEmpty() && Files.SourceContent.IsEmpty());
+
+    Function.Parameters[1] = Second;
+    Function.Parameters[1].DeclarationIndex = 0;
+    Diagnostics.Reset();
+    TestFalse(TEXT("重複引数順を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("重複引数順の理由を保持"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("duplicate parameter declaration index"));
+        }));
+
+    Function.Parameters[1].DeclarationIndex = 2;
+    Diagnostics.Reset();
+    TestFalse(TEXT("引数順の欠番を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("引数順欠番の理由を保持"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("indices must be contiguous from zero"));
+        }));
+
+    Function.Parameters[1] = Second;
+    FBPSemanticParameter ReturnParameter;
+    ReturnParameter.Name = TEXT("ReturnValue");
+    ReturnParameter.Type.Kind = EBPSemanticTypeKind::Bool;
+    ReturnParameter.bIsReturn = true;
+    Function.Parameters.Add(ReturnParameter);
+    Diagnostics.Reset();
+    TestFalse(TEXT("戻り値メタデータの型不一致を拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("戻り値型不一致の理由を保持"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("inconsistent return parameter metadata"));
+        }));
+
+    Function.Parameters.RemoveAt(2);
+    Function.OverriddenFunctionPath = TEXT("/Script/Engine.Actor:BeginPlay");
+    Diagnostics.Reset();
+    TestFalse(TEXT("overrideフラグのない親関数メタデータを拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("overrideメタデータ不整合の理由を保持"),
+        Diagnostics.ContainsByPredicate(
+            [](const FString& Message)
+            {
+                return Message.Contains(
+                    TEXT("inconsistent override or interface metadata"));
+            }));
+
+    Function.OverriddenFunctionPath.Reset();
+    Function.bIsInterfaceImplementation = true;
+    Function.InterfaceFunctionPath = TEXT("/Script/Test.Interface:RunValidated");
+    Diagnostics.Reset();
+    TestFalse(TEXT("不完全なInterfaceメタデータを拒否"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("Interfaceメタデータ不整合の理由を保持"),
+        Diagnostics.ContainsByPredicate(
+            [](const FString& Message)
+            {
+                return Message.Contains(
+                    TEXT("inconsistent override or interface metadata"));
+            }));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorMultipleFunctionsTest,
     "BlueprintAIConverter.SemanticIR.Generator.MultipleFunctions",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

@@ -241,6 +241,9 @@ bool EmitFunctionType(const FBPSemanticType& Type, FString& OutType,
     return true;
 }
 
+bool SemanticTypesMatch(const FBPSemanticType& Left,
+    const FBPSemanticType& Right, int32 Depth);
+
 bool BuildFunctionShape(const FBPSemanticFunction& Function,
     const FBPResolvedParentClass& ParentClass, const FString& ClassName,
     FBPGeneratedFunctionShape& OutShape, TArray<FString>& Diagnostics)
@@ -257,6 +260,19 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
         Diagnostics.Add(TEXT("Static semantic functions are not yet supported by instance-body emitters"));
         return false;
     }
+    if ((Function.bIsOverride == false && Function.OverriddenFunctionPath.IsEmpty() == false) ||
+        (Function.bIsInterfaceImplementation == false &&
+            (Function.InterfaceClassPath.IsEmpty() == false ||
+                Function.InterfaceFunctionPath.IsEmpty() == false)) ||
+        (Function.bIsInterfaceImplementation &&
+            (Function.InterfaceClassPath.IsEmpty() ||
+                Function.InterfaceFunctionPath.IsEmpty())))
+    {
+        Diagnostics.Add(FString::Printf(
+            TEXT("Semantic function %s has inconsistent override or interface metadata"),
+            *FunctionName));
+        return false;
+    }
 
     FString ReturnType;
     if (EmitFunctionType(Function.ReturnType, ReturnType, Diagnostics) == false)
@@ -264,17 +280,62 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
         return false;
     }
     TArray<const FBPSemanticParameter*> OrderedParameters;
+    TSet<FName> ParameterNames;
+    TSet<int32> DeclarationIndices;
+    int32 ReturnParameterCount = 0;
     for (const FBPSemanticParameter& Parameter : Function.Parameters)
     {
-        if (Parameter.bIsReturn == false)
+        const FString ParameterName = Parameter.Name.ToString();
+        if (IsIdentifier(ParameterName) == false ||
+            ParameterNames.Contains(Parameter.Name))
         {
-            OrderedParameters.Add(&Parameter);
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s has an invalid or duplicate parameter name: %s"),
+                *FunctionName, *ParameterName));
+            return false;
         }
+        ParameterNames.Add(Parameter.Name);
+        if (Parameter.bIsReturn)
+        {
+            ++ReturnParameterCount;
+            FString ReflectedReturnType;
+            if (ReturnParameterCount > 1 ||
+                EmitFunctionType(Parameter.Type, ReflectedReturnType, Diagnostics) == false ||
+                SemanticTypesMatch(Parameter.Type, Function.ReturnType, 0) == false)
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Semantic function %s has inconsistent return parameter metadata"),
+                    *FunctionName));
+                return false;
+            }
+            continue;
+        }
+        if (Parameter.DeclarationIndex < 0 ||
+            DeclarationIndices.Contains(Parameter.DeclarationIndex))
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s has an invalid or duplicate parameter declaration index"),
+                *FunctionName));
+            return false;
+        }
+        DeclarationIndices.Add(Parameter.DeclarationIndex);
+        OrderedParameters.Add(&Parameter);
     }
     OrderedParameters.Sort([](const FBPSemanticParameter& A, const FBPSemanticParameter& B)
     {
         return A.DeclarationIndex < B.DeclarationIndex;
     });
+    for (int32 ParameterIndex = 0; ParameterIndex < OrderedParameters.Num(); ++ParameterIndex)
+    {
+        if (OrderedParameters[ParameterIndex] == nullptr ||
+            OrderedParameters[ParameterIndex]->DeclarationIndex != ParameterIndex)
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s parameter declaration indices must be contiguous from zero"),
+                *FunctionName));
+            return false;
+        }
+    }
     FString Parameters;
     for (const FBPSemanticParameter* Parameter : OrderedParameters)
     {

@@ -1,6 +1,6 @@
 # BlueprintToCpp ロードマップ
 
-最終更新: 2026-10-24
+最終更新: 2026-10-30
 
 ## 目的と原則
 
@@ -17,15 +17,15 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 - `FBPParentClassResolver::ResolveParent` はUObject系のネイティブ親クラスを解決できる。
 - `FBPNativeSubclassGenerator` は汎用的な派生UCLASSの骨格を生成できるが、Blueprintグラフの完全変換とは別経路。
-- `FBPSemanticLowering::Lower` はPrintString、Branch、ForLoop、ForEachLoop、Actor位置操作などのパターンをグラフ全体のノード有無で振り分けている。
-- 通常関数／Custom Eventの `Entry -> PrintString` 経路とUObject統合テストは既存。ただし一般的なノードの組み合わせには未対応。
-- `FBPSemanticCodeGenerator::Generate` はSemantic関数をちょうど1個、BasicBlockをちょうど1個に制限している。
-- `EmitExpressionStatement` には `FBPReflectedCallResolver` を使う共通呼び出し経路があるが、PrintStringは先に専用Emitterへ分岐する。ForEachLoopにもPrintString固有処理が残る。
-- ForLoopの複雑形状とForEachLoopの既存LoweringはBeginPlay前提の経路を含む。
+- `FBPSemanticLowering::Lower` の分類対象は、共通Entry監査で選んだ実行グラフの到達可能Statement領域に限定済み。ただしPrintString、Branch、Sequence、ForLoop、ForEachLoop、Actor位置操作などのパターン別Lowerer選択は残る。
+- 通常関数／Custom Eventの共通Entry解析と、Branch、Sequence、ForLoopを含むStatement Loweringは既存。ただし一般的なノードの任意の組み合わせには未対応。
+- `FBPSemanticCodeGenerator::Generate` は複数関数と複数BasicBlockを生成できる。明示CFGは直列Fallthrough、Branch合流、LoopのBody／Completedとback-edge、Returnを検証し、対応済みの構造化C++へ復元する。
+- PrintStringは `FBPReflectedCallResolver` を使う共通呼び出し経路へ移行済み。WorldContext、文字列式、数値、色、FName、ループローカル参照をReflection署名と照合する。
+- ForLoop／ForEachLoopのCFG出力は対応したが、複雑Loweringの一部にBeginPlay前提の検証が残る。
 - `ResolveEntryFunction` がBeginPlay、Function Entry、Custom Eventの判定と反射署名復元を共通化した。単一PrintString、Sequence、単一Branch、通常関数の単一ForLoopがこの経路を利用する。
 - SequenceはActor BeginPlayに加えて、UObject通常関数でも出力ピン順を保持して複数PrintStringをLowering・C++生成できる。Function Resultは最後のSequence出力から到達する形だけを受理する。
-- Semantic JSONは `BPSemanticJsonSerializer.cpp` で `schema_version: 2` を出力し、Pythonの `semantic_json.py` が同バージョンを検証する。JSON Exporterと既存テストがあるが、今後の共通Call／複数関数対応に追従するかは別途検証が必要。
-- PR #109 のUObject派生クラス回帰テストと通常関数の振り分け改善は `main` へ反映済み。
+- Semantic JSONは `BPSemanticJsonSerializer.cpp` で `schema_version: 2` を出力し、Pythonの `semantic_json.py` が同バージョンを検証する。複数関数とBasicBlock ID／終端／後続参照は追従済みだが、実アセット種別を広げたEditor export検証は未完了。
+- 2026-10-29の `2961277`（Expand semantic control flow CFG）まで `main` へ反映済み。
 
 ## 優先順位と完了条件
 
@@ -54,7 +54,7 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 ### P2: 複数関数・制御フローの生成
 
 - [x] `Generate` から単一関数制約を除去し、関数ごとに宣言・定義・includeを組み立てる。
-- [ ] BasicBlock間の接続、Branch合流、Loop、Returnの意味をSemantic IRで明示する。
+- [x] BasicBlock間の接続、Branch合流、Loop、Returnの意味をSemantic IRで明示する。
 - [ ] 同名関数、override、引数／戻り値、可視性、重複宣言を検証する。
 - [ ] 複数関数を持つUObject Blueprintを一つのUCLASSとして生成する統合テストを追加する。
 
@@ -68,6 +68,13 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - `FBPSemanticBasicBlock`にBlock ID、終端種別、後続Block IDを追加した。Generatorは明示的なFallthroughで接続された直列BasicBlockを順序検証して生成し、重複ID、未知／順序不一致の後続、曖昧な終端を拒否する。Branch／LoopによるBlock間CFG生成は未対応のため、P2の制御フロー項目は継続扱いとする。
 - Semantic JSON v2へ`block_id`、`terminator`、`successor_block_ids`を追加し、旧v2入力を維持しながらPython側でGUID、重複、参照先を検証する。
 - UE 5.7 UHT／UBTビルド成功。`BlueprintAIConverter` Automation Test全144件成功（Exit Code 0）。Python Semantic JSON／roundtrip対象36件成功。Python全234件は`test_behavior_api.py`の待機が継続したため中断し、今回の対象外テストを含む全件完走は未確認。
+
+#### P2追加進捗（2026-10-30、検証済み）
+
+- `2961277`でBranchのTrue／False後続と任意の合流Block、LoopのBody／Completed後続とBodyからHeaderへのback-edge、Return終端をSemantic CFGとして検証し、構造化C++へ復元する経路を追加した。Loop Body内Branchも明示Block接続から復元する。
+- 関数署名生成で、引数名の重複・不正識別子、`DeclarationIndex`の負値・重複・欠番、複数または型不一致の戻り値パラメータ、フラグと矛盾するoverride／interfaceメタデータを診断付きで拒否する検証を追加した。
+- P2の署名項目は、公開範囲をSemantic IRへ明示する設計、out／参照引数Policy、override元との完全な署名一致検証が残るため継続扱いとする。
+- UE 5.7 UHT／UBTビルド成功。追加した`FunctionSignatureValidation`と`BlueprintAIConverter` Automation Test全148件成功（Exit Code 0）。今回の変更はJSON schemaを変更していないためPythonテストは未実施。
 
 ### P2並行: Semantic JSON出力・Python連携（必須）
 
@@ -90,7 +97,7 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 ## P0進捗サマリー（2026-10-24）
 
-**状態: P0実装・回帰検証・実export成果物のPython CLI E2E自動化まで完了。PRへの結果記録を残す。** PR #111（`fix/p0-reflected-numeric-literals-20261023`、Draft・未マージ）で作業中。
+**状態: P0実装・回帰検証・実export成果物のPython CLI E2E自動化まで完了し、main反映済み。** PR #111、#112はいずれもマージ済み。
 
 | 領域 | 実装済みの範囲 | 残る課題 |
 | --- | --- | --- |
@@ -132,8 +139,10 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 ### 次の実装・検証順序
 
-1. 結果をPRへ記録し、P0完了を確定する。
-2. P1のノード有無によるパターン振り分けを、関数グラフ単位Statement Loweringへ移行する。
+1. P2の関数公開範囲、out／参照引数、override元との完全な署名一致をSemantic IR・Reflection・Generatorで共通検証する。
+2. 複数の通常関数とイベントを持つ実UObject Blueprintを一つのUCLASSへ変換する縦断統合テストを追加する。
+3. P1のパターン別Lowerer選択を、関数グラフ単位の共通Statement Loweringへ段階的に移行する。
+4. 対応済みCFGと複数関数について、実Editor exportからPython schema／roundtripまでの対象アセットを拡張する。
 
 ### P1追加実装（2026-10-26、検証済み）
 
@@ -184,11 +193,13 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 | --- | --- | --- |
 | `BPSemanticLowering.cpp::Lower` | ノードの有無でパターンを選択 | 関数単位のEntry／Statement Loweringへ移行後に撤去 |
 | 複雑ForLoop／ForEachLoop Lowering | BeginPlay前提の検証 | 共通Entry解析とクラス固有Policyへ分離後に整理 |
-| `BPSemanticCodeGenerator.cpp::Generate` | 単一関数・単一Block制限 | 複数関数／CFG出力とテストが通れば撤去 |
+| `BPSemanticCodeGenerator.cpp::Generate` | 複数関数と明示CFGに対応済みだが、受理するCFG形状を構造化Branch／Loopへ限定 | 共通CFG走査と診断を拡張し、対応ノードを増やす際もBlock順から意味を推測しない |
 | `BPSemanticJsonSerializer.cpp`／`PythonServer/app/semantic_json.py` | schema_version 2 の表現と検証の同期が必要 | 新IR表現ごとに両側を更新しgolden／roundtripで確認 |
 
 ## 最新の検証結果
 
+- 2026-10-30: 関数署名の引数名・宣言順、戻り値パラメータ、override／interfaceメタデータ整合性をGenerator入口で検証。UE 5.7 UHT／UBT成功、追加テスト成功、`BlueprintAIConverter` 全148件のAutomation Test成功（Exit Code 0）。
+- 2026-10-29: `2961277`でBranch合流、Loop Body／Completedとback-edge、Returnを明示Semantic CFGとしてLowering／生成し、Loop Body内Branchを含む回帰テストを追加。
 - 2026-10-26: `Lower` のパターン分類を共通Entry監査で確定した実行グラフの到達可能Statement領域へ限定し、同一／別グラフ内の未接続制御ノードによる誤振り分けを防止。単一PrintString、Sequence、Branch Lowererを同じ到達可能ノード集合へ移行。UE 5.7 UHT／UBT成功、`BlueprintAIConverter` 全142件のAutomation Test成功（Exit Code 0）。
 - 2026-10-24: PrintStringをReflection共通Callへ移行し、専用Emitter・式文分岐・ForEach専用判定を削除。KeyをFName型としてSemantic IR／JSONへ保持しつつ既存C++出力Parityを維持。UE 5.7 UHT／UBT成功、全139 Automation Test成功（Exit Code 0）、PythonのSemantic JSON／roundtrip／signature audit 39件成功。
 - 2026-10-24: `Lower`入口へ実行Entry監査を追加し、Entry欠落・同一グラフ複数Entry・Graph Kind不一致・複数実行グラフをパターン選択前に診断付きで拒否。UE 5.7ビルドと全141 Automation Test成功（Exit Code 0）。
