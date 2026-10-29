@@ -332,6 +332,68 @@ bool FBPForLoopBranchConversionTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("True側を生成"), Files.SourceContent.Contains(TEXT("True body")));
     TestTrue(TEXT("False側を生成"), Files.SourceContent.Contains(TEXT("False body")));
     TestTrue(TEXT("Completedを生成"), Files.SourceContent.Contains(TEXT("Branch completed")));
+
+    const FName BlueprintName = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_ForLoopBranchCfg"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        AActor::StaticClass(), GetTransientPackage(), BlueprintName,
+        BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("CFG Lowering用Blueprintを生成"), Blueprint) == false)
+    {
+        return false;
+    }
+    FBPSemanticIR CfgIR;
+    if (TestTrue(TEXT("Branch付きForLoopをCFGへLowering"),
+        FBPSemanticLowering::LowerForLoop(Blueprint, GraphIR, CfgIR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : CfgIR.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    if (TestEqual(TEXT("Loop Body Branch CFGのBlock数"),
+            CfgIR.Functions[0].Blocks.Num(), 5) == false)
+    {
+        return false;
+    }
+    const FBPSemanticBasicBlock& HeaderBlock = CfgIR.Functions[0].Blocks[0];
+    const FBPSemanticBasicBlock& BranchBlock = CfgIR.Functions[0].Blocks[1];
+    const FBPSemanticBasicBlock& TrueBlock = CfgIR.Functions[0].Blocks[2];
+    const FBPSemanticBasicBlock& FalseBlock = CfgIR.Functions[0].Blocks[3];
+    const FBPSemanticBasicBlock& CompletedBlock = CfgIR.Functions[0].Blocks[4];
+    TestEqual(TEXT("Loop Header終端"), HeaderBlock.Terminator,
+        EBPSemanticBlockTerminatorKind::Loop);
+    TestEqual(TEXT("Loop Body Branch終端"), BranchBlock.Terminator,
+        EBPSemanticBlockTerminatorKind::Branch);
+    TestTrue(TEXT("構造化Branchの枝をCFGへ移動"),
+        BranchBlock.Statements.Num() == 1 &&
+        BranchBlock.Statements[0].ThenStatements.IsEmpty() &&
+        BranchBlock.Statements[0].ElseStatements.IsEmpty());
+    TestTrue(TEXT("True/False BlockからHeaderへ戻る"),
+        TrueBlock.SuccessorBlockIds.Num() == 1 &&
+        FalseBlock.SuccessorBlockIds.Num() == 1 &&
+        TrueBlock.SuccessorBlockIds[0] == HeaderBlock.BlockId &&
+        FalseBlock.SuccessorBlockIds[0] == HeaderBlock.BlockId);
+    TestEqual(TEXT("Completed終端"), CompletedBlock.Terminator,
+        EBPSemanticBlockTerminatorKind::End);
+
+    Diagnostics.Reset();
+    if (TestTrue(TEXT("LoweringしたLoop Body Branch CFGをC++生成"),
+        FBPSemanticCodeGenerator::Generate(
+            CfgIR, TEXT("AForLoopBranchCfgActor"), TEXT("TEST_API"),
+            Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("CFGからTrue/False両枝を復元"),
+        Files.SourceContent.Contains(TEXT("if (true)")) &&
+        Files.SourceContent.Contains(TEXT("True body")) &&
+        Files.SourceContent.Contains(TEXT("False body")));
     return true;
 }
 
@@ -2211,12 +2273,36 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
         }
         return false;
     }
-    TestTrue(TEXT("ForEach文へ構造化"),
+    TestTrue(TEXT("ForEachをLoop CFGへLowering"),
         SemanticIR.Functions.Num() == 1 &&
-        SemanticIR.Functions[0].Blocks.Num() == 1 &&
+        SemanticIR.Functions[0].Blocks.Num() == 3 &&
         SemanticIR.Functions[0].Blocks[0].Statements.Num() == 1 &&
         SemanticIR.Functions[0].Blocks[0].Statements[0].Kind ==
             EBPSemanticStatementKind::ForEachLoop);
+    const FBPSemanticBasicBlock& HeaderBlock = SemanticIR.Functions[0].Blocks[0];
+    const FBPSemanticBasicBlock& BodyBlock = SemanticIR.Functions[0].Blocks[1];
+    const FBPSemanticBasicBlock& CompletedBlock = SemanticIR.Functions[0].Blocks[2];
+    TestTrue(TEXT("ForEach Headerは構造化Bodyを持たない"),
+        HeaderBlock.Statements[0].LoopBodyStatements.IsEmpty() &&
+        HeaderBlock.Statements[0].CompletedStatements.IsEmpty());
+    TestTrue(TEXT("ForEach HeaderのBody/Completed後続"),
+        HeaderBlock.Terminator == EBPSemanticBlockTerminatorKind::Loop &&
+        HeaderBlock.SuccessorBlockIds.Num() == 2 &&
+        HeaderBlock.SuccessorBlockIds[0] == BodyBlock.BlockId &&
+        HeaderBlock.SuccessorBlockIds[1] == CompletedBlock.BlockId);
+    TestTrue(TEXT("ForEach Bodyのback-edge"),
+        BodyBlock.Terminator == EBPSemanticBlockTerminatorKind::Fallthrough &&
+        BodyBlock.SuccessorBlockIds.Num() == 1 &&
+        BodyBlock.SuccessorBlockIds[0] == HeaderBlock.BlockId);
+    TestTrue(TEXT("ForEach Completed終端"),
+        CompletedBlock.Terminator == EBPSemanticBlockTerminatorKind::End &&
+        CompletedBlock.SuccessorBlockIds.IsEmpty());
+    FString ForEachJson;
+    TestTrue(TEXT("実ForEach CFGをSemantic JSONへ出力"),
+        FBPSemanticJsonSerializer::Serialize(
+            SemanticIR, TEXT("5.7"), ForEachJson));
+    TestTrue(TEXT("ForEach JSONにLoop終端を保持"),
+        ForEachJson.Contains(TEXT("\"terminator\": \"loop\"")));
     FBPGeneratedActorFiles Files;
     TArray<FString> Diagnostics;
     const bool bGenerated = FBPSemanticCodeGenerator::Generate(
@@ -2285,7 +2371,7 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("孤立Nodeを除外してForEach文を保持"),
         IsolatedNodesIR.Functions.Num() == 1 &&
-        IsolatedNodesIR.Functions[0].Blocks.Num() == 1 &&
+        IsolatedNodesIR.Functions[0].Blocks.Num() == 3 &&
         IsolatedNodesIR.Functions[0].Blocks[0].Statements.Num() == 1 &&
         IsolatedNodesIR.Functions[0].Blocks[0].Statements[0].Kind ==
             EBPSemanticStatementKind::ForEachLoop);
@@ -2326,12 +2412,29 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
         }
         return false;
     }
-    const TArray<FBPSemanticStatement>& EntryStatements =
-        EntryPrintIR.Functions[0].Blocks[0].Statements;
-    TestTrue(TEXT("ループ前文とForEachを順序どおり保持"),
-        EntryStatements.Num() == 2 &&
-        EntryStatements[0].Kind == EBPSemanticStatementKind::Expression &&
-        EntryStatements[1].Kind == EBPSemanticStatementKind::ForEachLoop);
+    TestEqual(TEXT("先行文付きForEachのCFG Block数"),
+        EntryPrintIR.Functions[0].Blocks.Num(), 4);
+    const FBPSemanticBasicBlock& PreheaderBlock =
+        EntryPrintIR.Functions[0].Blocks[0];
+    const FBPSemanticBasicBlock& EntryHeaderBlock =
+        EntryPrintIR.Functions[0].Blocks[1];
+    TestTrue(TEXT("先行PrintStringをPreheaderへ保持"),
+        PreheaderBlock.Statements.Num() == 1 &&
+        PreheaderBlock.Statements[0].Kind == EBPSemanticStatementKind::Expression &&
+        PreheaderBlock.Terminator == EBPSemanticBlockTerminatorKind::Fallthrough &&
+        PreheaderBlock.SuccessorBlockIds.Num() == 1 &&
+        PreheaderBlock.SuccessorBlockIds[0] == EntryHeaderBlock.BlockId);
+    TestTrue(TEXT("Preheader後のForEach Header"),
+        EntryHeaderBlock.Terminator == EBPSemanticBlockTerminatorKind::Loop &&
+        EntryHeaderBlock.Statements.Num() == 1 &&
+        EntryHeaderBlock.Statements[0].Kind ==
+            EBPSemanticStatementKind::ForEachLoop);
+    FString EntryPrintJson;
+    TestTrue(TEXT("Preheader付きForEach CFGをSemantic JSONへ出力"),
+        FBPSemanticJsonSerializer::Serialize(
+            EntryPrintIR, TEXT("5.7"), EntryPrintJson));
+    TestTrue(TEXT("JSONにPreheader Fallthroughを保持"),
+        EntryPrintJson.Contains(TEXT("\"terminator\": \"fallthrough\"")));
     FBPGeneratedActorFiles EntryPrintFiles;
     TArray<FString> EntryPrintDiagnostics;
     if (TestTrue(TEXT("ループ前文を含むForEachのC++生成"),
@@ -2350,6 +2453,24 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
     const int32 EntryLoopPosition = EntryPrintFiles.SourceContent.Find(TEXT("Numbers.Num()"));
     TestTrue(TEXT("生成C++でもPrintStringがForEachより前"),
         EntryPrintPosition != INDEX_NONE && EntryLoopPosition > EntryPrintPosition);
+    FBPSemanticIR InvalidPreheaderIR = EntryPrintIR;
+    InvalidPreheaderIR.Functions[0].Blocks[0].SuccessorBlockIds.Reset();
+    FBPGeneratedActorFiles InvalidPreheaderFiles;
+    TArray<FString> InvalidPreheaderDiagnostics;
+    TestFalse(TEXT("後続を欠くPreheaderを拒否"),
+        FBPSemanticCodeGenerator::Generate(
+            InvalidPreheaderIR, TEXT("AInvalidForEachPreheaderActor"), TEXT("TEST_API"),
+            InvalidPreheaderFiles, InvalidPreheaderDiagnostics,
+            EBPVariableFallbackMode::DeclarationOnly));
+    TestTrue(TEXT("Preheader拒否理由を保持"),
+        InvalidPreheaderDiagnostics.ContainsByPredicate(
+            [](const FString& Message)
+            {
+                return Message.Contains(TEXT("invalid Preheader block"));
+            }));
+    TestTrue(TEXT("Preheader拒否時に生成物を公開しない"),
+        InvalidPreheaderFiles.HeaderContent.IsEmpty() &&
+        InvalidPreheaderFiles.SourceContent.IsEmpty());
 
     // Break入力を持つ標準マクロの限定形状を同じ実Blueprint型情報で縦断する。
     // 本体末尾からBreakへ戻るExecエッジを、暗黙に捨てずSemantic Breakへ変換する。
@@ -2380,7 +2501,7 @@ bool FBPForEachCompiledBlueprintLoweringTest::RunTest(const FString& Parameters)
         return false;
     }
     const TArray<FBPSemanticStatement>& BreakBody =
-        BreakIR.Functions[0].Blocks[0].Statements[0].LoopBodyStatements;
+        BreakIR.Functions[0].Blocks[1].Statements;
     TestTrue(TEXT("本体末尾にBreak文を保持"),
         BreakBody.IsEmpty() == false &&
         BreakBody.Last().Kind == EBPSemanticStatementKind::Break);

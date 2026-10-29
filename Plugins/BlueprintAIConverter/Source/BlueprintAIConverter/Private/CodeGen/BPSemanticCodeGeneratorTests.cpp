@@ -220,6 +220,284 @@ bool FBPSemanticGeneratorGenericBranchStatementsTest::RunTest(const FString& Par
         Files.SourceContent.Contains(TEXT("UKismetSystemLibrary::PrintString")));
     return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorBasicBlockBranchCfgTest,
+    "BlueprintAIConverter.SemanticIR.Generator.BasicBlockBranchCfg",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorBasicBlockBranchCfgTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("CFGテスト用Semantic IRを生成"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+
+    auto MakeCall = [&Semantic](const FName HitResultName)
+    {
+        FBPSemanticStatement Statement;
+        Statement.Kind = EBPSemanticStatementKind::Expression;
+        Statement.Expression = MakeActorLocationCall(
+            Semantic.ParentClassPath, HitResultName);
+        return Statement;
+    };
+
+    FBPSemanticStatement Branch;
+    Branch.Kind = EBPSemanticStatementKind::Branch;
+    Branch.Expression.Kind = EBPSemanticExpressionKind::Literal;
+    Branch.Expression.Type.Kind = EBPSemanticTypeKind::Bool;
+    Branch.Expression.LiteralValue = TEXT("true");
+
+    FBPSemanticBasicBlock EntryBlock;
+    EntryBlock.BlockId = FGuid::NewGuid();
+    EntryBlock.Terminator = EBPSemanticBlockTerminatorKind::Branch;
+    EntryBlock.Statements.Add(Branch);
+    FBPSemanticBasicBlock TrueBlock;
+    TrueBlock.BlockId = FGuid::NewGuid();
+    TrueBlock.Terminator = EBPSemanticBlockTerminatorKind::Fallthrough;
+    TrueBlock.Statements.Add(MakeCall(TEXT("CfgTrue")));
+    FBPSemanticBasicBlock FalseBlock;
+    FalseBlock.BlockId = FGuid::NewGuid();
+    FalseBlock.Terminator = EBPSemanticBlockTerminatorKind::Fallthrough;
+    FalseBlock.Statements.Add(MakeCall(TEXT("CfgFalse")));
+    FBPSemanticBasicBlock JoinBlock;
+    JoinBlock.BlockId = FGuid::NewGuid();
+    JoinBlock.Terminator = EBPSemanticBlockTerminatorKind::End;
+    JoinBlock.Statements.Add(MakeCall(TEXT("CfgJoin")));
+    EntryBlock.SuccessorBlockIds = { TrueBlock.BlockId, FalseBlock.BlockId };
+    TrueBlock.SuccessorBlockIds.Add(JoinBlock.BlockId);
+    FalseBlock.SuccessorBlockIds.Add(JoinBlock.BlockId);
+
+    FBPSemanticFunction& Function = Semantic.Functions[0];
+    Function.Blocks.Reset();
+    Function.Blocks.Add(EntryBlock);
+    Function.Blocks.Add(TrueBlock);
+    Function.Blocks.Add(FalseBlock);
+    Function.Blocks.Add(JoinBlock);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("Branch CFGからC++を生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ABranchCfgActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    const FString& Source = Files.SourceContent;
+    const int32 TruePosition = Source.Find(TEXT("FHitResult CfgTrue{};"));
+    const int32 FalsePosition = Source.Find(TEXT("FHitResult CfgFalse{};"));
+    const int32 JoinPosition = Source.Find(TEXT("FHitResult CfgJoin{};"));
+    TestTrue(TEXT("True/Falseをif/else内へ生成"),
+        Source.Contains(TEXT("if (true)")) && Source.Contains(TEXT("else")) &&
+        TruePosition != INDEX_NONE && FalsePosition != INDEX_NONE);
+    TestTrue(TEXT("合流Blockを分岐後に一度だけ生成"),
+        JoinPosition > TruePosition && JoinPosition > FalsePosition &&
+        Source.Find(TEXT("FHitResult CfgJoin{};"), ESearchCase::CaseSensitive,
+            ESearchDir::FromEnd) == JoinPosition);
+
+    FString Json;
+    TestTrue(TEXT("Branch CFGをSemantic JSONへ出力"),
+        FBPSemanticJsonSerializer::Serialize(Semantic, TEXT("5.7"), Json));
+    TestTrue(TEXT("JSONにBranch終端を保持"),
+        Json.Contains(TEXT("\"terminator\": \"branch\"")));
+    TestTrue(TEXT("JSONにTrue/False後続を保持"),
+        Json.Contains(TrueBlock.BlockId.ToString(EGuidFormats::DigitsWithHyphensLower)) &&
+        Json.Contains(FalseBlock.BlockId.ToString(EGuidFormats::DigitsWithHyphensLower)));
+
+    FBPSemanticIR Invalid = Semantic;
+    Invalid.Functions[0].Blocks[2].SuccessorBlockIds[0] = FGuid::NewGuid();
+    Diagnostics.Reset();
+    TestFalse(TEXT("異なる合流先を持つBranch CFGを拒否"),
+        FBPSemanticCodeGenerator::Generate(Invalid, TEXT("ABranchCfgActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("不正合流の診断を保持"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("must terminate or share one join block"));
+        }));
+    TestTrue(TEXT("拒否時に生成物を公開しない"),
+        Files.HeaderContent.IsEmpty() && Files.SourceContent.IsEmpty());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorBasicBlockLoopCfgTest,
+    "BlueprintAIConverter.SemanticIR.Generator.BasicBlockLoopCfg",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorBasicBlockLoopCfgTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("Loop CFGテスト用Semantic IRを生成"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+
+    const FBPSemanticStatement OriginalBody =
+        Semantic.Functions[0].Blocks[0].Statements[0];
+    FBPSemanticStatement Loop;
+    Loop.Kind = EBPSemanticStatementKind::ForLoop;
+    Loop.LoopIndexVariable = TEXT("CfgIndex");
+    Loop.LoopFirstIndex.Kind = EBPSemanticExpressionKind::Literal;
+    Loop.LoopFirstIndex.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopFirstIndex.LiteralValue = TEXT("1");
+    Loop.LoopLastIndex.Kind = EBPSemanticExpressionKind::Literal;
+    Loop.LoopLastIndex.Type.Kind = EBPSemanticTypeKind::Int32;
+    Loop.LoopLastIndex.LiteralValue = TEXT("3");
+
+    FBPSemanticStatement Completed;
+    Completed.Kind = EBPSemanticStatementKind::Expression;
+    Completed.Expression = MakeActorLocationCall(
+        Semantic.ParentClassPath, TEXT("LoopCfgCompleted"));
+
+    FBPSemanticBasicBlock HeaderBlock;
+    HeaderBlock.BlockId = FGuid::NewGuid();
+    HeaderBlock.Terminator = EBPSemanticBlockTerminatorKind::Loop;
+    HeaderBlock.Statements.Add(Loop);
+    FBPSemanticBasicBlock BodyBlock;
+    BodyBlock.BlockId = FGuid::NewGuid();
+    BodyBlock.Terminator = EBPSemanticBlockTerminatorKind::Fallthrough;
+    BodyBlock.Statements.Add(OriginalBody);
+    FBPSemanticBasicBlock CompletedBlock;
+    CompletedBlock.BlockId = FGuid::NewGuid();
+    CompletedBlock.Terminator = EBPSemanticBlockTerminatorKind::End;
+    CompletedBlock.Statements.Add(Completed);
+    HeaderBlock.SuccessorBlockIds = { BodyBlock.BlockId, CompletedBlock.BlockId };
+    BodyBlock.SuccessorBlockIds.Add(HeaderBlock.BlockId);
+
+    FBPSemanticFunction& Function = Semantic.Functions[0];
+    Function.Blocks.Reset();
+    Function.Blocks.Add(HeaderBlock);
+    Function.Blocks.Add(BodyBlock);
+    Function.Blocks.Add(CompletedBlock);
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("Loop CFGからC++を生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("ALoopCfgActor"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    const FString& Source = Files.SourceContent;
+    const int32 LoopPosition = Source.Find(
+        TEXT("for (int32 CfgIndex = 1; CfgIndex <= 3; ++CfgIndex)"));
+    const int32 BodyPosition = Source.Find(TEXT("UKismetSystemLibrary::PrintString"));
+    const int32 CompletedPosition = Source.Find(TEXT("FHitResult LoopCfgCompleted{};"));
+    TestTrue(TEXT("Loop Bodyをfor内へ生成"),
+        LoopPosition != INDEX_NONE && BodyPosition > LoopPosition);
+    TestTrue(TEXT("Completed BlockをLoop後へ生成"),
+        CompletedPosition > BodyPosition);
+
+    FString Json;
+    TestTrue(TEXT("Loop CFGをSemantic JSONへ出力"),
+        FBPSemanticJsonSerializer::Serialize(Semantic, TEXT("5.7"), Json));
+    TestTrue(TEXT("JSONにLoop終端を保持"),
+        Json.Contains(TEXT("\"terminator\": \"loop\"")));
+    TestTrue(TEXT("JSONにBody back-edgeを保持"),
+        Json.Contains(HeaderBlock.BlockId.ToString(
+            EGuidFormats::DigitsWithHyphensLower)));
+
+    FBPSemanticIR BranchSemantic = Semantic;
+    FBPSemanticBasicBlock BranchHeader = HeaderBlock;
+    FBPSemanticBasicBlock BodyBranchBlock;
+    BodyBranchBlock.BlockId = FGuid::NewGuid();
+    BodyBranchBlock.Terminator = EBPSemanticBlockTerminatorKind::Branch;
+    FBPSemanticStatement BodyBranch;
+    BodyBranch.Kind = EBPSemanticStatementKind::Branch;
+    BodyBranch.Expression.Kind = EBPSemanticExpressionKind::Literal;
+    BodyBranch.Expression.Type.Kind = EBPSemanticTypeKind::Bool;
+    BodyBranch.Expression.LiteralValue = TEXT("true");
+    BodyBranchBlock.Statements.Add(BodyBranch);
+    FBPSemanticBasicBlock TrueBodyBlock;
+    TrueBodyBlock.BlockId = FGuid::NewGuid();
+    TrueBodyBlock.Terminator = EBPSemanticBlockTerminatorKind::Fallthrough;
+    TrueBodyBlock.Statements.Add(OriginalBody);
+    TrueBodyBlock.SuccessorBlockIds.Add(BranchHeader.BlockId);
+    FBPSemanticBasicBlock FalseBodyBlock;
+    FalseBodyBlock.BlockId = FGuid::NewGuid();
+    FalseBodyBlock.Terminator = EBPSemanticBlockTerminatorKind::Fallthrough;
+    FBPSemanticStatement FalseBody;
+    FalseBody.Kind = EBPSemanticStatementKind::Expression;
+    FalseBody.Expression = MakeActorLocationCall(
+        BranchSemantic.ParentClassPath, TEXT("LoopBranchFalse"));
+    FalseBodyBlock.Statements.Add(FalseBody);
+    FalseBodyBlock.SuccessorBlockIds.Add(BranchHeader.BlockId);
+    FBPSemanticBasicBlock BranchCompletedBlock = CompletedBlock;
+    BranchHeader.SuccessorBlockIds = {
+        BodyBranchBlock.BlockId, BranchCompletedBlock.BlockId };
+    BodyBranchBlock.SuccessorBlockIds = {
+        TrueBodyBlock.BlockId, FalseBodyBlock.BlockId };
+    BranchSemantic.Functions[0].Blocks.Reset();
+    BranchSemantic.Functions[0].Blocks.Add(BranchHeader);
+    BranchSemantic.Functions[0].Blocks.Add(BodyBranchBlock);
+    BranchSemantic.Functions[0].Blocks.Add(TrueBodyBlock);
+    BranchSemantic.Functions[0].Blocks.Add(FalseBodyBlock);
+    BranchSemantic.Functions[0].Blocks.Add(BranchCompletedBlock);
+
+    Diagnostics.Reset();
+    if (TestTrue(TEXT("Loop Body Branch CFGからC++を生成"),
+        FBPSemanticCodeGenerator::Generate(
+            BranchSemantic, TEXT("ALoopBranchCfgActor"), FString(),
+            Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics)
+        {
+            AddError(Diagnostic);
+        }
+        return false;
+    }
+    TestTrue(TEXT("Loop Body Branchをifへ生成"),
+        Files.SourceContent.Contains(TEXT("if (true)")) &&
+        Files.SourceContent.Contains(TEXT("LoopBranchFalse")));
+    FString BranchJson;
+    TestTrue(TEXT("Loop Body Branch CFGをSemantic JSONへ出力"),
+        FBPSemanticJsonSerializer::Serialize(
+            BranchSemantic, TEXT("5.7"), BranchJson));
+    TestTrue(TEXT("JSONにLoop内Branch終端を保持"),
+        BranchJson.Contains(TEXT("\"terminator\": \"branch\"")));
+
+    FBPSemanticIR InvalidBranch = BranchSemantic;
+    InvalidBranch.Functions[0].Blocks[3].SuccessorBlockIds[0] =
+        InvalidBranch.Functions[0].Blocks[4].BlockId;
+    Diagnostics.Reset();
+    TestFalse(TEXT("片側back-edgeを欠くLoop Body Branchを拒否"),
+        FBPSemanticCodeGenerator::Generate(
+            InvalidBranch, TEXT("ALoopBranchCfgActor"), FString(),
+            Files, Diagnostics));
+    TestTrue(TEXT("Loop Body Branch拒否理由を保持"),
+        Diagnostics.ContainsByPredicate(
+            [](const FString& Message)
+            {
+                return Message.Contains(TEXT("requires True/False back-edges"));
+            }));
+
+    FBPSemanticIR Invalid = Semantic;
+    Invalid.Functions[0].Blocks[1].SuccessorBlockIds[0] =
+        Invalid.Functions[0].Blocks[2].BlockId;
+    Diagnostics.Reset();
+    TestFalse(TEXT("Body back-edgeを欠くLoop CFGを拒否"),
+        FBPSemanticCodeGenerator::Generate(Invalid, TEXT("ALoopCfgActor"),
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("不正back-edgeの診断を保持"), Diagnostics.ContainsByPredicate(
+        [](const FString& Message)
+        {
+            return Message.Contains(TEXT("requires a Body back-edge"));
+        }));
+    TestTrue(TEXT("拒否時に生成物を公開しない"),
+        Files.HeaderContent.IsEmpty() && Files.SourceContent.IsEmpty());
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorNestedBranchStatementsTest,
     "BlueprintAIConverter.SemanticIR.Generator.NestedBranchStatements",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

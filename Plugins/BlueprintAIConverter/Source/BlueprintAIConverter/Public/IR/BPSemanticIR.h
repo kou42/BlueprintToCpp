@@ -113,6 +113,8 @@ enum class EBPSemanticBlockTerminatorKind : uint8
 struct FBPSemanticBasicBlock
 {
     // SourceEntryNodeIdは由来追跡、BlockIdはSemantic CFG内の参照先として使う。
+    // Branch終端はTrue、False、Loop終端はBody、Completedの順で後続を保持する。
+    // Loop Body BlockはFallthroughでLoopヘッダーへ戻るback-edgeを持つ。
     FGuid BlockId;
     FGuid SourceEntryNodeId;
     EBPSemanticBlockTerminatorKind Terminator =

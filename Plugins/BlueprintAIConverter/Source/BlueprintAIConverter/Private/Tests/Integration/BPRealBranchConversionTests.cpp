@@ -245,7 +245,7 @@ bool FBPRealBranchConversionTest::RunTest(const FString& Parameters)
         FBPSemanticLowering::Lower(Blueprint, ExtraDataIR, RejectedSemanticIR));
     TestTrue(TEXT("余分なData接続の診断を保持"), RejectedSemanticIR.HasErrors());
 
-    if (SemanticIR.Functions.Num() != 1 || SemanticIR.Functions[0].Blocks.Num() != 1 ||
+    if (SemanticIR.Functions.Num() != 1 || SemanticIR.Functions[0].Blocks.Num() != 3 ||
         SemanticIR.Functions[0].Blocks[0].Statements.Num() != 1)
     {
         AddError(TEXT("Branch Semantic IRの関数構造が不正です"));
@@ -255,16 +255,26 @@ bool FBPRealBranchConversionTest::RunTest(const FString& Parameters)
         SemanticIR.Functions[0].Blocks[0].Statements[0];
     TestTrue(TEXT("Branch文として保持"),
         BranchStatement.Kind == EBPSemanticStatementKind::Branch);
-    TestEqual(TEXT("True側の文数"), BranchStatement.ThenStatements.Num(), 1);
-    TestEqual(TEXT("False側の文数"), BranchStatement.ElseStatements.Num(), 1);
-    if (BranchStatement.ThenStatements.Num() != 1 || BranchStatement.ElseStatements.Num() != 1)
-    {
-        return false;
-    }
+    TestEqual(TEXT("Branch終端として保持"),
+        SemanticIR.Functions[0].Blocks[0].Terminator,
+        EBPSemanticBlockTerminatorKind::Branch);
+    TestEqual(TEXT("True/False後続数"),
+        SemanticIR.Functions[0].Blocks[0].SuccessorBlockIds.Num(), 2);
+    TestEqual(TEXT("True側Block ID"),
+        SemanticIR.Functions[0].Blocks[0].SuccessorBlockIds[0],
+        SemanticIR.Functions[0].Blocks[1].BlockId);
+    TestEqual(TEXT("False側Block ID"),
+        SemanticIR.Functions[0].Blocks[0].SuccessorBlockIds[1],
+        SemanticIR.Functions[0].Blocks[2].BlockId);
+    TestTrue(TEXT("Branch文の構造化子要素を使用しない"),
+        BranchStatement.ThenStatements.IsEmpty() &&
+        BranchStatement.ElseStatements.IsEmpty());
     TestEqual(TEXT("True側のPrintString"),
-        BranchStatement.ThenStatements[0].Expression.FunctionName, FName(TEXT("PrintString")));
+        SemanticIR.Functions[0].Blocks[1].Statements[0].Expression.FunctionName,
+        FName(TEXT("PrintString")));
     TestEqual(TEXT("False側のPrintString"),
-        BranchStatement.ElseStatements[0].Expression.FunctionName, FName(TEXT("PrintString")));
+        SemanticIR.Functions[0].Blocks[2].Statements[0].Expression.FunctionName,
+        FName(TEXT("PrintString")));
 
     FBPGeneratedActorFiles Files;
     TArray<FString> Diagnostics;

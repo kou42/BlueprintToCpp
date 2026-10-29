@@ -4,6 +4,7 @@
 
 #include "BPGraphIR.h"
 #include "BPSemanticCodeGenerator.h"
+#include "BPSemanticJsonSerializer.h"
 #include "BPSemanticLowering.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
@@ -138,7 +139,9 @@ bool FBPRealFunctionForLoopConversionTest::RunTest(const FString& Parameters)
     if (TestEqual(TEXT("Semantic関数数"), SemanticIR.Functions.Num(), 1) == false ||
         TestEqual(TEXT("Semantic関数名"), SemanticIR.Functions[0].Name, FunctionName) == false ||
         TestFalse(TEXT("通常関数として保持"), SemanticIR.Functions[0].bIsEventGraph) == false ||
-        TestEqual(TEXT("Semantic文数"),
+        TestEqual(TEXT("Loop CFGのBlock数"),
+            SemanticIR.Functions[0].Blocks.Num(), 3) == false ||
+        TestEqual(TEXT("Header文数"),
             SemanticIR.Functions[0].Blocks[0].Statements.Num(), 1) == false)
     {
         return false;
@@ -147,11 +150,38 @@ bool FBPRealFunctionForLoopConversionTest::RunTest(const FString& Parameters)
         SemanticIR.Functions[0].Blocks[0].Statements[0];
     if (TestTrue(TEXT("ForLoop文として保持"),
             LoopStatement.Kind == EBPSemanticStatementKind::ForLoop) == false ||
-        TestEqual(TEXT("ループ本体の文数"), LoopStatement.LoopBodyStatements.Num(), 1) == false)
+        TestTrue(TEXT("Headerの構造化Bodyを空にする"),
+            LoopStatement.LoopBodyStatements.IsEmpty()) == false ||
+        TestEqual(TEXT("Body Blockの文数"),
+            SemanticIR.Functions[0].Blocks[1].Statements.Num(), 1) == false)
     {
         return false;
     }
-    const FBPSemanticExpression& Call = LoopStatement.LoopBodyStatements[0].Expression;
+    const FBPSemanticBasicBlock& HeaderBlock = SemanticIR.Functions[0].Blocks[0];
+    const FBPSemanticBasicBlock& BodyBlock = SemanticIR.Functions[0].Blocks[1];
+    const FBPSemanticBasicBlock& CompletedBlock = SemanticIR.Functions[0].Blocks[2];
+    TestEqual(TEXT("HeaderをLoop終端として保持"), HeaderBlock.Terminator,
+        EBPSemanticBlockTerminatorKind::Loop);
+    TestEqual(TEXT("HeaderのBody/Completed後続数"),
+        HeaderBlock.SuccessorBlockIds.Num(), 2);
+    TestEqual(TEXT("Body後続"), HeaderBlock.SuccessorBlockIds[0], BodyBlock.BlockId);
+    TestEqual(TEXT("Completed後続"),
+        HeaderBlock.SuccessorBlockIds[1], CompletedBlock.BlockId);
+    TestEqual(TEXT("Body back-edge"), BodyBlock.SuccessorBlockIds[0], HeaderBlock.BlockId);
+    TestTrue(TEXT("Function ResultだけのCompletedは空Block"),
+        CompletedBlock.Statements.IsEmpty());
+
+    FString SemanticJson;
+    TestTrue(TEXT("実Function ForLoop CFGをSemantic JSONへ出力"),
+        FBPSemanticJsonSerializer::Serialize(
+            SemanticIR, TEXT("5.7"), SemanticJson));
+    TestTrue(TEXT("JSONにLoop終端を保持"),
+        SemanticJson.Contains(TEXT("\"terminator\": \"loop\"")));
+    TestTrue(TEXT("JSONにBody back-edge先を保持"),
+        SemanticJson.Contains(HeaderBlock.BlockId.ToString(
+            EGuidFormats::DigitsWithHyphensLower)));
+
+    const FBPSemanticExpression& Call = BodyBlock.Statements[0].Expression;
     TestEqual(TEXT("反射検証済み関数名"),
         Call.FunctionName, FName(TEXT("SetSubtitlesEnabled")));
     TestEqual(TEXT("呼び出し所有クラス"),

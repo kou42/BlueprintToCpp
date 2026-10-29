@@ -419,6 +419,150 @@ bool FBPSemanticFunctionGraphRoundtripTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticMultipleFunctionGraphRoundtripTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.MultipleFunctionGraphs",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticMultipleFunctionGraphRoundtripTest::RunTest(const FString& Parameters)
+{
+    const FName BlueprintName = MakeUniqueObjectName(
+        GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_MultipleFunctionLowering"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        UObject::StaticClass(), GetTransientPackage(), BlueprintName,
+        BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("複数関数用UObject Blueprintを生成"), Blueprint) == false)
+    {
+        return false;
+    }
+
+    const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+    const auto AddPrintFunction = [this, Blueprint, Schema](
+        const FName FunctionName, const FString& Message) -> bool
+    {
+        UEdGraph* FunctionGraph = FBlueprintEditorUtils::CreateNewGraph(
+            Blueprint, FunctionName, UEdGraph::StaticClass(),
+            UEdGraphSchema_K2::StaticClass());
+        if (FunctionGraph == nullptr)
+        {
+            AddError(FString::Printf(TEXT("Failed to create function graph: %s"),
+                *FunctionName.ToString()));
+            return false;
+        }
+        FBlueprintEditorUtils::AddFunctionGraph<UFunction>(
+            Blueprint, FunctionGraph, true, nullptr);
+
+        UK2Node_FunctionEntry* Entry = nullptr;
+        for (UEdGraphNode* Node : FunctionGraph->Nodes)
+        {
+            Entry = Entry != nullptr ? Entry : Cast<UK2Node_FunctionEntry>(Node);
+        }
+        if (Entry == nullptr)
+        {
+            AddError(FString::Printf(TEXT("Function entry is missing: %s"),
+                *FunctionName.ToString()));
+            return false;
+        }
+
+        UK2Node_CallFunction* Print = NewObject<UK2Node_CallFunction>(FunctionGraph);
+        FunctionGraph->AddNode(Print, false, false);
+        Print->CreateNewGuid();
+        Print->PostPlacedNewNode();
+        Print->SetFromFunction(
+            UKismetSystemLibrary::StaticClass()->FindFunctionByName(TEXT("PrintString")));
+        Print->AllocateDefaultPins();
+        Print->FindPinChecked(TEXT("InString"))->DefaultValue = Message;
+        return Schema->TryCreateConnection(
+            Entry->FindPinChecked(UEdGraphSchema_K2::PN_Then),
+            Print->FindPinChecked(UEdGraphSchema_K2::PN_Execute));
+    };
+
+    if (TestTrue(TEXT("First関数を構築"),
+            AddPrintFunction(TEXT("RunFirst"), TEXT("First function"))) == false ||
+        TestTrue(TEXT("Second関数を構築"),
+            AddPrintFunction(TEXT("RunSecond"), TEXT("Second function"))) == false)
+    {
+        return false;
+    }
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    FBPGraphIR GraphIR;
+    if (TestTrue(TEXT("複数Function Graph IRを構築"),
+        FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false)
+    {
+        return false;
+    }
+
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("複数Function Graphを一括Lowering"),
+        FBPSemanticLowering::Lower(Blueprint, GraphIR, Semantic)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : Semantic.Diagnostics)
+        {
+            AddError(Diagnostic.Message);
+        }
+        return false;
+    }
+    if (TestEqual(TEXT("Semantic関数を2つ保持"), Semantic.Functions.Num(), 2) == false)
+    {
+        return false;
+    }
+    TestTrue(TEXT("RunFirstを保持"), Semantic.Functions.ContainsByPredicate(
+        [](const FBPSemanticFunction& Function)
+        {
+            return Function.Name == TEXT("RunFirst");
+        }));
+    TestTrue(TEXT("RunSecondを保持"), Semantic.Functions.ContainsByPredicate(
+        [](const FBPSemanticFunction& Function)
+        {
+            return Function.Name == TEXT("RunSecond");
+        }));
+
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("複数関数を一つのUCLASSへ生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("UMultipleFunctionGenerated"),
+            FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Message : Diagnostics)
+        {
+            AddError(Message);
+        }
+        return false;
+    }
+    TestTrue(TEXT("RunFirst定義を生成"), Files.SourceContent.Contains(
+        TEXT("void UMultipleFunctionGenerated::RunFirst()")));
+    TestTrue(TEXT("RunSecond定義を生成"), Files.SourceContent.Contains(
+        TEXT("void UMultipleFunctionGenerated::RunSecond()")));
+
+    FBPGraphIR UnsupportedGraphIR = GraphIR;
+    FBPIRGraph* SecondGraph = UnsupportedGraphIR.Graphs.FindByPredicate(
+        [](const FBPIRGraph& Graph)
+        {
+            return Graph.Name == TEXT("RunSecond");
+        });
+    if (TestNotNull(TEXT("拒否確認用RunSecond Graph"), SecondGraph) == false)
+    {
+        return false;
+    }
+    FBPIRNode* SecondPrint = SecondGraph->Nodes.FindByPredicate(
+        [](const FBPIRNode& Node)
+        {
+            return Node.FunctionName == TEXT("PrintString");
+        });
+    if (TestNotNull(TEXT("拒否確認用RunSecond PrintString"), SecondPrint) == false)
+    {
+        return false;
+    }
+    SecondPrint->FunctionName = TEXT("UnsupportedCall");
+    FBPSemanticIR RejectedSemantic;
+    TestFalse(TEXT("一つでも未対応の関数があれば一括Loweringを拒否"),
+        FBPSemanticLowering::Lower(Blueprint, UnsupportedGraphIR, RejectedSemantic));
+    TestTrue(TEXT("失敗時に部分的な関数集合を公開しない"),
+        RejectedSemantic.Functions.IsEmpty());
+    TestTrue(TEXT("失敗理由を保持"), RejectedSemantic.HasErrors());
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticCustomEventRoundtripTest,
     "BlueprintAIConverter.SemanticIR.Lowering.CustomEventPrintString",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

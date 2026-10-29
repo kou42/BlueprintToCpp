@@ -435,6 +435,284 @@ bool BuildLinearFunctionStatements(const FBPSemanticFunction& Function,
         return false;
     }
 
+    const int32 LoopBlockIndex = Function.Blocks.IndexOfByPredicate(
+        [](const FBPSemanticBasicBlock& Block)
+        {
+            return Block.Terminator == EBPSemanticBlockTerminatorKind::Loop;
+        });
+    if (LoopBlockIndex != INDEX_NONE)
+    {
+        // Loop CFGの正規形は、任意のPreheaderからヘッダーへ進み、
+        // ヘッダーからBody／Completedへ分岐し、Bodyがヘッダーへ戻る。
+        // 配列内の構造化Bodyを併用せず、接続関係を唯一の制御フロー情報とする。
+        const bool bHasPreheader = LoopBlockIndex == 1;
+        if (Function.ReturnType.Kind != EBPSemanticTypeKind::Void ||
+            (LoopBlockIndex != 0 && LoopBlockIndex != 1) ||
+            Function.Blocks.Num() < (bHasPreheader ? 4 : 3) ||
+            Function.Blocks.Num() > (bHasPreheader ? 6 : 5) ||
+            Function.Blocks.FilterByPredicate(
+                [](const FBPSemanticBasicBlock& Block)
+                {
+                    return Block.Terminator == EBPSemanticBlockTerminatorKind::Loop;
+                }).Num() != 1)
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s has an unsupported Loop CFG shape"),
+                *Function.Name.ToString()));
+            return false;
+        }
+
+        TMap<FGuid, const FBPSemanticBasicBlock*> BlocksById;
+        for (const FBPSemanticBasicBlock& Block : Function.Blocks)
+        {
+            if (Block.BlockId.IsValid() == false || BlocksById.Contains(Block.BlockId))
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Semantic function %s requires unique valid BlockIds"),
+                    *Function.Name.ToString()));
+                return false;
+            }
+            BlocksById.Add(Block.BlockId, &Block);
+        }
+
+        const FBPSemanticBasicBlock& HeaderBlock = Function.Blocks[LoopBlockIndex];
+        if (bHasPreheader)
+        {
+            const FBPSemanticBasicBlock& PreheaderBlock = Function.Blocks[0];
+            if (PreheaderBlock.Statements.IsEmpty() ||
+                PreheaderBlock.Terminator != EBPSemanticBlockTerminatorKind::Fallthrough ||
+                PreheaderBlock.SuccessorBlockIds.Num() != 1 ||
+                PreheaderBlock.SuccessorBlockIds[0] != HeaderBlock.BlockId)
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Semantic function %s Loop CFG has an invalid Preheader block"),
+                    *Function.Name.ToString()));
+                return false;
+            }
+        }
+        if (HeaderBlock.Statements.Num() != 1 ||
+            (HeaderBlock.Statements[0].Kind != EBPSemanticStatementKind::ForLoop &&
+             HeaderBlock.Statements[0].Kind != EBPSemanticStatementKind::ForEachLoop) ||
+            HeaderBlock.Statements[0].LoopBodyStatements.IsEmpty() == false ||
+            HeaderBlock.Statements[0].CompletedStatements.IsEmpty() == false ||
+            HeaderBlock.SuccessorBlockIds.Num() != 2 ||
+            HeaderBlock.SuccessorBlockIds[0] == HeaderBlock.SuccessorBlockIds[1])
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s requires one unstructured Loop statement and Body/Completed successors"),
+                *Function.Name.ToString()));
+            return false;
+        }
+        const FBPSemanticBasicBlock* const* BodyBlockValue =
+            BlocksById.Find(HeaderBlock.SuccessorBlockIds[0]);
+        const FBPSemanticBasicBlock* const* CompletedBlockValue =
+            BlocksById.Find(HeaderBlock.SuccessorBlockIds[1]);
+        const FBPSemanticBasicBlock* BodyBlock =
+            BodyBlockValue != nullptr ? *BodyBlockValue : nullptr;
+        const FBPSemanticBasicBlock* CompletedBlock =
+            CompletedBlockValue != nullptr ? *CompletedBlockValue : nullptr;
+        if (BodyBlock == nullptr || CompletedBlock == nullptr ||
+            BodyBlock->Statements.IsEmpty() ||
+            CompletedBlock->Terminator != EBPSemanticBlockTerminatorKind::End ||
+            CompletedBlock->SuccessorBlockIds.IsEmpty() == false)
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s Loop CFG requires a Body back-edge and terminal Completed block"),
+                *Function.Name.ToString()));
+            return false;
+        }
+
+        FBPSemanticStatement StructuredLoop = HeaderBlock.Statements[0];
+        if (BodyBlock->Terminator == EBPSemanticBlockTerminatorKind::Branch)
+        {
+            const int32 ExpectedBranchBlockCount = bHasPreheader ? 6 : 5;
+            if (Function.Blocks.Num() != ExpectedBranchBlockCount ||
+                BodyBlock->Statements.Num() != 1 ||
+                BodyBlock->Statements[0].Kind != EBPSemanticStatementKind::Branch ||
+                BodyBlock->Statements[0].ThenStatements.IsEmpty() == false ||
+                BodyBlock->Statements[0].ElseStatements.IsEmpty() == false ||
+                BodyBlock->SuccessorBlockIds.Num() != 2 ||
+                BodyBlock->SuccessorBlockIds[0] == BodyBlock->SuccessorBlockIds[1])
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Semantic function %s Loop Body Branch CFG is invalid"),
+                    *Function.Name.ToString()));
+                return false;
+            }
+            const FBPSemanticBasicBlock* const* TrueBlockValue =
+                BlocksById.Find(BodyBlock->SuccessorBlockIds[0]);
+            const FBPSemanticBasicBlock* const* FalseBlockValue =
+                BlocksById.Find(BodyBlock->SuccessorBlockIds[1]);
+            const FBPSemanticBasicBlock* TrueBlock =
+                TrueBlockValue != nullptr ? *TrueBlockValue : nullptr;
+            const FBPSemanticBasicBlock* FalseBlock =
+                FalseBlockValue != nullptr ? *FalseBlockValue : nullptr;
+            const auto IsLoopLatch = [&HeaderBlock](const FBPSemanticBasicBlock* Block)
+            {
+                return Block != nullptr && Block->Statements.IsEmpty() == false &&
+                    Block->Terminator == EBPSemanticBlockTerminatorKind::Fallthrough &&
+                    Block->SuccessorBlockIds.Num() == 1 &&
+                    Block->SuccessorBlockIds[0] == HeaderBlock.BlockId;
+            };
+            if (TrueBlock == FalseBlock || IsLoopLatch(TrueBlock) == false ||
+                IsLoopLatch(FalseBlock) == false)
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Semantic function %s Loop Body Branch requires True/False back-edges"),
+                    *Function.Name.ToString()));
+                return false;
+            }
+            FBPSemanticStatement StructuredBranch = BodyBlock->Statements[0];
+            StructuredBranch.ThenStatements = TrueBlock->Statements;
+            StructuredBranch.ElseStatements = FalseBlock->Statements;
+            StructuredLoop.LoopBodyStatements.Add(MoveTemp(StructuredBranch));
+        }
+        else
+        {
+            const int32 ExpectedSimpleBlockCount = bHasPreheader ? 4 : 3;
+            if (Function.Blocks.Num() != ExpectedSimpleBlockCount ||
+                BodyBlock->Terminator != EBPSemanticBlockTerminatorKind::Fallthrough ||
+                BodyBlock->SuccessorBlockIds.Num() != 1 ||
+                BodyBlock->SuccessorBlockIds[0] != HeaderBlock.BlockId)
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Semantic function %s Loop CFG requires a Body back-edge"),
+                    *Function.Name.ToString()));
+                return false;
+            }
+            StructuredLoop.LoopBodyStatements = BodyBlock->Statements;
+        }
+        StructuredLoop.CompletedStatements = CompletedBlock->Statements;
+        if (bHasPreheader)
+        {
+            OutStatements.Append(Function.Blocks[0].Statements);
+        }
+        OutStatements.Add(MoveTemp(StructuredLoop));
+        return true;
+    }
+
+    const int32 BranchBlockIndex = Function.Blocks.IndexOfByPredicate(
+        [](const FBPSemanticBasicBlock& Block)
+        {
+            return Block.Terminator == EBPSemanticBlockTerminatorKind::Branch;
+        });
+    if (BranchBlockIndex != INDEX_NONE)
+    {
+        // 最初のCFG対応は、入口BranchからTrue/Falseへ分かれ、両枝が終了するか
+        // 同じJoinへFallthroughする正規形に限定する。既存の構造化Emitterへ渡す
+        // 前に接続を厳密に検証し、BasicBlock順から制御フローを推測しない。
+        if (Function.ReturnType.Kind != EBPSemanticTypeKind::Void ||
+            BranchBlockIndex != 0 ||
+            Function.Blocks.FilterByPredicate(
+                [](const FBPSemanticBasicBlock& Block)
+                {
+                    return Block.Terminator == EBPSemanticBlockTerminatorKind::Branch;
+                }).Num() != 1)
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s has an unsupported Branch CFG shape"),
+                *Function.Name.ToString()));
+            return false;
+        }
+
+        TMap<FGuid, const FBPSemanticBasicBlock*> BlocksById;
+        for (const FBPSemanticBasicBlock& Block : Function.Blocks)
+        {
+            if (Block.BlockId.IsValid() == false || BlocksById.Contains(Block.BlockId))
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Semantic function %s requires unique valid BlockIds"),
+                    *Function.Name.ToString()));
+                return false;
+            }
+            BlocksById.Add(Block.BlockId, &Block);
+        }
+
+        const FBPSemanticBasicBlock& BranchBlock = Function.Blocks[0];
+        if (BranchBlock.Statements.Num() != 1 ||
+            BranchBlock.Statements[0].Kind != EBPSemanticStatementKind::Branch ||
+            BranchBlock.Statements[0].ThenStatements.IsEmpty() == false ||
+            BranchBlock.Statements[0].ElseStatements.IsEmpty() == false ||
+            BranchBlock.SuccessorBlockIds.Num() != 2 ||
+            BranchBlock.SuccessorBlockIds[0] == BranchBlock.SuccessorBlockIds[1])
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s requires one unstructured Branch statement and True/False successors"),
+                *Function.Name.ToString()));
+            return false;
+        }
+        const FBPSemanticBasicBlock* const* TrueBlockValue =
+            BlocksById.Find(BranchBlock.SuccessorBlockIds[0]);
+        const FBPSemanticBasicBlock* const* FalseBlockValue =
+            BlocksById.Find(BranchBlock.SuccessorBlockIds[1]);
+        const FBPSemanticBasicBlock* TrueBlock =
+            TrueBlockValue != nullptr ? *TrueBlockValue : nullptr;
+        const FBPSemanticBasicBlock* FalseBlock =
+            FalseBlockValue != nullptr ? *FalseBlockValue : nullptr;
+        if (TrueBlock == nullptr || FalseBlock == nullptr ||
+            TrueBlock->Statements.IsEmpty() || FalseBlock->Statements.IsEmpty())
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s Branch CFG references an unknown or empty successor"),
+                *Function.Name.ToString()));
+            return false;
+        }
+
+        const bool bTerminalBranches =
+            TrueBlock->Terminator == EBPSemanticBlockTerminatorKind::End &&
+            FalseBlock->Terminator == EBPSemanticBlockTerminatorKind::End &&
+            TrueBlock->SuccessorBlockIds.IsEmpty() &&
+            FalseBlock->SuccessorBlockIds.IsEmpty();
+        const bool bJoinedBranches =
+            TrueBlock->Terminator == EBPSemanticBlockTerminatorKind::Fallthrough &&
+            FalseBlock->Terminator == EBPSemanticBlockTerminatorKind::Fallthrough &&
+            TrueBlock->SuccessorBlockIds.Num() == 1 &&
+            FalseBlock->SuccessorBlockIds.Num() == 1 &&
+            TrueBlock->SuccessorBlockIds[0] == FalseBlock->SuccessorBlockIds[0];
+        const FBPSemanticBasicBlock* JoinBlock = nullptr;
+        if (bJoinedBranches)
+        {
+            const FBPSemanticBasicBlock* const* JoinBlockValue =
+                BlocksById.Find(TrueBlock->SuccessorBlockIds[0]);
+            JoinBlock = JoinBlockValue != nullptr ? *JoinBlockValue : nullptr;
+            if (JoinBlock == nullptr || JoinBlock == TrueBlock || JoinBlock == FalseBlock ||
+                JoinBlock->Terminator != EBPSemanticBlockTerminatorKind::End ||
+                JoinBlock->SuccessorBlockIds.IsEmpty() == false ||
+                JoinBlock->Statements.IsEmpty())
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Semantic function %s has an invalid Branch join block"),
+                    *Function.Name.ToString()));
+                return false;
+            }
+        }
+        else if (bTerminalBranches == false)
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s Branch successors must terminate or share one join block"),
+                *Function.Name.ToString()));
+            return false;
+        }
+
+        const int32 ExpectedBlockCount = JoinBlock != nullptr ? 4 : 3;
+        if (Function.Blocks.Num() != ExpectedBlockCount)
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s Branch CFG contains unreachable or unsupported blocks"),
+                *Function.Name.ToString()));
+            return false;
+        }
+        FBPSemanticStatement StructuredBranch = BranchBlock.Statements[0];
+        StructuredBranch.ThenStatements = TrueBlock->Statements;
+        StructuredBranch.ElseStatements = FalseBlock->Statements;
+        OutStatements.Add(MoveTemp(StructuredBranch));
+        if (JoinBlock != nullptr)
+        {
+            OutStatements.Append(JoinBlock->Statements);
+        }
+        return true;
+    }
+
     TSet<FGuid> BlockIds;
     for (int32 BlockIndex = 0; BlockIndex < Function.Blocks.Num(); ++BlockIndex)
     {

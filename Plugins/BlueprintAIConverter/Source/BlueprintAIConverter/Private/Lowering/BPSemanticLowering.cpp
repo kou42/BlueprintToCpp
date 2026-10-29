@@ -1972,26 +1972,45 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     {
         return false;
     }
-    FBPSemanticBasicBlock Block;
-    Block.SourceEntryNodeId = Entry->Id;
+    FBPSemanticBasicBlock BranchBlock;
+    BranchBlock.BlockId = FGuid::NewGuid();
+    BranchBlock.SourceEntryNodeId = Entry->Id;
+    BranchBlock.Terminator = EBPSemanticBlockTerminatorKind::Branch;
     FBPSemanticStatement BranchStatement;
     BranchStatement.Kind = EBPSemanticStatementKind::Branch;
     BranchStatement.SourceNodeId = Branch->Id;
     BranchStatement.Expression = MoveTemp(ConditionExpression);
+    BranchBlock.Statements.Add(MoveTemp(BranchStatement));
+
+    FBPSemanticBasicBlock ThenBlock;
+    ThenBlock.BlockId = FGuid::NewGuid();
+    ThenBlock.SourceEntryNodeId = Entry->Id;
+    ThenBlock.Terminator = EBPSemanticBlockTerminatorKind::End;
     FBPSemanticStatement ThenStatement;
     ThenStatement.Kind = EBPSemanticStatementKind::Expression;
     ThenStatement.SourceNodeId = ThenPrint->Id;
     ThenStatement.Expression = MakePrintStringExpression(
         ThenValues, *ThenPrint, GraphIR.ParentClassPath);
-    BranchStatement.ThenStatements.Add(MoveTemp(ThenStatement));
+    ThenBlock.Statements.Add(MoveTemp(ThenStatement));
+
+    FBPSemanticBasicBlock ElseBlock;
+    ElseBlock.BlockId = FGuid::NewGuid();
+    ElseBlock.SourceEntryNodeId = Entry->Id;
+    ElseBlock.Terminator = EBPSemanticBlockTerminatorKind::End;
     FBPSemanticStatement ElseStatement;
     ElseStatement.Kind = EBPSemanticStatementKind::Expression;
     ElseStatement.SourceNodeId = ElsePrint->Id;
     ElseStatement.Expression = MakePrintStringExpression(
         ElseValues, *ElsePrint, GraphIR.ParentClassPath);
-    BranchStatement.ElseStatements.Add(MoveTemp(ElseStatement));
-    Block.Statements.Add(MoveTemp(BranchStatement));
-    Function.Blocks.Add(MoveTemp(Block));
+    ElseBlock.Statements.Add(MoveTemp(ElseStatement));
+
+    // Branch後続はTrue、Falseの順。各枝のFunction Result到達は上で検証済みで、
+    // この限定形状では両枝が独立して関数末尾へ到達する。
+    BranchBlock.SuccessorBlockIds.Add(ThenBlock.BlockId);
+    BranchBlock.SuccessorBlockIds.Add(ElseBlock.BlockId);
+    Function.Blocks.Add(MoveTemp(BranchBlock));
+    Function.Blocks.Add(MoveTemp(ThenBlock));
+    Function.Blocks.Add(MoveTemp(ElseBlock));
     OutIR.Functions.Add(MoveTemp(Function));
     return OutIR.HasErrors() == false;
 }
@@ -5664,6 +5683,130 @@ bool LowerSequenceImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
     OutIR.Functions.Add(MoveTemp(Function));
     return OutIR.HasErrors() == false;
 }
+
+// トップレベルLoopとその先行文を、Preheader／Header／Body／Completedの
+// 明示CFGへ移す。Loopより後ろに文がある形は別の合流解析が必要なため扱わない。
+bool PromoteTopLevelLoopToCfg(FBPSemanticIR& IR)
+{
+    if (IR.Functions.Num() != 1)
+    {
+        return true;
+    }
+    FBPSemanticFunction& Function = IR.Functions[0];
+    if (Function.Blocks.Num() != 1 || Function.Blocks[0].Statements.IsEmpty())
+    {
+        return true;
+    }
+    const int32 LoopStatementIndex = Function.Blocks[0].Statements.Num() - 1;
+    FBPSemanticStatement& SourceLoop =
+        Function.Blocks[0].Statements[LoopStatementIndex];
+    if ((SourceLoop.Kind != EBPSemanticStatementKind::ForLoop &&
+         SourceLoop.Kind != EBPSemanticStatementKind::ForEachLoop) ||
+        SourceLoop.LoopBodyStatements.IsEmpty())
+    {
+        return true;
+    }
+
+    for (int32 Index = 0; Index < LoopStatementIndex; ++Index)
+    {
+        if (Function.Blocks[0].Statements[Index].Kind !=
+            EBPSemanticStatementKind::Expression)
+        {
+            return true;
+        }
+    }
+
+    FBPSemanticStatement HeaderStatement = MoveTemp(SourceLoop);
+    TArray<FBPSemanticStatement> PreheaderStatements;
+    for (int32 Index = 0; Index < LoopStatementIndex; ++Index)
+    {
+        PreheaderStatements.Add(MoveTemp(Function.Blocks[0].Statements[Index]));
+    }
+    TArray<FBPSemanticStatement> BodyStatements =
+        MoveTemp(HeaderStatement.LoopBodyStatements);
+    TArray<FBPSemanticStatement> CompletedStatements =
+        MoveTemp(HeaderStatement.CompletedStatements);
+    HeaderStatement.LoopBodyStatements.Reset();
+    HeaderStatement.CompletedStatements.Reset();
+
+    const FGuid SourceEntryNodeId = Function.Blocks[0].SourceEntryNodeId;
+    FBPSemanticBasicBlock HeaderBlock;
+    HeaderBlock.BlockId = FGuid::NewGuid();
+    HeaderBlock.SourceEntryNodeId = SourceEntryNodeId;
+    HeaderBlock.Terminator = EBPSemanticBlockTerminatorKind::Loop;
+    HeaderBlock.Statements.Add(MoveTemp(HeaderStatement));
+
+    FBPSemanticBasicBlock BodyBlock;
+    BodyBlock.BlockId = FGuid::NewGuid();
+    BodyBlock.SourceEntryNodeId = SourceEntryNodeId;
+
+    // Loop Body直下の単一Branchは、Branch文とTrue／False latchを独立Blockへ
+    // 展開する。各枝からHeaderへ戻る接続を明示し、構造化配列とCFGの二重管理を
+    // 避ける。複数文や空の枝を含む形は、従来どおり単一Body Blockに保持する。
+    const bool bPromoteBodyBranch =
+        BodyStatements.Num() == 1 &&
+        BodyStatements[0].Kind == EBPSemanticStatementKind::Branch &&
+        BodyStatements[0].ThenStatements.IsEmpty() == false &&
+        BodyStatements[0].ElseStatements.IsEmpty() == false;
+    FBPSemanticBasicBlock TrueBodyBlock;
+    FBPSemanticBasicBlock FalseBodyBlock;
+    if (bPromoteBodyBranch)
+    {
+        FBPSemanticStatement BranchStatement = MoveTemp(BodyStatements[0]);
+        TrueBodyBlock.BlockId = FGuid::NewGuid();
+        TrueBodyBlock.SourceEntryNodeId = SourceEntryNodeId;
+        TrueBodyBlock.Terminator = EBPSemanticBlockTerminatorKind::Fallthrough;
+        TrueBodyBlock.Statements = MoveTemp(BranchStatement.ThenStatements);
+        TrueBodyBlock.SuccessorBlockIds.Add(HeaderBlock.BlockId);
+
+        FalseBodyBlock.BlockId = FGuid::NewGuid();
+        FalseBodyBlock.SourceEntryNodeId = SourceEntryNodeId;
+        FalseBodyBlock.Terminator = EBPSemanticBlockTerminatorKind::Fallthrough;
+        FalseBodyBlock.Statements = MoveTemp(BranchStatement.ElseStatements);
+        FalseBodyBlock.SuccessorBlockIds.Add(HeaderBlock.BlockId);
+
+        BranchStatement.ThenStatements.Reset();
+        BranchStatement.ElseStatements.Reset();
+        BodyBlock.Terminator = EBPSemanticBlockTerminatorKind::Branch;
+        BodyBlock.Statements.Add(MoveTemp(BranchStatement));
+        BodyBlock.SuccessorBlockIds = {
+            TrueBodyBlock.BlockId, FalseBodyBlock.BlockId };
+    }
+    else
+    {
+        BodyBlock.Terminator = EBPSemanticBlockTerminatorKind::Fallthrough;
+        BodyBlock.Statements = MoveTemp(BodyStatements);
+        BodyBlock.SuccessorBlockIds.Add(HeaderBlock.BlockId);
+    }
+
+    FBPSemanticBasicBlock CompletedBlock;
+    CompletedBlock.BlockId = FGuid::NewGuid();
+    CompletedBlock.SourceEntryNodeId = SourceEntryNodeId;
+    CompletedBlock.Terminator = EBPSemanticBlockTerminatorKind::End;
+    CompletedBlock.Statements = MoveTemp(CompletedStatements);
+
+    HeaderBlock.SuccessorBlockIds = { BodyBlock.BlockId, CompletedBlock.BlockId };
+    Function.Blocks.Reset();
+    if (PreheaderStatements.IsEmpty() == false)
+    {
+        FBPSemanticBasicBlock PreheaderBlock;
+        PreheaderBlock.BlockId = FGuid::NewGuid();
+        PreheaderBlock.SourceEntryNodeId = SourceEntryNodeId;
+        PreheaderBlock.Terminator = EBPSemanticBlockTerminatorKind::Fallthrough;
+        PreheaderBlock.SuccessorBlockIds.Add(HeaderBlock.BlockId);
+        PreheaderBlock.Statements = MoveTemp(PreheaderStatements);
+        Function.Blocks.Add(MoveTemp(PreheaderBlock));
+    }
+    Function.Blocks.Add(MoveTemp(HeaderBlock));
+    Function.Blocks.Add(MoveTemp(BodyBlock));
+    if (bPromoteBodyBranch)
+    {
+        Function.Blocks.Add(MoveTemp(TrueBodyBlock));
+        Function.Blocks.Add(MoveTemp(FalseBodyBlock));
+    }
+    Function.Blocks.Add(MoveTemp(CompletedBlock));
+    return true;
+}
 }
 
 bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
@@ -5680,6 +5823,56 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
         }
         return false;
     }
+
+    // 既存の各Lowererは一つのEntryグラフを厳密に検証する。Blueprintに複数の
+    // 通常関数／Eventがある場合は、グラフごとに同じ検証経路へ通してから
+    // Semantic IRへ原子的に統合する。途中で一つでも失敗した場合、部分的な
+    // 関数集合は公開しない。
+    int32 ConnectedGraphCount = 0;
+    for (const FBPIRGraph& Graph : GraphIR.Graphs)
+    {
+        if (Graph.ExecEdges.IsEmpty() == false || Graph.DataEdges.IsEmpty() == false)
+        {
+            ++ConnectedGraphCount;
+        }
+    }
+    if (ConnectedGraphCount > 1 && Blueprint != nullptr)
+    {
+        FBPSemanticIR CombinedIR;
+        CombinedIR.AssetPath = GraphIR.AssetPath;
+        CombinedIR.ParentClassPath = GraphIR.ParentClassPath;
+        bool bVariablesCopied = false;
+        for (const FBPIRGraph& Graph : GraphIR.Graphs)
+        {
+            if (Graph.ExecEdges.IsEmpty() && Graph.DataEdges.IsEmpty())
+            {
+                continue;
+            }
+
+            FBPGraphIR FunctionGraphIR = GraphIR;
+            FunctionGraphIR.Graphs.Reset();
+            FunctionGraphIR.Graphs.Add(Graph);
+            FBPSemanticIR FunctionIR;
+            if (Lower(Blueprint, FunctionGraphIR, FunctionIR) == false)
+            {
+                CombinedIR.Functions.Reset();
+                CombinedIR.Diagnostics.Append(MoveTemp(FunctionIR.Diagnostics));
+                OutIR = MoveTemp(CombinedIR);
+                return false;
+            }
+            CombinedIR.Functions.Append(MoveTemp(FunctionIR.Functions));
+            CombinedIR.Diagnostics.Append(MoveTemp(FunctionIR.Diagnostics));
+            if (bVariablesCopied == false)
+            {
+                CombinedIR.Variables = MoveTemp(FunctionIR.Variables);
+                bVariablesCopied = true;
+            }
+        }
+        OutIR = MoveTemp(CombinedIR);
+        return OutIR.Functions.Num() == ConnectedGraphCount &&
+            OutIR.HasErrors() == false;
+    }
+
     const FBPIRGraph* ActiveGraph = nullptr;
     const FBPIRNode* ActiveEntry = nullptr;
     if (ValidateExecutableGraphEntries(
@@ -5760,7 +5953,12 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
                             TEXT("ForEachLoop requires a compiled Blueprint for array type resolution"));
                         return false;
                     }
-                    return LowerForEachLoopImpl(Blueprint, GraphIR, OutIR);
+                    if (LowerForEachLoopImpl(Blueprint, GraphIR, OutIR) == false)
+                    {
+                        return false;
+                    }
+                    return PromoteTopLevelLoopToCfg(OutIR) &&
+                        OutIR.HasErrors() == false;
                 }
                 if (Blueprint == nullptr)
                 {
@@ -5768,7 +5966,12 @@ bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
                         TEXT("ForEachLoopWithBreak requires a compiled Blueprint for array type resolution"));
                     return false;
                 }
-                return LowerForEachLoopImpl(Blueprint, GraphIR, OutIR);
+                if (LowerForEachLoopImpl(Blueprint, GraphIR, OutIR) == false)
+                {
+                    return false;
+                }
+                return PromoteTopLevelLoopToCfg(OutIR) &&
+                    OutIR.HasErrors() == false;
             }
         }
     }
@@ -5880,5 +6083,9 @@ bool FBPSemanticLowering::LowerForLoop(const FBPGraphIR& GraphIR, FBPSemanticIR&
 bool FBPSemanticLowering::LowerForLoop(const UBlueprint* Blueprint,
     const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
-    return LowerForLoopImpl(Blueprint, GraphIR, OutIR);
+    if (LowerForLoopImpl(Blueprint, GraphIR, OutIR) == false)
+    {
+        return false;
+    }
+    return PromoteTopLevelLoopToCfg(OutIR) && OutIR.HasErrors() == false;
 }

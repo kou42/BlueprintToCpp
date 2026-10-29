@@ -153,7 +153,7 @@ bool FBPRealComparisonBranchConversionTest::RunTest(const FString& Parameters)
         }
         return false;
     }
-    if (SemanticIR.Functions.Num() != 1 || SemanticIR.Functions[0].Blocks.Num() != 1 ||
+    if (SemanticIR.Functions.Num() != 1 || SemanticIR.Functions[0].Blocks.Num() != 3 ||
         SemanticIR.Functions[0].Blocks[0].Statements.Num() != 1)
     {
         AddError(TEXT("比較Branch Semantic IRの関数構造が不正です"));
