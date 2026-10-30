@@ -5,6 +5,15 @@
 #include "BPSemanticLowering.h"
 #include "BPPrintStringAnalyzer.h"
 #include "BPSemanticCodeGenerator.h"
+#include "BPSemanticClassExtractor.h"
+#include "BPSemanticGraphTraceExtractor.h"
+#include "BPSemanticJsonExporter.h"
+#include "BPSemanticJsonSerializer.h"
+#include "Dom/JsonObject.h"
+#include "Misc/EngineVersion.h"
+#include "Misc/FileHelper.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "K2Node_CallFunction.h"
@@ -12,6 +21,10 @@
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_FunctionResult.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Kismet/GameplayStatics.h"
+#include "K2Node_Event.h"
+#include "GameFramework/Actor.h"
+#include "Algo/Reverse.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 
@@ -483,6 +496,39 @@ bool FBPSemanticMultipleFunctionGraphRoundtripTest::RunTest(const FString& Param
     {
         return false;
     }
+    UEdGraph* EventGraph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+    if (TestNotNull(TEXT("複数関数BlueprintのEvent Graph"), EventGraph) == false)
+    {
+        return false;
+    }
+    EventGraph->Nodes.Reset();
+    UK2Node_CustomEvent* Event = NewObject<UK2Node_CustomEvent>(EventGraph);
+    EventGraph->AddNode(Event, false, false);
+    Event->CreateNewGuid();
+    Event->PostPlacedNewNode();
+    Event->CustomFunctionName = TEXT("OnConverted");
+    Event->AllocateDefaultPins();
+    UK2Node_CallFunction* EventPrint = NewObject<UK2Node_CallFunction>(EventGraph);
+    EventGraph->AddNode(EventPrint, false, false);
+    EventPrint->CreateNewGuid();
+    EventPrint->PostPlacedNewNode();
+    EventPrint->SetFromFunction(
+        UKismetSystemLibrary::StaticClass()->FindFunctionByName(TEXT("PrintString")));
+    EventPrint->AllocateDefaultPins();
+    EventPrint->FindPinChecked(TEXT("InString"))->DefaultValue = TEXT("Converted event");
+    if (TestTrue(TEXT("Custom Eventを接続"), Schema->TryCreateConnection(
+            Event->FindPinChecked(UEdGraphSchema_K2::PN_Then),
+            EventPrint->FindPinChecked(UEdGraphSchema_K2::PN_Execute))) == false)
+    {
+        return false;
+    }
+    FEdGraphPinType CountType;
+    CountType.PinCategory = UEdGraphSchema_K2::PC_Int;
+    if (TestTrue(TEXT("共有メンバーを追加"), FBlueprintEditorUtils::AddMemberVariable(
+            Blueprint, TEXT("Count"), CountType, TEXT("42"))) == false)
+    {
+        return false;
+    }
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
 
     FBPGraphIR GraphIR;
@@ -502,7 +548,7 @@ bool FBPSemanticMultipleFunctionGraphRoundtripTest::RunTest(const FString& Param
         }
         return false;
     }
-    if (TestEqual(TEXT("Semantic関数を2つ保持"), Semantic.Functions.Num(), 2) == false)
+    if (TestEqual(TEXT("通常関数2つとイベントを保持"), Semantic.Functions.Num(), 3) == false)
     {
         return false;
     }
@@ -517,6 +563,17 @@ bool FBPSemanticMultipleFunctionGraphRoundtripTest::RunTest(const FString& Param
             return Function.Name == TEXT("RunSecond");
         }));
 
+    TestEqual(TEXT("共有メンバーを重複なく保持"), Semantic.Variables.Num(), 1);
+    TestTrue(TEXT("Custom Event由来を保持"), Semantic.Functions.ContainsByPredicate(
+        [](const FBPSemanticFunction& Function)
+        {
+            return Function.Name == TEXT("OnConverted") && Function.bIsEventGraph;
+        }));
+    for (const FBPSemanticFunction& Function : Semantic.Functions)
+    {
+        TestEqual(TEXT("実Reflectionのpublicを保持"), Function.Visibility,
+            EBPSemanticFunctionVisibility::Public);
+    }
     FBPGeneratedActorFiles Files;
     TArray<FString> Diagnostics;
     if (TestTrue(TEXT("複数関数を一つのUCLASSへ生成"),
@@ -534,6 +591,26 @@ bool FBPSemanticMultipleFunctionGraphRoundtripTest::RunTest(const FString& Param
     TestTrue(TEXT("RunSecond定義を生成"), Files.SourceContent.Contains(
         TEXT("void UMultipleFunctionGenerated::RunSecond()")));
 
+    TestTrue(TEXT("Custom Event本体を同じクラスへ生成"), Files.SourceContent.Contains(
+        TEXT("void UMultipleFunctionGenerated::OnConverted_Implementation()")));
+    TestTrue(TEXT("UObject親を保持"), Files.HeaderContent.Contains(
+        TEXT("class UMultipleFunctionGenerated : public UObject")));
+    FBPGraphIR DuplicateGraphIR = GraphIR;
+    const FBPIRGraph* FirstGraph = GraphIR.Graphs.FindByPredicate(
+        [](const FBPIRGraph& Graph) { return Graph.Name == TEXT("RunFirst"); });
+    if (TestNotNull(TEXT("重複確認用RunFirst"), FirstGraph) == false) { return false; }
+    DuplicateGraphIR.Graphs.Add(*FirstGraph);
+    FBPSemanticIR DuplicateSemantic;
+    TestFalse(TEXT("同名関数グラフを統合時に拒否"),
+        FBPSemanticLowering::Lower(Blueprint, DuplicateGraphIR, DuplicateSemantic));
+    TestTrue(TEXT("重複拒否時に部分関数・変数を公開しない"),
+        DuplicateSemantic.Functions.IsEmpty() && DuplicateSemantic.Variables.IsEmpty());
+    TestTrue(TEXT("重複の関数名とグラフ名を診断"),
+        DuplicateSemantic.Diagnostics.ContainsByPredicate([](const FBPSemanticDiagnostic& Diagnostic)
+        {
+            return Diagnostic.GraphName == TEXT("RunFirst") &&
+                Diagnostic.Message.Contains(TEXT("Duplicate semantic function"));
+        }));
     FBPGraphIR UnsupportedGraphIR = GraphIR;
     FBPIRGraph* SecondGraph = UnsupportedGraphIR.Graphs.FindByPredicate(
         [](const FBPIRGraph& Graph)
@@ -560,6 +637,55 @@ bool FBPSemanticMultipleFunctionGraphRoundtripTest::RunTest(const FString& Param
     TestTrue(TEXT("失敗時に部分的な関数集合を公開しない"),
         RejectedSemantic.Functions.IsEmpty());
     TestTrue(TEXT("失敗理由を保持"), RejectedSemantic.HasErrors());
+    TestTrue(TEXT("失敗時に部分的なメンバーも公開しない"), RejectedSemantic.Variables.IsEmpty());
+
+    FBPSemanticGraphTraceExtractor::Append(GraphIR, Semantic);
+    TestTrue(TEXT("クラス情報を抽出"), FBPSemanticClassExtractor::Append(Blueprint, Semantic));
+    FString Serialized;
+    const FString EngineVersion = FEngineVersion::Current().ToString();
+    if (TestTrue(TEXT("複数関数をJSONへ変換"),
+            FBPSemanticJsonSerializer::Serialize(Semantic, EngineVersion, Serialized)) == false)
+    {
+        return false;
+    }
+    FString ExportPath;
+    FString ExportError;
+    if (TestTrue(TEXT("複数関数とCustom Eventの実JSONを保存"),
+            FBPSemanticJsonExporter::Export(Semantic, EngineVersion, ExportPath, ExportError)) == false)
+    {
+        AddError(ExportError);
+        return false;
+    }
+    FString Exported;
+    if (TestTrue(TEXT("保存JSONを再読込"),
+            FFileHelper::LoadFileToString(Exported, *ExportPath)) == false) { return false; }
+    TestEqual(TEXT("再シリアライズ時も出力を維持"), Exported, Serialized);
+    TSharedPtr<FJsonObject> Root;
+    if (TestTrue(TEXT("保存JSONを再解析"), FJsonSerializer::Deserialize(
+            TJsonReaderFactory<>::Create(Exported), Root)) == false || Root.IsValid() == false)
+    {
+        return false;
+    }
+    TestEqual(TEXT("JSONに関数3つを保持"), Root->GetArrayField(TEXT("functions")).Num(), 3);
+    TestEqual(TEXT("JSONに共有変数1つを保持"), Root->GetArrayField(TEXT("variables")).Num(), 1);
+    TestEqual(TEXT("JSONに全グラフの由来を保持"),
+        Root->GetArrayField(TEXT("graph_traces")).Num(), GraphIR.Graphs.Num());
+    TestEqual(TEXT("JSONにUObject親を保持"),
+        Root->GetObjectField(TEXT("source"))->GetStringField(TEXT("parent_class_path")),
+        UObject::StaticClass()->GetPathName());
+    bool bFoundEvent = false;
+    for (const TSharedPtr<FJsonValue>& Value : Root->GetArrayField(TEXT("functions")))
+    {
+        const TSharedPtr<FJsonObject> FunctionJson = Value->AsObject();
+        TestEqual(TEXT("JSONにpublicを保持"), FunctionJson->GetStringField(TEXT("visibility")),
+            FString(TEXT("public")));
+        if (FunctionJson->GetStringField(TEXT("name")) == TEXT("OnConverted"))
+        {
+            bFoundEvent = FunctionJson->GetBoolField(TEXT("is_event_graph"));
+        }
+    }
+    TestTrue(TEXT("JSONにCustom Event由来を保持"), bFoundEvent);
+    AddInfo(FString::Printf(TEXT("SEMANTIC_ROUNDTRIP_ARTIFACT=%s"), *ExportPath));
     return true;
 }
 
@@ -667,5 +793,230 @@ bool FBPSemanticCustomEventRoundtripTest::RunTest(const FString& Parameters)
         TEXT("void UCustomEventGenerated::OnConverted_Implementation()")));
     return true;
 }
+
+namespace
+{
+bool RunEntryCallChainTest(FAutomationTestBase& Test, int32 Mode)
+{
+    const bool bFunction = Mode == 0 || Mode == 3 || Mode == 4;
+    const bool bSingleCall = Mode == 4;
+    const bool bBeginPlay = Mode == 2;
+    const bool bMixedPrint = Mode == 3;
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        bBeginPlay ? AActor::StaticClass() : UObject::StaticClass(), GetTransientPackage(),
+        MakeUniqueObjectName(GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_CallChain")),
+        BPTYPE_Normal, NAME_None);
+    if (Test.TestNotNull(TEXT("Call列用Blueprint"), Blueprint) == false) { return false; }
+    UEdGraph* Graph = nullptr;
+    UK2Node* Entry = nullptr;
+    UK2Node_FunctionResult* Result = nullptr;
+    if (bFunction)
+    {
+        Graph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, TEXT("RunCalls"),
+            UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+        FBlueprintEditorUtils::AddFunctionGraph<UFunction>(Blueprint, Graph, true, nullptr);
+        for (UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (UK2Node_FunctionEntry* Candidate = Cast<UK2Node_FunctionEntry>(Node)) { Entry = Candidate; }
+            if (UK2Node_FunctionResult* Candidate = Cast<UK2Node_FunctionResult>(Node)) { Result = Candidate; }
+        }
+        if (Result == nullptr)
+        {
+            Result = NewObject<UK2Node_FunctionResult>(Graph);
+            Graph->AddNode(Result, false, false);
+            Result->CreateNewGuid();
+            Result->PostPlacedNewNode();
+            Result->FunctionReference.SetSelfMember(TEXT("RunCalls"));
+            Result->AllocateDefaultPins();
+        }
+    }
+    else
+    {
+        Graph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+        if (Test.TestNotNull(TEXT("Event Graph"), Graph) == false) { return false; }
+        Graph->Nodes.Reset();
+        if (bBeginPlay)
+        {
+            UK2Node_Event* Event = NewObject<UK2Node_Event>(Graph);
+            Event->EventReference.SetExternalMember(TEXT("ReceiveBeginPlay"), AActor::StaticClass());
+            Event->bOverrideFunction = true;
+            Entry = Event;
+        }
+        else
+        {
+            UK2Node_CustomEvent* Event = NewObject<UK2Node_CustomEvent>(Graph);
+            Event->CustomFunctionName = TEXT("OnCalls");
+            Entry = Event;
+        }
+        Graph->AddNode(Entry, false, false);
+        Entry->CreateNewGuid();
+        Entry->PostPlacedNewNode();
+        Entry->AllocateDefaultPins();
+    }
+    if (Test.TestNotNull(TEXT("Entryを取得"), Entry) == false) { return false; }
+    UFunction* Static = UGameplayStatics::StaticClass()->FindFunctionByName(TEXT("SetSubtitlesEnabled"));
+    UFunction* LastFunction = bBeginPlay
+        ? AActor::StaticClass()->FindFunctionByName(TEXT("SetActorTickEnabled")) : Static;
+    if (Test.TestNotNull(TEXT("static署名"), Static) == false ||
+        Test.TestNotNull(TEXT("後続署名"), LastFunction) == false) { return false; }
+    const auto AddCall = [Graph](UFunction* Function, const TCHAR* Value)
+    {
+        UK2Node_CallFunction* Call = NewObject<UK2Node_CallFunction>(Graph);
+        Graph->AddNode(Call, false, false);
+        Call->CreateNewGuid();
+        Call->PostPlacedNewNode();
+        Call->SetFromFunction(Function);
+        Call->AllocateDefaultPins();
+        Call->FindPinChecked(TEXT("bEnabled"))->DefaultValue = Value;
+        return Call;
+    };
+    UK2Node_CallFunction* First = AddCall(Static, TEXT("true"));
+    UK2Node_CallFunction* Last = bSingleCall ? First : AddCall(LastFunction, TEXT("false"));
+    UK2Node_CallFunction* Middle = nullptr;
+    if (bMixedPrint)
+    {
+        Middle = NewObject<UK2Node_CallFunction>(Graph);
+        Graph->AddNode(Middle, false, false);
+        Middle->CreateNewGuid();
+        Middle->PostPlacedNewNode();
+        Middle->SetFromFunction(UKismetSystemLibrary::StaticClass()->FindFunctionByName(TEXT("PrintString")));
+        Middle->AllocateDefaultPins();
+        Middle->FindPinChecked(TEXT("InString"))->DefaultValue = TEXT("Middle call");
+    }
+    const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+    const auto Connect = [Schema](UK2Node* From, UK2Node* To)
+    {
+        return Schema->TryCreateConnection(From->FindPinChecked(UEdGraphSchema_K2::PN_Then),
+            To->FindPinChecked(UEdGraphSchema_K2::PN_Execute));
+    };
+    Entry->FindPinChecked(UEdGraphSchema_K2::PN_Then)->BreakAllPinLinks();
+    bool bConnected = Connect(Entry, First);
+    if (bSingleCall == false)
+    {
+        bConnected &= Middle != nullptr ? Connect(First, Middle) && Connect(Middle, Last) : Connect(First, Last);
+    }
+    if (Result != nullptr) { bConnected &= Connect(Last, Result); }
+    if (Test.TestTrue(TEXT("実Call列を接続"), bConnected) == false) { return false; }
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    FBPGraphIR GraphIR;
+    if (Test.TestTrue(TEXT("Call列のGraph IRを構築"), FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false) { return false; }
+    FBPIRGraph* Active = GraphIR.Graphs.FindByPredicate([Graph](const FBPIRGraph& Candidate)
+        { return Candidate.Name == Graph->GetName(); });
+    if (Test.TestNotNull(TEXT("実行Graph"), Active) == false) { return false; }
+    // Storage order must not determine execution order.
+    Algo::Reverse(Active->Nodes);
+    Algo::Reverse(Active->ExecEdges);
+    FBPSemanticIR IR;
+    if (Test.TestTrue(TEXT("共通EntryからCall列をLowering"), FBPSemanticLowering::Lower(Blueprint, GraphIR, IR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : IR.Diagnostics) { Test.AddError(Diagnostic.Message); }
+        return false;
+    }
+    if (Test.TestEqual(TEXT("生成関数数"), IR.Functions.Num(), 1) == false) { return false; }
+    const int32 ExpectedCalls = bSingleCall ? 1 : bMixedPrint ? 3 : 2;
+    Test.TestEqual(TEXT("Call列の文数"), IR.Functions[0].Blocks[0].Statements.Num(), ExpectedCalls);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (Test.TestTrue(TEXT("Call列からC++を生成"), FBPSemanticCodeGenerator::Generate(IR,
+            bBeginPlay ? TEXT("ACallChain") : TEXT("UCallChain"), FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics) { Test.AddError(Diagnostic); }
+        return false;
+    }
+    const int32 FirstPosition = Files.SourceContent.Find(TEXT("UGameplayStatics::SetSubtitlesEnabled(true);"));
+    const int32 LastPosition = bSingleCall ? FirstPosition : Files.SourceContent.Find(bBeginPlay
+        ? TEXT("this->SetActorTickEnabled(false);") : TEXT("UGameplayStatics::SetSubtitlesEnabled(false);"));
+    Test.TestTrue(TEXT("Exec順を配列順に依存せず保持"),
+        FirstPosition != INDEX_NONE && (bSingleCall || LastPosition > FirstPosition));
+    if (bMixedPrint)
+    {
+        const int32 MiddlePosition = Files.SourceContent.Find(TEXT("Middle call"));
+        Test.TestTrue(TEXT("PrintString混在順を保持"), MiddlePosition > FirstPosition && LastPosition > MiddlePosition);
+    }
+    const TSharedRef<FJsonObject> Json = FBPSemanticJsonSerializer::ToJson(IR, TEXT("5.7"));
+    Test.TestEqual(TEXT("JSONもCall列を保持"), Json->GetArrayField(TEXT("functions"))[0]->AsObject()
+        ->GetArrayField(TEXT("blocks"))[0]->AsObject()->GetArrayField(TEXT("statements")).Num(), ExpectedCalls);
+    for (int32 CaseIndex = 0; CaseIndex < 7; ++CaseIndex)
+    {
+        FBPGraphIR Invalid = GraphIR;
+        FBPIRGraph* Target = Invalid.Graphs.FindByPredicate([Graph](const FBPIRGraph& Candidate)
+            { return Candidate.Name == Graph->GetName(); });
+        FBPIRLink* FirstEdge = Target->ExecEdges.FindByPredicate([First](const FBPIRLink& Edge)
+            { return Edge.SourceNode == First->NodeGuid; });
+        if (Test.TestNotNull(TEXT("拒否確認用Exec edge"), FirstEdge) == false) { return false; }
+        switch (CaseIndex)
+        {
+        case 0: { FBPIRLink Duplicate = *FirstEdge; Target->ExecEdges.Add(Duplicate); break; }
+        case 1: FirstEdge->SourcePin = FGuid::NewGuid(); break;
+        case 2: FirstEdge->TargetPin = FGuid::NewGuid(); break;
+        case 3:
+        {
+            Target->ExecEdges.RemoveAll([Last](const FBPIRLink& Edge) { return Edge.SourceNode == Last->NodeGuid; });
+            FBPIRLink Cycle;
+            Cycle.SourceNode = Last->NodeGuid;
+            Cycle.SourcePin = Last->FindPinChecked(UEdGraphSchema_K2::PN_Then)->PinId;
+            Cycle.TargetNode = First->NodeGuid;
+            Cycle.TargetPin = First->FindPinChecked(UEdGraphSchema_K2::PN_Execute)->PinId;
+            Target->ExecEdges.Add(Cycle);
+            break;
+        }
+        case 4:
+        {
+            FBPIRLink Extra;
+            Extra.SourceNode = FGuid::NewGuid(); Extra.SourcePin = FGuid::NewGuid();
+            Extra.TargetNode = First->NodeGuid;
+            Extra.TargetPin = First->FindPinChecked(UEdGraphSchema_K2::PN_Execute)->PinId;
+            Target->ExecEdges.Add(Extra);
+            break;
+        }
+        case 5:
+        {
+            FBPIRLink Data;
+            Data.SourceNode = FGuid::NewGuid(); Data.SourcePin = FGuid::NewGuid();
+            Data.TargetNode = First->NodeGuid; Data.TargetPin = First->FindPinChecked(TEXT("bEnabled"))->PinId;
+            Target->DataEdges.Add(Data);
+            break;
+        }
+        case 6:
+            for (FBPIRNode& Node : Target->Nodes)
+            {
+                if (Node.Id == Last->NodeGuid) { Node.FunctionPath += TEXT("Missing"); }
+            }
+            break;
+        }
+        FBPSemanticIR Rejected;
+        Test.TestFalse(TEXT("不正なCall列を拒否"), FBPSemanticLowering::Lower(Blueprint, Invalid, Rejected));
+        Test.TestTrue(TEXT("失敗時に部分関数を公開しない"), Rejected.Functions.IsEmpty());
+        Test.TestTrue(TEXT("Call列の拒否理由を保持"), Rejected.HasErrors());
+    }
+    return true;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPFunctionCallChainTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.FunctionCallChain",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPFunctionCallChainTest::RunTest(const FString& Parameters) { return RunEntryCallChainTest(*this, 0); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPCustomEventCallChainTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.CustomEventCallChain",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPCustomEventCallChainTest::RunTest(const FString& Parameters) { return RunEntryCallChainTest(*this, 1); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPBeginPlayCallChainTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.BeginPlayCallChain",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPBeginPlayCallChainTest::RunTest(const FString& Parameters) { return RunEntryCallChainTest(*this, 2); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPMixedCallChainTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.MixedPrintCallChain",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPMixedCallChainTest::RunTest(const FString& Parameters) { return RunEntryCallChainTest(*this, 3); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSingleNativeCallTest,
+    "BlueprintAIConverter.SemanticIR.Lowering.SingleNativeCall",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPSingleNativeCallTest::RunTest(const FString& Parameters) { return RunEntryCallChainTest(*this, 4); }
 
 #endif

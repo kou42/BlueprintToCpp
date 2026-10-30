@@ -6,6 +6,9 @@
 #include "BPGraphIR.h"
 #include "BPSemanticCodeGenerator.h"
 #include "BPSemanticLowering.h"
+#include "BPSemanticJsonSerializer.h"
+#include "Dom/JsonObject.h"
+#include "Kismet/GameplayStatics.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
@@ -561,5 +564,180 @@ bool FBPRealCustomEventSequenceConversionTest::RunTest(const FString& Parameters
         FString(TEXT("Custom Event Sequence Second")));
     return true;
 }
+
+namespace
+{
+bool RunNativeSequenceTest(FAutomationTestBase& Test, int32 Mode)
+{
+    const bool bSelfCall = Mode == 1 || Mode == 3;
+    const bool bNumericCall = Mode == 3;
+    const bool bMixedPrint = Mode == 2;
+    const FName Name = MakeUniqueObjectName(GetTransientPackage(), UBlueprint::StaticClass(),
+        TEXT("BP_NativeSequence"));
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        bSelfCall ? AActor::StaticClass() : UObject::StaticClass(),
+        GetTransientPackage(), Name, BPTYPE_Normal, NAME_None);
+    if (Test.TestNotNull(TEXT("ネイティブSequence用Blueprint"), Blueprint) == false) { return false; }
+    UEdGraph* Graph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, TEXT("RunNativeSequence"),
+        UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+    FBlueprintEditorUtils::AddFunctionGraph<UFunction>(Blueprint, Graph, true, nullptr);
+    UK2Node_FunctionEntry* Entry = nullptr;
+    UK2Node_FunctionResult* NativeResult = nullptr;
+    for (UEdGraphNode* Node : Graph->Nodes)
+    {
+        if (UK2Node_FunctionEntry* Candidate = Cast<UK2Node_FunctionEntry>(Node)) { Entry = Candidate; }
+        if (UK2Node_FunctionResult* Candidate = Cast<UK2Node_FunctionResult>(Node)) { NativeResult = Candidate; }
+    }
+    if (Test.TestNotNull(TEXT("通常関数Entry"), Entry) == false) { return false; }
+    UK2Node_FunctionResult* Result = NativeResult;
+    if (Result == nullptr)
+    {
+        Result = AddSequenceTestNode<UK2Node_FunctionResult>(Graph);
+        Result->FunctionReference.SetSelfMember(TEXT("RunNativeSequence"));
+        Result->AllocateDefaultPins();
+    }
+    UK2Node_ExecutionSequence* Sequence = AddSequenceTestNode<UK2Node_ExecutionSequence>(Graph);
+    Sequence->AllocateDefaultPins();
+    UFunction* StaticFunction = UGameplayStatics::StaticClass()->FindFunctionByName(TEXT("SetSubtitlesEnabled"));
+    UFunction* SecondFunction = bSelfCall
+        ? AActor::StaticClass()->FindFunctionByName(bNumericCall
+            ? TEXT("SetActorTickInterval") : TEXT("SetActorTickEnabled")) : StaticFunction;
+    if (Test.TestNotNull(TEXT("静的関数署名"), StaticFunction) == false ||
+        Test.TestNotNull(TEXT("後続関数署名"), SecondFunction) == false) { return false; }
+    const auto AddCall = [Graph](UFunction* Function, const FName ArgumentName, const TCHAR* Value)
+    {
+        UK2Node_CallFunction* Call = AddSequenceTestNode<UK2Node_CallFunction>(Graph);
+        Call->SetFromFunction(Function);
+        Call->AllocateDefaultPins();
+        Call->FindPinChecked(ArgumentName)->DefaultValue = Value;
+        return Call;
+    };
+    UK2Node_CallFunction* First = AddCall(StaticFunction, TEXT("bEnabled"), TEXT("true"));
+    UK2Node_CallFunction* Second = bMixedPrint ? AddSequencePrint(Graph,
+        UKismetSystemLibrary::StaticClass()->FindFunctionByName(TEXT("PrintString")), TEXT("Mixed sequence"))
+        : AddCall(SecondFunction, bNumericCall ? FName(TEXT("TickInterval")) : FName(TEXT("bEnabled")),
+            bNumericCall ? TEXT("0.25") : TEXT("false"));
+    const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+    Entry->FindPinChecked(UEdGraphSchema_K2::PN_Then)->BreakAllPinLinks();
+    bool bConnected = Schema->TryCreateConnection(Entry->FindPinChecked(UEdGraphSchema_K2::PN_Then),
+        Sequence->FindPinChecked(UEdGraphSchema_K2::PN_Execute));
+    bConnected &= Schema->TryCreateConnection(Sequence->FindPinChecked(TEXT("Then_0")),
+        First->FindPinChecked(UEdGraphSchema_K2::PN_Execute));
+    bConnected &= Schema->TryCreateConnection(Sequence->FindPinChecked(TEXT("Then_1")),
+        Second->FindPinChecked(UEdGraphSchema_K2::PN_Execute));
+    bConnected &= Schema->TryCreateConnection(Second->FindPinChecked(UEdGraphSchema_K2::PN_Then),
+        Result->FindPinChecked(UEdGraphSchema_K2::PN_Execute));
+    if (Test.TestTrue(TEXT("Sequenceの実Exec接続"), bConnected) == false) { return false; }
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    if (Test.TestNotNull(TEXT("コンパイル済みクラス"), Blueprint->GeneratedClass.Get()) == false) { return false; }
+    FBPGraphIR GraphIR;
+    if (Test.TestTrue(TEXT("実Graph IRを構築"), FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false) { return false; }
+    FBPSemanticIR IR;
+    if (Test.TestTrue(TEXT("PrintStringに依存せずSequenceをLowering"),
+            FBPSemanticLowering::Lower(Blueprint, GraphIR, IR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : IR.Diagnostics) { Test.AddError(Diagnostic.Message); }
+        return false;
+    }
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (Test.TestTrue(TEXT("共通CallからC++生成"), FBPSemanticCodeGenerator::Generate(IR,
+            bSelfCall ? TEXT("ANativeSequence") : TEXT("UNativeSequence"), FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics) { Test.AddError(Diagnostic); }
+        return false;
+    }
+    const int32 FirstPosition = Files.SourceContent.Find(TEXT("UGameplayStatics::SetSubtitlesEnabled(true);"));
+    const int32 SecondPosition = Files.SourceContent.Find(bMixedPrint ? TEXT("Mixed sequence") : bNumericCall
+        ? TEXT("this->SetActorTickInterval(0.25f);") : bSelfCall
+        ? TEXT("this->SetActorTickEnabled(false);") : TEXT("UGameplayStatics::SetSubtitlesEnabled(false);"));
+    Test.TestTrue(TEXT("Sequence出力ピン順を生成"), FirstPosition != INDEX_NONE && SecondPosition > FirstPosition);
+    Test.TestTrue(TEXT("静的関数のincludeを収集"), Files.SourceContent.Contains(TEXT("Kismet/GameplayStatics.h")));
+    const TSharedRef<FJsonObject> Json = FBPSemanticJsonSerializer::ToJson(IR, TEXT("5.7"));
+    const TArray<TSharedPtr<FJsonValue>>& Statements = Json->GetArrayField(TEXT("functions"))[0]->AsObject()
+        ->GetArrayField(TEXT("blocks"))[0]->AsObject()->GetArrayField(TEXT("statements"));
+    Test.TestEqual(TEXT("JSONに2つのCall文を保持"), Statements.Num(), 2);
+    Test.TestEqual(TEXT("JSONにReflectionの所有者を保持"), Statements[0]->AsObject()->GetObjectField(TEXT("expression"))
+        ->GetStringField(TEXT("function_owner_path")), UGameplayStatics::StaticClass()->GetPathName());
+
+    for (int32 CaseIndex = 0; CaseIndex < 6; ++CaseIndex)
+    {
+        FBPGraphIR Invalid = GraphIR;
+        FBPIRGraph* FunctionGraph = Invalid.Graphs.FindByPredicate([](const FBPIRGraph& Candidate)
+            { return Candidate.Name == TEXT("RunNativeSequence"); });
+        if (Test.TestNotNull(TEXT("拒否確認用Graph"), FunctionGraph) == false) { return false; }
+        FBPIRNode* Call = FunctionGraph->Nodes.FindByPredicate([First](const FBPIRNode& Node)
+            { return Node.Id == First->NodeGuid; });
+        if (Test.TestNotNull(TEXT("拒否確認用Call"), Call) == false) { return false; }
+        FBPIRPin* Argument = Call->Pins.FindByPredicate([](const FBPIRPin& Pin)
+            { return Pin.Name == TEXT("bEnabled"); });
+        if (Test.TestNotNull(TEXT("拒否確認用引数"), Argument) == false) { return false; }
+        switch (CaseIndex)
+        {
+        case 0: Call->FunctionPath += TEXT("Missing"); break;
+        case 1: Argument->Category = UEdGraphSchema_K2::PC_Int; break;
+        case 2: Argument->DefaultValue = TEXT("not-a-bool"); break;
+        case 3: Call->bFunctionStatic = false; break;
+        case 4:
+        {
+            FBPIRPin Duplicate = *Argument;
+            Call->Pins.Add(MoveTemp(Duplicate));
+            break;
+        }
+        case 5: Call->bFunctionNative = false; break;
+        }
+        FBPSemanticIR Rejected;
+        Test.TestFalse(TEXT("不正なCallを診断付きで拒否"), FBPSemanticLowering::Lower(Blueprint, Invalid, Rejected));
+        Test.TestTrue(TEXT("失敗時に関数を公開しない"), Rejected.Functions.IsEmpty());
+        Test.TestTrue(TEXT("関数名・ノード由来の診断を保持"), Rejected.Diagnostics.ContainsByPredicate(
+            [First](const FBPSemanticDiagnostic& Diagnostic)
+            { return Diagnostic.GraphName == TEXT("RunNativeSequence") && Diagnostic.NodeId == First->NodeGuid; }));
+    }
+    if (bSelfCall)
+    {
+        FBPGraphIR Invalid = GraphIR;
+        for (FBPIRGraph& FunctionGraph : Invalid.Graphs)
+        {
+            for (FBPIRNode& Node : FunctionGraph.Nodes)
+            {
+                if (Node.Id != Second->NodeGuid) { continue; }
+                for (FBPIRPin& Pin : Node.Pins)
+                {
+                    if (Pin.Name == UEdGraphSchema_K2::PN_Self)
+                    {
+                        Pin.DefaultObjectPath = TEXT("/Game/UnsupportedTarget");
+                    }
+                }
+            }
+        }
+        FBPSemanticIR Rejected;
+        Test.TestFalse(TEXT("self以外の明示的オブジェクトTargetを拒否"),
+            FBPSemanticLowering::Lower(Blueprint, Invalid, Rejected));
+        Test.TestTrue(TEXT("Target拒否時に関数を公開しない"), Rejected.Functions.IsEmpty());
+    }
+    return true;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealNativeSequenceTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.FunctionSequenceNativeCalls",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPRealNativeSequenceTest::RunTest(const FString& Parameters) { return RunNativeSequenceTest(*this, 0); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealSelfSequenceTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.FunctionSequenceStaticAndSelf",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPRealSelfSequenceTest::RunTest(const FString& Parameters) { return RunNativeSequenceTest(*this, 1); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealMixedSequenceTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.FunctionSequenceMixedPrint",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPRealMixedSequenceTest::RunTest(const FString& Parameters) { return RunNativeSequenceTest(*this, 2); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealNumericSequenceTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.FunctionSequenceNumericCall",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPRealNumericSequenceTest::RunTest(const FString& Parameters) { return RunNativeSequenceTest(*this, 3); }
 
 #endif

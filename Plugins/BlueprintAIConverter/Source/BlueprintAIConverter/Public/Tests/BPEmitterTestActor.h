@@ -36,6 +36,10 @@ public:
     UPROPERTY()
     bool bTestEnabled = true;
 
+    UFUNCTION(BlueprintNativeEvent)
+    void VerifiedOverride(int32 Value);
+    virtual void VerifiedOverride_Implementation(int32 Value) {}
+
     UFUNCTION(BlueprintImplementableEvent)
     int32 MatchingSignature(const FString& Input, int32& Output) const;
 
@@ -47,4 +51,12 @@ public:
 
     UFUNCTION(BlueprintImplementableEvent)
     int32 MismatchedConst(const FString& Input, int32& Output);
+protected:
+    UFUNCTION(BlueprintCallable)
+    void ProtectedVisibility() {}
+
+private:
+    UFUNCTION(BlueprintCallable)
+    void PrivateVisibility() {}
+
 };

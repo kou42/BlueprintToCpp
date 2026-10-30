@@ -297,6 +297,15 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
     {
         TSharedRef<FJsonObject> FunctionJson = MakeShared<FJsonObject>();
         FunctionJson->SetStringField(TEXT("name"), Function.Name.ToString());
+        const TCHAR* Visibility = TEXT("invalid");
+        switch (Function.Visibility)
+        {
+        case EBPSemanticFunctionVisibility::Unspecified: Visibility = TEXT("unspecified"); break;
+        case EBPSemanticFunctionVisibility::Public: Visibility = TEXT("public"); break;
+        case EBPSemanticFunctionVisibility::Protected: Visibility = TEXT("protected"); break;
+        case EBPSemanticFunctionVisibility::Private: Visibility = TEXT("private"); break;
+        }
+        FunctionJson->SetStringField(TEXT("visibility"), Visibility);
         FunctionJson->SetObjectField(TEXT("return_type"), TypeToJson(Function.ReturnType));
         if (Function.SignatureSource.IsEmpty() == false)
         {

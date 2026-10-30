@@ -9,6 +9,7 @@
 #include "Tests/BPEmitterTestActor.h"
 #include "Components/ActorComponent.h"
 #include "GameFramework/Pawn.h"
+#include "UObject/Class.h"
 
 namespace
 {
@@ -1010,20 +1011,11 @@ bool FBPSemanticGeneratorParentClassTest::RunTest(const FString& Parameters)
     ObjectFunction.bIsEventGraph = false;
     ObjectFunction.OverriddenFunctionPath = TEXT("/Script/CoreUObject.Object.BeginDestroy");
     Diagnostics.Reset();
-    if (TestTrue(TEXT("反射検証済みのクラス固有lifecycleを生成"),
+    TestFalse(TEXT("Reflection根拠のないC++ lifecycle overrideを拒否"),
         FBPSemanticCodeGenerator::Generate(Semantic, TEXT("UGeneratedObject"),
-            FString(), Files, Diagnostics)) == false)
-    {
-        for (const FString& Message : Diagnostics)
-        {
-            AddError(Message);
-        }
-        return false;
-    }
-    TestTrue(TEXT("lifecycle override宣言"), Files.HeaderContent.Contains(
-        TEXT("virtual void BeginDestroy() override;")));
-    TestTrue(TEXT("lifecycleのSuper呼び出し"), Files.SourceContent.Contains(
-        TEXT("Super::BeginDestroy();")));
+            FString(), Files, Diagnostics));
+    TestTrue(TEXT("未検証overrideの生成物を公開しない"),
+        Files.HeaderContent.IsEmpty() && Files.SourceContent.IsEmpty());
     return true;
 }
 
@@ -1069,6 +1061,62 @@ bool FBPSemanticGeneratorFunctionSignatureValidationTest::RunTest(
             TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
     TestTrue(TEXT("引数宣言順を保持"), Files.HeaderContent.Contains(
         TEXT("void RunValidated(int32 FirstValue, int32 SecondValue);")));
+
+    for (int32 CaseIndex = 0; CaseIndex < 3; ++CaseIndex)
+    {
+        Function.Parameters[0] = First;
+        Function.Parameters[0].bIsOut = CaseIndex != 1;
+        Function.Parameters[0].Type.bIsReference = CaseIndex != 0;
+        Diagnostics.Reset();
+        TestFalse(TEXT("out値・可変参照・out参照を拒否"),
+            FBPSemanticCodeGenerator::Generate(Semantic,
+                TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
+        TestTrue(TEXT("出力方向の拒否理由に関数名と引数名を保持"),
+            Diagnostics.ContainsByPredicate([](const FString& Message)
+            {
+                return Message.Contains(TEXT("RunValidated")) &&
+                    Message.Contains(TEXT("FirstValue")) &&
+                    Message.Contains(TEXT("unsupported output or mutable reference"));
+            }));
+        TestTrue(TEXT("出力方向拒否時に生成物を公開しない"),
+            Files.HeaderContent.IsEmpty() && Files.SourceContent.IsEmpty());
+    }
+    Function.Parameters[0] = First;
+    Function.Parameters[0].Type.bIsReference = true;
+    Function.Parameters[0].Type.bIsConst = true;
+    Diagnostics.Reset();
+    TestTrue(TEXT("const参照入力を生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
+    TestTrue(TEXT("const参照入力の宣言を保持"), Files.HeaderContent.Contains(
+        TEXT("const int32& FirstValue")));
+    Function.Parameters[0].bIsOut = true;
+    Diagnostics.Reset();
+    TestTrue(TEXT("ReflectionのOutParm付きconst参照も入力として生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
+    Function.Parameters[0] = First;
+
+    for (int32 CaseIndex = 0; CaseIndex < 3; ++CaseIndex)
+    {
+        Function.ReturnType.bIsReference = CaseIndex == 0;
+        Function.ReturnType.bIsConst = CaseIndex == 1;
+        Function.ReturnType.ContainerKind = CaseIndex == 2 ? TEXT("array") : TEXT("none");
+        Diagnostics.Reset();
+        TestFalse(TEXT("参照戻り値・const戻り値・void配列を拒否"),
+            FBPSemanticCodeGenerator::Generate(Semantic,
+                TEXT("ASignatureActor"), TEXT("TEST_API"), Files, Diagnostics));
+        TestTrue(TEXT("戻り値Policyの診断を保持"),
+            Diagnostics.ContainsByPredicate([](const FString& Message)
+            {
+                return Message.Contains(TEXT("unsupported return type qualifiers or void container"));
+            }));
+        TestTrue(TEXT("戻り値Policy拒否時に生成物を公開しない"),
+            Files.HeaderContent.IsEmpty() && Files.SourceContent.IsEmpty());
+    }
+    Function.ReturnType.bIsReference = false;
+    Function.ReturnType.bIsConst = false;
+    Function.ReturnType.ContainerKind = TEXT("none");
 
     Function.Parameters[1].Name = Function.Parameters[0].Name;
     Diagnostics.Reset();
@@ -1150,6 +1198,189 @@ bool FBPSemanticGeneratorFunctionSignatureValidationTest::RunTest(
                 return Message.Contains(
                     TEXT("inconsistent override or interface metadata"));
             }));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorOverrideSignatureTest,
+    "BlueprintAIConverter.SemanticIR.Generator.OverrideSignature",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorOverrideSignatureTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("override検証用Lowering成功"),
+        FBPSemanticLowering::LowerPrintString(MakeGeneratorTestGraph(), Semantic)) == false)
+    {
+        return false;
+    }
+    const UClass* Parent = ABPEmitterTestActor::StaticClass();
+    const UFunction* Target = Parent->FindFunctionByName(TEXT("VerifiedOverride"));
+    if (TestNotNull(TEXT("ネイティブイベント署名が存在"), Target) == false)
+    {
+        return false;
+    }
+    Semantic.ParentClassPath = Parent->GetPathName();
+    FBPSemanticFunction& Function = Semantic.Functions[0];
+    Function.Name = TEXT("VerifiedOverride");
+    Function.SignatureSource = TEXT("generated_class_reflection");
+    Function.bIsNative = true;
+    Function.bIsBlueprintEvent = true;
+    Function.bIsEventGraph = true;
+    Function.bIsOverride = true;
+    Function.OverriddenFunctionPath = Target->GetPathName();
+    Function.Parameters.Reset();
+    FBPSemanticParameter Value;
+    Value.Name = TEXT("Value");
+    Value.Type.Kind = EBPSemanticTypeKind::Int32;
+    Value.DeclarationIndex = 0;
+    Function.Parameters.Add(Value);
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("親Reflectionと一致するoverrideを生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AVerifiedActor"), FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Message : Diagnostics) { AddError(Message); }
+        return false;
+    }
+    TestTrue(TEXT("Implementation override宣言"), Files.HeaderContent.Contains(
+        TEXT("virtual void VerifiedOverride_Implementation(int32 Value) override;")));
+    TestTrue(TEXT("正しいSuper呼び出し"), Files.SourceContent.Contains(
+        TEXT("Super::VerifiedOverride_Implementation(Value);")));
+    FString SemanticJson;
+    TestTrue(TEXT("override署名のJSON出力成功"),
+        FBPSemanticJsonSerializer::Serialize(Semantic, TEXT("5.7"), SemanticJson));
+    TestTrue(TEXT("JSONにoverride元の正規パスを保持"),
+        SemanticJson.Contains(Target->GetPathName()));
+    Function.Visibility = EBPSemanticFunctionVisibility::Public;
+    Diagnostics.Reset();
+    TestTrue(TEXT("親と一致する明示的なpublic overrideを生成"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AVerifiedActor"), FString(), Files, Diagnostics));
+
+    const FBPSemanticIR Valid = Semantic;
+    for (int32 CaseIndex = 0; CaseIndex < 13; ++CaseIndex)
+    {
+        Semantic = Valid;
+        FBPSemanticFunction& Invalid = Semantic.Functions[0];
+        switch (CaseIndex)
+        {
+        case 0: Invalid.OverriddenFunctionPath += TEXT("Missing"); break;
+        case 1: Invalid.Parameters[0].Type.Kind = EBPSemanticTypeKind::Bool; break;
+        case 2: Invalid.Parameters[0].Name = TEXT("OtherValue"); break;
+        case 3: Invalid.Parameters.Reset(); break;
+        case 4: Invalid.bIsConst = true; break;
+        case 5: Invalid.ReturnType.Kind = EBPSemanticTypeKind::Bool; break;
+        case 6: Invalid.bIsEventGraph = false; break;
+        case 7: Semantic.ParentClassPath = TEXT("/Script/Engine.Actor"); break;
+        case 8:
+            Invalid.Parameters[0].Type.bIsReference = true;
+            Invalid.Parameters[0].Type.bIsConst = true;
+            break;
+        case 9:
+            Invalid.Name = TEXT("SetActorTickEnabled");
+            Invalid.OverriddenFunctionPath = AActor::StaticClass()->FindFunctionByName(
+                TEXT("SetActorTickEnabled"))->GetPathName();
+            break;
+        case 10: Invalid.bIsNative = false; break;
+        case 11: Invalid.Visibility = EBPSemanticFunctionVisibility::Protected; break;
+        case 12: Invalid.Visibility = EBPSemanticFunctionVisibility::Private; break;
+        }
+        Diagnostics.Reset();
+        TestFalse(TEXT("改ざんしたoverride署名・所有者・出力方式を拒否"),
+            FBPSemanticCodeGenerator::Generate(Semantic,
+                TEXT("AVerifiedActor"), FString(), Files, Diagnostics));
+        TestTrue(TEXT("override拒否理由を保持"),
+            Diagnostics.ContainsByPredicate([](const FString& Message)
+            {
+                return Message.Contains(TEXT("Override"));
+            }));
+        TestTrue(TEXT("override拒否時に生成物を公開しない"),
+            Files.HeaderContent.IsEmpty() && Files.SourceContent.IsEmpty());
+    }
+    Semantic = Valid;
+    Semantic.Functions[0].bIsOverride = false;
+    Semantic.Functions[0].OverriddenFunctionPath.Reset();
+    Semantic.Functions[0].bIsInterfaceImplementation = true;
+    Semantic.Functions[0].InterfaceClassPath =
+        UBPFunctionSignatureTestInterface::StaticClass()->GetPathName();
+    Semantic.Functions[0].InterfaceFunctionPath = TEXT("unused");
+    Diagnostics.Reset();
+    TestFalse(TEXT("親が未実装のInterfaceをoverrideとして生成しない"),
+        FBPSemanticCodeGenerator::Generate(Semantic,
+            TEXT("AVerifiedActor"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("Interface継承不足の理由を保持"),
+        Diagnostics.ContainsByPredicate([](const FString& Message)
+        {
+            return Message.Contains(TEXT("interface implemented by the native parent"));
+        }));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticGeneratorFunctionVisibilityTest,
+    "BlueprintAIConverter.SemanticIR.Generator.FunctionVisibility",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticGeneratorFunctionVisibilityTest::RunTest(const FString& Parameters)
+{
+    FBPSemanticIR Semantic;
+    if (TestTrue(TEXT("可視性検証用Lowering成功"), FBPSemanticLowering::LowerPrintString(
+            MakeGeneratorTestGraph(), Semantic)) == false) { return false; }
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    Semantic.Functions[0].Visibility = EBPSemanticFunctionVisibility::Public;
+    TestFalse(TEXT("BeginPlayの公開範囲改変を拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AVisibilityActor"), FString(), Files, Diagnostics));
+    Semantic.Functions[0].Visibility = EBPSemanticFunctionVisibility::Protected;
+    Diagnostics.Reset();
+    TestTrue(TEXT("protected BeginPlayを生成"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AVisibilityActor"), FString(), Files, Diagnostics));
+    FBPSemanticFunction Function = Semantic.Functions[0];
+    Function.bIsOverride = false;
+    Function.OverriddenFunctionPath.Reset();
+    Function.bIsBlueprintEvent = false;
+    Function.bIsEventGraph = false;
+    Semantic.Functions.Reset();
+    const EBPSemanticFunctionVisibility Access[] = {
+        EBPSemanticFunctionVisibility::Public, EBPSemanticFunctionVisibility::Protected,
+        EBPSemanticFunctionVisibility::Private, EBPSemanticFunctionVisibility::Unspecified };
+    const TCHAR* Names[] = { TEXT("RunPublic"), TEXT("RunProtected"),
+        TEXT("RunPrivate"), TEXT("RunLegacy") };
+    for (int32 Index = 0; Index < 4; ++Index)
+    {
+        Function.Name = FName(Names[Index]);
+        Function.Visibility = Access[Index];
+        Semantic.Functions.Add(Function);
+    }
+    Diagnostics.Reset();
+    TestTrue(TEXT("異なる可視性の複数関数を生成"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AVisibilityActor"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("public宣言"), Files.HeaderContent.Contains(
+        TEXT("public:\n    UFUNCTION(BlueprintCallable)\n    void RunPublic();")));
+    TestTrue(TEXT("protected宣言とBlueprintProtected"), Files.HeaderContent.Contains(
+        TEXT("protected:\n    UFUNCTION(BlueprintCallable, meta=(BlueprintProtected))\n    void RunProtected();")));
+    TestTrue(TEXT("private宣言"), Files.HeaderContent.Contains(
+        TEXT("private:\n    UFUNCTION(BlueprintCallable)\n    void RunPrivate();")));
+    TestTrue(TEXT("旧IRのpublic既定を維持"), Files.HeaderContent.Contains(
+        TEXT("public:\n    UFUNCTION(BlueprintCallable)\n    void RunLegacy();")));
+    Semantic.Functions[1].bIsEventGraph = true;
+    Diagnostics.Reset();
+    TestTrue(TEXT("protected native eventを生成"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AVisibilityActor"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("protected eventのメタデータを保持"), Files.HeaderContent.Contains(
+        TEXT("protected:\n    UFUNCTION(BlueprintNativeEvent, BlueprintCallable, meta=(BlueprintProtected))")));
+    Semantic.Functions[1].bIsEventGraph = false;
+    Semantic.Functions[2].bIsEventGraph = true;
+    Diagnostics.Reset();
+    TestFalse(TEXT("private native eventは拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AVisibilityActor"), FString(), Files, Diagnostics));
+    TestTrue(TEXT("拒否時に生成物を公開しない"),
+        Files.HeaderContent.IsEmpty() && Files.SourceContent.IsEmpty());
+    Semantic.Functions[2].bIsEventGraph = false;
+    Semantic.Functions[2].Visibility = static_cast<EBPSemanticFunctionVisibility>(255);
+    Diagnostics.Reset();
+    TestFalse(TEXT("未知の可視性は拒否"), FBPSemanticCodeGenerator::Generate(
+        Semantic, TEXT("AVisibilityActor"), FString(), Files, Diagnostics));
     return true;
 }
 

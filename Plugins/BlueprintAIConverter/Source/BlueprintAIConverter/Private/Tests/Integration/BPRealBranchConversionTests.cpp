@@ -5,6 +5,8 @@
 #include "BPGraphIR.h"
 #include "BPSemanticCodeGenerator.h"
 #include "BPSemanticLowering.h"
+#include "BPSemanticJsonSerializer.h"
+#include "Kismet/GameplayStatics.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
@@ -320,14 +322,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealFunctionBranchConversionTest,
     "BlueprintAIConverter.Conversion.RealBlueprint.FunctionBranch",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FBPRealFunctionBranchConversionTest::RunTest(const FString& Parameters)
+static bool RunFunctionBranchConversion(FAutomationTestBase& Test, int32 Mode)
 {
+    const bool bNative = Mode != 0;
+    const bool bSelf = Mode == 2;
+    const bool bMixed = Mode == 3;
+    const TCHAR* ClassName = bSelf ? TEXT("AFunctionBranchActor") : TEXT("UFunctionBranchObject");
     const FName BlueprintName = MakeUniqueObjectName(
         GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_FunctionBranch"));
     UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
-        UObject::StaticClass(), GetTransientPackage(), BlueprintName,
+        bSelf ? AActor::StaticClass() : UObject::StaticClass(), GetTransientPackage(), BlueprintName,
         BPTYPE_Normal, NAME_None);
-    if (TestNotNull(TEXT("UObject派生Blueprintを生成"), Blueprint) == false)
+    if (Test.TestNotNull(TEXT("UObject派生Blueprintを生成"), Blueprint) == false)
     {
         return false;
     }
@@ -349,7 +355,7 @@ bool FBPRealFunctionBranchConversionTest::RunTest(const FString& Parameters)
             Results.Add(Result);
         }
     }
-    if (TestNotNull(TEXT("Function Entry"), Entry) == false)
+    if (Test.TestNotNull(TEXT("Function Entry"), Entry) == false)
     {
         return false;
     }
@@ -366,50 +372,63 @@ bool FBPRealFunctionBranchConversionTest::RunTest(const FString& Parameters)
     Branch->FindPinChecked(TEXT("Condition"))->DefaultValue = TEXT("false");
     UFunction* PrintFunction = UKismetSystemLibrary::StaticClass()->FindFunctionByName(
         GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, PrintString));
-    if (TestNotNull(TEXT("PrintString UFunctionを取得"), PrintFunction) == false)
+    if (Test.TestNotNull(TEXT("PrintString UFunctionを取得"), PrintFunction) == false)
     {
         return false;
     }
-    UK2Node_CallFunction* TruePrint = AddPrintStringNode(
-        FunctionGraph, PrintFunction, TEXT("Function Branch True"), TEXT("function-true"));
-    UK2Node_CallFunction* FalsePrint = AddPrintStringNode(
-        FunctionGraph, PrintFunction, TEXT("Function Branch False"), TEXT("function-false"));
+    const auto AddNative = [FunctionGraph](UFunction* Function, const TCHAR* Value)
+    {
+        UK2Node_CallFunction* Call = AddBranchNode<UK2Node_CallFunction>(FunctionGraph);
+        Call->SetFromFunction(Function);
+        Call->AllocateDefaultPins();
+        Call->FindPinChecked(TEXT("bEnabled"))->DefaultValue = Value;
+        return Call;
+    };
+    UFunction* NativeFunction = UGameplayStatics::StaticClass()->FindFunctionByName(TEXT("SetSubtitlesEnabled"));
+    UFunction* FalseFunction = bSelf
+        ? AActor::StaticClass()->FindFunctionByName(TEXT("SetActorTickEnabled")) : NativeFunction;
+    if (Test.TestNotNull(TEXT("静的Call署名"), NativeFunction) == false ||
+        Test.TestNotNull(TEXT("False側Call署名"), FalseFunction) == false) { return false; }
+    UK2Node_CallFunction* TruePrint = bNative ? AddNative(NativeFunction, TEXT("true"))
+        : AddPrintStringNode(FunctionGraph, PrintFunction, TEXT("Function Branch True"), TEXT("function-true"));
+    UK2Node_CallFunction* FalsePrint = bNative && bMixed == false ? AddNative(FalseFunction, TEXT("false"))
+        : AddPrintStringNode(FunctionGraph, PrintFunction, TEXT("Function Branch False"), TEXT("function-false"));
 
     const UEdGraphSchema_K2* Schema = Cast<UEdGraphSchema_K2>(FunctionGraph->GetSchema());
     UEdGraphPin* EntryThen = Entry->FindPin(UEdGraphSchema_K2::PN_Then);
     UEdGraphPin* FirstResultExecute = Results[0]->FindPin(UEdGraphSchema_K2::PN_Execute);
     UEdGraphPin* SecondResultExecute = Results[1]->FindPin(UEdGraphSchema_K2::PN_Execute);
-    if (TestNotNull(TEXT("K2 schema"), Schema) == false ||
-        TestNotNull(TEXT("Entry Then"), EntryThen) == false ||
-        TestNotNull(TEXT("最初のResult Execute"), FirstResultExecute) == false ||
-        TestNotNull(TEXT("次のResult Execute"), SecondResultExecute) == false)
+    if (Test.TestNotNull(TEXT("K2 schema"), Schema) == false ||
+        Test.TestNotNull(TEXT("Entry Then"), EntryThen) == false ||
+        Test.TestNotNull(TEXT("最初のResult Execute"), FirstResultExecute) == false ||
+        Test.TestNotNull(TEXT("次のResult Execute"), SecondResultExecute) == false)
     {
         return false;
     }
     EntryThen->BreakAllPinLinks();
-    TestTrue(TEXT("Function EntryからBranchへ接続"), Schema->TryCreateConnection(
+    Test.TestTrue(TEXT("Function EntryからBranchへ接続"), Schema->TryCreateConnection(
         EntryThen, Branch->FindPinChecked(UEdGraphSchema_K2::PN_Execute)));
-    TestTrue(TEXT("True側をPrintStringへ接続"), Schema->TryCreateConnection(
+    Test.TestTrue(TEXT("True側をPrintStringへ接続"), Schema->TryCreateConnection(
         Branch->FindPinChecked(UEdGraphSchema_K2::PN_Then),
         TruePrint->FindPinChecked(UEdGraphSchema_K2::PN_Execute)));
-    TestTrue(TEXT("False側をPrintStringへ接続"), Schema->TryCreateConnection(
+    Test.TestTrue(TEXT("False側をPrintStringへ接続"), Schema->TryCreateConnection(
         Branch->FindPinChecked(TEXT("else")),
         FalsePrint->FindPinChecked(UEdGraphSchema_K2::PN_Execute)));
-    TestTrue(TEXT("True側をFunction Resultへ接続"), Schema->TryCreateConnection(
+    Test.TestTrue(TEXT("True側をFunction Resultへ接続"), Schema->TryCreateConnection(
         TruePrint->FindPinChecked(UEdGraphSchema_K2::PN_Then), FirstResultExecute));
-    TestTrue(TEXT("False側をFunction Resultへ接続"), Schema->TryCreateConnection(
+    Test.TestTrue(TEXT("False側をFunction Resultへ接続"), Schema->TryCreateConnection(
         FalsePrint->FindPinChecked(UEdGraphSchema_K2::PN_Then), SecondResultExecute));
 
     FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
-    if (TestTrue(TEXT("関数Blueprintのコンパイル成功"), Blueprint->Status != BS_Error) == false ||
-        TestNotNull(TEXT("生成クラス"), Blueprint->GeneratedClass.Get()) == false)
+    if (Test.TestTrue(TEXT("関数Blueprintのコンパイル成功"), Blueprint->Status != BS_Error) == false ||
+        Test.TestNotNull(TEXT("生成クラス"), Blueprint->GeneratedClass.Get()) == false)
     {
         return false;
     }
 
     FBPGraphIR GraphIR;
-    if (TestTrue(TEXT("関数BranchのGraph IRを生成"),
+    if (Test.TestTrue(TEXT("関数BranchのGraph IRを生成"),
         FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false)
     {
         return false;
@@ -420,7 +439,7 @@ bool FBPRealFunctionBranchConversionTest::RunTest(const FString& Parameters)
             return Graph.Kind == TEXT("function") &&
                 Graph.Name == FunctionName.ToString();
         });
-    if (TestNotNull(TEXT("到達可能性検証用の関数Graph"), FunctionGraphIR) == false)
+    if (Test.TestNotNull(TEXT("到達可能性検証用の関数Graph"), FunctionGraphIR) == false)
     {
         return false;
     }
@@ -448,19 +467,19 @@ bool FBPRealFunctionBranchConversionTest::RunTest(const FString& Parameters)
     FunctionGraphIR->DataEdges.Add(DisconnectedDataEdge);
 
     FBPSemanticIR SemanticIR;
-    if (TestTrue(TEXT("関数単位でBranchをLowering"),
+    if (Test.TestTrue(TEXT("関数単位でBranchをLowering"),
         FBPSemanticLowering::Lower(Blueprint, GraphIR, SemanticIR)) == false)
     {
         for (const FBPSemanticDiagnostic& Diagnostic : SemanticIR.Diagnostics)
         {
-            AddError(Diagnostic.Message);
+            Test.AddError(Diagnostic.Message);
         }
         return false;
     }
-    if (TestEqual(TEXT("Semantic関数数"), SemanticIR.Functions.Num(), 1) == false ||
-        TestEqual(TEXT("Semantic関数名"), SemanticIR.Functions[0].Name, FunctionName) == false ||
-        TestFalse(TEXT("通常関数として保持"), SemanticIR.Functions[0].bIsEventGraph) == false ||
-        TestEqual(TEXT("Branch文数"),
+    if (Test.TestEqual(TEXT("Semantic関数数"), SemanticIR.Functions.Num(), 1) == false ||
+        Test.TestEqual(TEXT("Semantic関数名"), SemanticIR.Functions[0].Name, FunctionName) == false ||
+        Test.TestFalse(TEXT("通常関数として保持"), SemanticIR.Functions[0].bIsEventGraph) == false ||
+        Test.TestEqual(TEXT("Branch文数"),
             SemanticIR.Functions[0].Blocks[0].Statements.Num(), 1) == false)
     {
         return false;
@@ -468,29 +487,58 @@ bool FBPRealFunctionBranchConversionTest::RunTest(const FString& Parameters)
 
     FBPGeneratedActorFiles Files;
     TArray<FString> Diagnostics;
-    if (TestTrue(TEXT("UObject通常関数のBranch C++を生成"),
+    if (Test.TestTrue(TEXT("UObject通常関数のBranch C++を生成"),
         FBPSemanticCodeGenerator::Generate(
-            SemanticIR, TEXT("UFunctionBranchObject"), FString(), Files, Diagnostics)) == false)
+            SemanticIR, ClassName, FString(), Files, Diagnostics)) == false)
     {
         for (const FString& Diagnostic : Diagnostics)
         {
-            AddError(Diagnostic);
+            Test.AddError(Diagnostic);
         }
         return false;
     }
-    TestTrue(TEXT("通常関数定義を生成"),
-        Files.SourceContent.Contains(TEXT("UFunctionBranchObject::RunBranch(")));
-    TestTrue(TEXT("Branchのifを生成"), Files.SourceContent.Contains(TEXT("if (false)")));
-    TestTrue(TEXT("True側本文を生成"), Files.SourceContent.Contains(TEXT("Function Branch True")));
-    TestTrue(TEXT("False側本文を生成"), Files.SourceContent.Contains(TEXT("Function Branch False")));
+    Test.TestTrue(TEXT("通常関数定義を生成"),
+        Files.SourceContent.Contains(FString(ClassName) + TEXT("::RunBranch(")));
+    Test.TestTrue(TEXT("Branchのifを生成"), Files.SourceContent.Contains(TEXT("if (false)")));
+    Test.TestTrue(TEXT("True側本文を生成"), Files.SourceContent.Contains(bNative ? TEXT("UGameplayStatics::SetSubtitlesEnabled(true);") : TEXT("Function Branch True")));
+    Test.TestTrue(TEXT("False側本文を生成"), Files.SourceContent.Contains(bNative && bMixed == false ? (bSelf ? TEXT("this->SetActorTickEnabled(false);")
+        : TEXT("UGameplayStatics::SetSubtitlesEnabled(false);")) : TEXT("Function Branch False")));
 
+    FString Json;
+    Test.TestTrue(TEXT("Branch CallのJSON出力"), FBPSemanticJsonSerializer::Serialize(SemanticIR, TEXT("5.7"), Json));
+    Test.TestTrue(TEXT("JSONにBranchを保持"), Json.Contains(TEXT("\"branch\"")));
+    if (bNative)
+    {
+        Test.TestTrue(TEXT("JSONにnative Callを保持"), Json.Contains(TEXT("SetSubtitlesEnabled")));
+        for (int32 CaseIndex = 0; CaseIndex < 3; ++CaseIndex)
+        {
+            FBPGraphIR Invalid = GraphIR;
+            FBPIRGraph* Target = Invalid.Graphs.FindByPredicate([FunctionName](const FBPIRGraph& Candidate)
+                { return Candidate.Name == FunctionName.ToString(); });
+            FBPIRNode* Call = Target->Nodes.FindByPredicate([TruePrint](const FBPIRNode& Node)
+                { return Node.Id == TruePrint->NodeGuid; });
+            if (Test.TestNotNull(TEXT("拒否系native Call"), Call) == false) { return false; }
+            if (CaseIndex == 0) { Call->FunctionPath += TEXT("Missing"); }
+            if (CaseIndex == 1) { Call->bFunctionStatic = false; }
+            if (CaseIndex == 2)
+            {
+                for (FBPIRPin& Pin : Call->Pins)
+                {
+                    if (Pin.Name == TEXT("bEnabled")) { Pin.Category = UEdGraphSchema_K2::PC_Int; }
+                }
+            }
+            FBPSemanticIR Rejected;
+            Test.TestFalse(TEXT("不正なBranch Callを拒否"), FBPSemanticLowering::Lower(Blueprint, Invalid, Rejected));
+            Test.TestTrue(TEXT("部分関数を公開せず診断を保持"), Rejected.Functions.IsEmpty() && Rejected.HasErrors());
+        }
+    }
     FBPGraphIR MissingResultIR = GraphIR;
     FBPIRGraph* BranchGraph = MissingResultIR.Graphs.FindByPredicate(
         [FunctionName](const FBPIRGraph& Graph)
         {
             return Graph.Kind == TEXT("function") && Graph.Name == FunctionName.ToString();
         });
-    if (TestNotNull(TEXT("拒否系検証用の関数Graph"), BranchGraph) == false)
+    if (Test.TestNotNull(TEXT("拒否系検証用の関数Graph"), BranchGraph) == false)
     {
         return false;
     }
@@ -502,15 +550,121 @@ bool FBPRealFunctionBranchConversionTest::RunTest(const FString& Parameters)
             return Target != nullptr &&
                 Target->ClassPath == TEXT("/Script/BlueprintGraph.K2Node_FunctionResult");
         });
-    if (TestTrue(TEXT("拒否系検証用のResult接続を特定"), ResultEdgeIndex != INDEX_NONE) == false)
+    if (Test.TestTrue(TEXT("拒否系検証用のResult接続を特定"), ResultEdgeIndex != INDEX_NONE) == false)
     {
         return false;
     }
     BranchGraph->ExecEdges.RemoveAt(ResultEdgeIndex);
     FBPSemanticIR RejectedIR;
-    TestFalse(TEXT("Function Resultへ到達しない枝を拒否"),
+    Test.TestFalse(TEXT("Function Resultへ到達しない枝を拒否"),
         FBPSemanticLowering::Lower(Blueprint, MissingResultIR, RejectedIR));
-    TestTrue(TEXT("Result欠落の診断を保持"), RejectedIR.HasErrors());
+    Test.TestTrue(TEXT("Result欠落の診断を保持"), RejectedIR.HasErrors());
+    return true;
+}
+
+bool FBPRealFunctionBranchConversionTest::RunTest(const FString& Parameters)
+{
+    return RunFunctionBranchConversion(*this, 0);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealNativeBranchTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.FunctionBranchNativeCalls",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPRealNativeBranchTest::RunTest(const FString& Parameters) { return RunFunctionBranchConversion(*this, 1); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealSelfBranchTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.FunctionBranchStaticAndSelf",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPRealSelfBranchTest::RunTest(const FString& Parameters) { return RunFunctionBranchConversion(*this, 2); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealMixedBranchTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.FunctionBranchMixedPrint",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPRealMixedBranchTest::RunTest(const FString& Parameters) { return RunFunctionBranchConversion(*this, 3); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealNestedNativeBranchTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.NestedBranchNativeCalls",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPRealNestedNativeBranchTest::RunTest(const FString& Parameters)
+{
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(AActor::StaticClass(), GetTransientPackage(),
+        MakeUniqueObjectName(GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_NestedNative")),
+        BPTYPE_Normal, NAME_None);
+    if (TestNotNull(TEXT("ネストBranch用Blueprint"), Blueprint) == false) { return false; }
+    UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+    if (TestNotNull(TEXT("Event Graph"), Graph) == false) { return false; }
+    Graph->Nodes.Reset();
+    UK2Node_Event* Entry = AddBranchNode<UK2Node_Event>(Graph);
+    Entry->EventReference.SetExternalMember(TEXT("ReceiveBeginPlay"), AActor::StaticClass());
+    Entry->bOverrideFunction = true;
+    Entry->AllocateDefaultPins();
+    UK2Node_IfThenElse* Root = AddBranchNode<UK2Node_IfThenElse>(Graph);
+    Root->AllocateDefaultPins();
+    Root->FindPinChecked(TEXT("Condition"))->DefaultValue = TEXT("true");
+    UK2Node_IfThenElse* Child = AddBranchNode<UK2Node_IfThenElse>(Graph);
+    Child->AllocateDefaultPins();
+    Child->FindPinChecked(TEXT("Condition"))->DefaultValue = TEXT("false");
+    const auto AddNative = [Graph](UFunction* Function, const TCHAR* Value)
+    {
+        UK2Node_CallFunction* Call = AddBranchNode<UK2Node_CallFunction>(Graph);
+        Call->SetFromFunction(Function);
+        Call->AllocateDefaultPins();
+        Call->FindPinChecked(TEXT("bEnabled"))->DefaultValue = Value;
+        return Call;
+    };
+    UFunction* Static = UGameplayStatics::StaticClass()->FindFunctionByName(TEXT("SetSubtitlesEnabled"));
+    UFunction* Self = AActor::StaticClass()->FindFunctionByName(TEXT("SetActorTickEnabled"));
+    if (TestNotNull(TEXT("Static署名"), Static) == false || TestNotNull(TEXT("Self署名"), Self) == false) { return false; }
+    UK2Node_CallFunction* TrueCall = AddNative(Static, TEXT("true"));
+    UK2Node_CallFunction* FalseCall = AddNative(Static, TEXT("false"));
+    UK2Node_CallFunction* SelfCall = AddNative(Self, TEXT("false"));
+    const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+    const auto Connect = [Schema](UK2Node* From, FName Output, UK2Node* To)
+    {
+        return Schema->TryCreateConnection(From->FindPinChecked(Output),
+            To->FindPinChecked(UEdGraphSchema_K2::PN_Execute));
+    };
+    bool bConnected = Connect(Entry, UEdGraphSchema_K2::PN_Then, Root);
+    bConnected &= Connect(Root, UEdGraphSchema_K2::PN_Then, Child);
+    bConnected &= Connect(Root, TEXT("else"), SelfCall);
+    bConnected &= Connect(Child, UEdGraphSchema_K2::PN_Then, TrueCall);
+    bConnected &= Connect(Child, TEXT("else"), FalseCall);
+    if (TestTrue(TEXT("ネストExec接続"), bConnected) == false) { return false; }
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+    FBPGraphIR GraphIR;
+    if (TestTrue(TEXT("ネストGraph IRを構築"), FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false) { return false; }
+    FBPSemanticIR IR;
+    if (TestTrue(TEXT("PrintStringなしのネストBranchをLowering"), FBPSemanticLowering::Lower(Blueprint, GraphIR, IR)) == false)
+    {
+        for (const FBPSemanticDiagnostic& Diagnostic : IR.Diagnostics) { AddError(Diagnostic.Message); }
+        return false;
+    }
+    FBPGeneratedActorFiles Files;
+    TArray<FString> Diagnostics;
+    if (TestTrue(TEXT("ネストnative CallをC++生成"), FBPSemanticCodeGenerator::Generate(
+            IR, TEXT("ANestedNative"), FString(), Files, Diagnostics)) == false)
+    {
+        for (const FString& Diagnostic : Diagnostics) { AddError(Diagnostic); }
+        return false;
+    }
+    TestTrue(TEXT("内側True Call"), Files.SourceContent.Contains(TEXT("UGameplayStatics::SetSubtitlesEnabled(true);")));
+    TestTrue(TEXT("内側False Call"), Files.SourceContent.Contains(TEXT("UGameplayStatics::SetSubtitlesEnabled(false);")));
+    TestTrue(TEXT("外側False self Call"), Files.SourceContent.Contains(TEXT("this->SetActorTickEnabled(false);")));
+    FString Json;
+    TestTrue(TEXT("ネストCall JSONを生成"), FBPSemanticJsonSerializer::Serialize(IR, TEXT("5.7"), Json));
+    TestTrue(TEXT("JSONにネスト枝を保持"), Json.Contains(TEXT("then_statements")) && Json.Contains(TEXT("SetActorTickEnabled")));
+    for (FBPIRGraph& Target : GraphIR.Graphs)
+    {
+        for (FBPIRNode& Node : Target.Nodes)
+        {
+            if (Node.Id == TrueCall->NodeGuid) { Node.FunctionPath += TEXT("Missing"); }
+        }
+    }
+    FBPSemanticIR Rejected;
+    TestFalse(TEXT("ネスト枝の不正Callも拒否"), FBPSemanticLowering::Lower(Blueprint, GraphIR, Rejected));
+    TestTrue(TEXT("ネスト失敗時に部分関数を公開しない"), Rejected.Functions.IsEmpty() && Rejected.HasErrors());
     return true;
 }
 

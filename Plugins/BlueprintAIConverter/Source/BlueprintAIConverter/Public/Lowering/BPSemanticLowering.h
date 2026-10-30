@@ -27,12 +27,12 @@ public:
         FBPSemanticIR& OutIR);
 
     // BeginPlayまたは通常関数Entryからboolリテラルまたは反射検証済み
-    // 数値比較のBranchを通り、両枝でPrintStringを呼ぶ限定縦断Lowering。
+    // 数値比較のBranchを通り、両枝でPrintStringまたはリテラル入力のnative void Callを呼ぶLowering。
     static bool LowerBranch(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
 
-    // BeginPlay／Function Entry／Custom Event -> Sequence -> 複数のPrintStringを、
-    // Sequence出力ピンの番号順にSemantic基本ブロックへLoweringする。
+    // BeginPlay／Function Entry／Custom Event -> Sequence -> 複数のvoid呼び出しを、
+    // 出力ピン順にLoweringする。PrintStringと、リテラル入力のstatic/self native callが対象。
     static bool LowerSequence(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
 

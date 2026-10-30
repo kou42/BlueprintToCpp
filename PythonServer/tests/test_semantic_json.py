@@ -267,3 +267,11 @@ def test_graph_trace_exec_data_edges_and_legacy():
     bad["graph_traces"][0]["node_ids"].append(n1)
     with pytest.raises(SemanticJsonError):
         parse_semantic_json(bad)
+
+
+@pytest.mark.parametrize("visibility", ["", "PUBLIC", "internal", None, True, 1, [], {}])
+def test_invalid_function_visibility_is_rejected(visibility):
+    data = sample()
+    data["functions"][0]["visibility"] = visibility
+    with pytest.raises(SemanticJsonError, match=r"functions\[0\].visibility"):
+        parse_semantic_json(data)

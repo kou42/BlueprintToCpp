@@ -232,6 +232,19 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
         FBPSemanticJsonSerializer::ToJson(IR, TEXT("5.7.4"))->GetObjectField(TEXT("class_info"))
             ->GetStringField(TEXT("origin")), FString(TEXT("native")));
 
+    const EBPSemanticFunctionVisibility VisibilityValues[] = {
+        EBPSemanticFunctionVisibility::Unspecified, EBPSemanticFunctionVisibility::Public,
+        EBPSemanticFunctionVisibility::Protected, EBPSemanticFunctionVisibility::Private };
+    const TCHAR* VisibilityNames[] = { TEXT("unspecified"), TEXT("public"),
+        TEXT("protected"), TEXT("private") };
+    for (int32 Index = 0; Index < 4; ++Index)
+    {
+        IR.Functions[0].Visibility = VisibilityValues[Index];
+        TestEqual(TEXT("関数の公開範囲をJSONへ保持"),
+            FBPSemanticJsonSerializer::ToJson(IR, TEXT("5.7.4"))->GetArrayField(TEXT("functions"))[0]
+                ->AsObject()->GetStringField(TEXT("visibility")), FString(VisibilityNames[Index]));
+    }
+
     FBPSemanticDiagnostic Diagnostic;
     Diagnostic.Message = TEXT("Unsupported node");
     IR.Diagnostics.Add(Diagnostic);
