@@ -113,6 +113,10 @@ for generated_file in result["files"]:
 
 既存のSnapshot JSON v1とは独立して、UE側の `FBPSemanticJsonSerializer::Serialize(IR, EngineVersion, OutJson)` でSemantic IRをJSON v2に変換できます。Editorメニューからのコピー／保存と、`Saved/BlueprintSemanticJson/`へのエクスポートに対応しています。
 
+関数の公開範囲は任意の`functions[].visibility`で`unspecified`、`public`、`protected`、`private`を保持します。これはv2への追加フィールドであり、旧v2の省略入力も受理します。`unspecified`または省略は公開範囲を未記録であることを示し、C++生成では従来の通常関数public、BeginPlay protected、overrideは検証済み親宣言の範囲を使用します。Python検証はJSON上の値を保持し、公開範囲を推測して補完しません。
+
+Branch文は`kind: "branch"`、bool型の`expression`、`then_statements`／`else_statements`配列で検証します。入れ子の枝と、明示CFGの後続Blockへ接続する空の枝配列を受理し、子Statementは再帰検証します（深さ上限64）。これは既存v2 Serializerの出力への対応で、バージョン変更はありません。Loop／Break Statementの検証対応は今後の課題です。
+
 Python側では以下のようにスキーマ検証できます。
 
 ```python
@@ -147,6 +151,14 @@ python -m app.semantic_editor_e2e `
 ```
 
 ランナーは`BlueprintAIConverter.SemanticJson.EditorRoundtrip`の成功ログから、その実行で生成された`SEMANTIC_ROUNDTRIP_ARTIFACT`だけを取得します。続いて`python -m app.semantic_roundtrip --provider mock`を別プロセスで実行し、両方が成功した場合だけ終了コード0とJSONレポートを返します。外部AIやネットワークは使用しません。
+
+UObjectの通常関数2つ・Custom Event・共有変数を持つBlueprintの変換とJSON出力を検証する場合は、同じコマンドに次を追加します。
+
+```text
+--automation-test BlueprintAIConverter.SemanticIR.Lowering.MultipleFunctionGraphs
+```
+
+選択したAutomation Testの成功ログと、そのプロセスが出力した成果物パスを確認してからPython CLIへ進みます。結果のJSONには`automation_test`、`functions`、`variables`、`graph_traces`を含みます。この追加ケースはUE環境での実行待ちです。
 
 ## A1: AI Provider共通インターフェース（Mock）
 

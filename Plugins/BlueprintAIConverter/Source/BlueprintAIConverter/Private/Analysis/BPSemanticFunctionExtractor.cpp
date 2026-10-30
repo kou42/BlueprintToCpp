@@ -175,6 +175,24 @@ bool FBPSemanticFunctionExtractor::HasMatchingInterfaceSignature(
     return true;
 }
 
+EBPSemanticFunctionVisibility FBPSemanticFunctionExtractor::ResolveVisibility(const UFunction* Function)
+{
+    if (Function == nullptr)
+    {
+        return EBPSemanticFunctionVisibility::Unspecified;
+    }
+    const bool bPublic = Function->HasAnyFunctionFlags(FUNC_Public);
+    const bool bProtected = Function->HasAnyFunctionFlags(FUNC_Protected);
+    const bool bPrivate = Function->HasAnyFunctionFlags(FUNC_Private);
+    if (int32(bPublic) + int32(bProtected) + int32(bPrivate) != 1)
+    {
+        return EBPSemanticFunctionVisibility::Unspecified;
+    }
+    return bPublic ? EBPSemanticFunctionVisibility::Public
+        : bProtected ? EBPSemanticFunctionVisibility::Protected
+        : EBPSemanticFunctionVisibility::Private;
+}
+
 void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemanticIR& IR)
 {
     if (Blueprint == nullptr || Blueprint->GeneratedClass == nullptr)
@@ -208,6 +226,16 @@ void FBPSemanticFunctionExtractor::Append(const UBlueprint* Blueprint, FBPSemant
         }
         Target->OwnerClassPath = GeneratedClass->GetPathName();
         Target->SignatureSource = TEXT("generated_class_reflection");
+        Target->Visibility = ResolveVisibility(Function);
+        if (Target->Visibility == EBPSemanticFunctionVisibility::Unspecified)
+        {
+            FBPSemanticDiagnostic Diagnostic;
+            Diagnostic.GraphName = Function->GetName();
+            Diagnostic.Message = FString::Printf(
+                TEXT("Function %s has missing or conflicting Reflection access flags"),
+                *Function->GetName());
+            IR.Diagnostics.Add(MoveTemp(Diagnostic));
+        }
         Target->bIsNative = Function->HasAnyFunctionFlags(FUNC_Native);
         Target->bIsStatic = Function->HasAnyFunctionFlags(FUNC_Static);
         Target->bIsConst = Function->HasAnyFunctionFlags(FUNC_Const);

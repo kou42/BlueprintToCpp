@@ -23,7 +23,7 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - PrintStringは `FBPReflectedCallResolver` を使う共通呼び出し経路へ移行済み。WorldContext、文字列式、数値、色、FName、ループローカル参照をReflection署名と照合する。
 - ForLoop／ForEachLoopのCFG出力は対応したが、複雑Loweringの一部にBeginPlay前提の検証が残る。
 - `ResolveEntryFunction` がBeginPlay、Function Entry、Custom Eventの判定と反射署名復元を共通化した。単一PrintString、Sequence、単一Branch、通常関数の単一ForLoopがこの経路を利用する。
-- SequenceはActor BeginPlayに加えて、UObject通常関数でも出力ピン順を保持して複数PrintStringをLowering・C++生成できる。Function Resultは最後のSequence出力から到達する形だけを受理する。
+- SequenceはActor BeginPlayに加えて、UObject通常関数でも出力ピン順を保持して複数PrintStringをLowering・C++生成できる。新規変更ではリテラル入力のstatic／self native void呼び出しへ拡張した（UE検証待ち）。Function Resultは最後のSequence出力から到達する形だけを受理する。
 - Semantic JSONは `BPSemanticJsonSerializer.cpp` で `schema_version: 2` を出力し、Pythonの `semantic_json.py` が同バージョンを検証する。複数関数とBasicBlock ID／終端／後続参照は追従済みだが、実アセット種別を広げたEditor export検証は未完了。
 - 2026-10-29の `2961277`（Expand semantic control flow CFG）まで `main` へ反映済み。
 
@@ -75,6 +75,41 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - 関数署名生成で、引数名の重複・不正識別子、`DeclarationIndex`の負値・重複・欠番、複数または型不一致の戻り値パラメータ、フラグと矛盾するoverride／interfaceメタデータを診断付きで拒否する検証を追加した。
 - P2の署名項目は、公開範囲をSemantic IRへ明示する設計、out／参照引数Policy、override元との完全な署名一致検証が残るため継続扱いとする。
 - UE 5.7 UHT／UBTビルド成功。追加した`FunctionSignatureValidation`と`BlueprintAIConverter` Automation Test全148件成功（Exit Code 0）。今回の変更はJSON schemaを変更していないためPythonテストは未実施。
+
+#### P2追加実装（2026-10-30、UE検証待ち）
+
+- Generator入口でout値引数と非const参照引数を診断付きで拒否するPolicyを追加。関数本体の出力代入・データフローが未対応のため、出力を保証できない署名を生成しない。const参照入力は受理し、Reflectionが`CPF_OutParm`を併記したconst参照も入力として扱う。
+- 参照戻り値、const戻り値、voidコンテナを拒否する。参照戻り値は寿命検証が未対応であり、const戻り値は現在の値返却Emitterで修飾を維持できないため対象外とする。
+- `FunctionSignatureValidation`へout値／可変参照／out参照の拒否、const参照入力（OutParm併記を含む）の受理、戻り値Policyの拒否、失敗時の生成物非公開を確認する回帰ケースを追加。
+- Semantic IRとJSON schemaは変更なし。JSONは未対応署名も情報を保持して出力し、C++生成の可否とは区別する。公開範囲の明示、override元との完全一致検証、出力引数の本対応は残るためP2チェック項目は継続扱い。
+- UE環境がないためUHT／UBTとAutomation Testは未実施。PythonのSemantic JSON／roundtrip／signature audit／declaration auditは47件成功。`git diff --check`成功。
+
+#### P2 override署名照合（2026-10-30、UE検証待ち）
+
+- `BuildFunctionShape`で`SignatureSource`の文字列だけを信頼せず、ネイティブ親から同名UFunctionを取得し、override元の正規パス・戻り値・const/static属性・引数名／順序／型／方向を`FBPFunctionSignatureResolver`経由で照合する。
+- ReflectionからC++の仮想関数契約を確認できるnative Blueprint eventの`_Implementation`を受理対象とする。private／final／static、BlueprintImplementableEvent、通常の非イベントUFunction、親に存在しない関数、出力方式の不一致は拒否する。非void overrideのSuper戻り値Policyは引き続き未対応。
+- BeginPlayは既存のActor／Component lifecycle Policyを維持し、void戻り値とInterface指定なしも検証する。その他の非UFunction C++ lifecycleはReflectionで検証できないため拒否する。従来の`BeginDestroy`成功fixtureは、実UFunction照合の根拠がないため拒否期待へ修正した。
+- Interface実装は、生成クラスが親クラスのみを継承する現状に合わせ、ネイティブ親が実装するInterfaceと宣言元署名を照合する。Blueprintが新規導入するInterfaceは、明示的なInterface継承生成を実装するまで診断付きで拒否する。
+- テスト用native Blueprint eventと`OverrideSignature` Automation Testを追加。正常な宣言／Super呼び出し／JSON出力、署名・パス・親クラス・イベント属性の改変拒否、失敗時の生成物非公開を検証する。既存JSON v2は変更せず、Pythonでoverrideメタデータとconst参照のOutParm情報を保持するroundtripケースを追加。
+- Python Semantic JSON／roundtrip／signature audit／declaration auditは49件成功。`git diff --check`成功。UE環境がないため、新規fixtureのUHT／UBTとAutomation Testは未実施。公開範囲のIR明示、Interface継承生成、より広いoverride形式の対応は残るためP2チェック項目は継続扱い。
+
+#### P2 関数の公開範囲（2026-10-30、UE検証待ち）
+
+- `FBPSemanticFunction::Visibility`に`Unspecified / Public / Protected / Private`を追加。生成クラスのUFunctionからアクセスフラグを共通抽出し、欠落・競合は関数名付きエラーにする。通常関数／Custom Eventの共通Entry解析は抽出済みの公開範囲を保持する。
+- Generatorは明示的なpublic／protected／privateをC++宣言へ反映する。protectedの新規UFUNCTIONには`BlueprintProtected`も出力する。private native eventと未知のenum値は拒否し、生成物を公開しない。
+- overrideは宣言元の公開範囲と照合し、改変を拒否する。旧IRの`Unspecified`は通常関数では従来のpublic、overrideでは検証済みの親宣言から補完する。BeginPlayは既存Policyのprotectedを維持し、明示的な公開範囲の改変を拒否する。Reflectionを経由しない既存Loweringや旧fixtureのIRは`Unspecified`を保持できる。
+- JSON v2へ任意の`functions[].visibility`を追加し、`unspecified / public / protected / private`をシリアライズ・Python検証する。追加フィールドのためschema_versionは2を維持し、旧v2のフィールド省略も受理する。移行のための書き換えは不要で、省略と明示値はいずれも往復時に保持する。
+- Reflectionからの抽出、異なる公開範囲の複数関数生成、protectedイベント、privateイベント拒否、override公開範囲不一致、JSONへの全enum値出力をAutomation Testへ追加。Pythonでは全公開範囲と旧入力のroundtrip、未知値・不正型の拒否を追加した。
+- Python Semantic JSON／roundtrip／signature audit／declaration auditは62件成功、`git diff --check`成功。UE環境がないためUHT／UBTとAutomation Testは未実施。P2の署名項目はUE検証とInterface継承・残るoverride形式の対応が残るためチェックを継続する。
+
+#### P2 複数通常関数＋Custom Eventの縦断経路（2026-10-30、UE検証待ち）
+
+- 既存のグラフ別Lowering統合に、一つの実行グラフが一つの正常なSemantic関数へなることと、統合時の同名関数重複の検証を追加。失敗時は、それまでの関数だけでなく共有変数も公開せず、診断と入力のasset／parent情報だけを返す。
+- `BlueprintAIConverter.SemanticIR.Lowering.MultipleFunctionGraphs`を拡充。実Editor APIでUObject Blueprintに通常関数2つ、Custom Event1つ、共有int32変数1つを構築・コンパイルし、公開範囲を保持して一つのUCLASSへ生成する。重複グラフと未対応関数の拒否、部分結果の非公開も検証する。
+- 同テストでクラス情報と全Graph Traceを追加して実JSONをSavedへエクスポートし、再読込・再解析・同じIRからの再シリアライズ一致、関数／変数数、UObject親、公開範囲、Custom Event由来の保持を確認する。成功ログへ`SEMANTIC_ROUNDTRIP_ARTIFACT`を出力する。
+- `app.semantic_editor_e2e`へ`--automation-test`を追加。既定のActor exportテストを維持しつつ、上記テストの成果物をPython schema／Mock Providerへ渡せる。選択したテストそのものの成功ログを要求し、別テストの成功ログや不正な選択文字列を拒否する。JSONレポートに選択名とGraph Trace数を追加した。
+- 実UE確認には従来のE2Eコマンドへ`--automation-test BlueprintAIConverter.SemanticIR.Lowering.MultipleFunctionGraphs`を追加する。UE環境がないためUHT／UBT、実Editor Automation、実Editor export→Python E2Eは未実施であり、P2統合テスト項目はチェックを継続する。
+- Python Semantic JSON／roundtrip／signature audit／declaration audit／Editor E2Eランナーテストは74件成功、`git diff --check`成功。PythonテストのEditor呼び出しは模擬し、複数関数JSONを実Python CLIとMock Providerへ渡す部分はsubprocessで実行した。実UE成功とは区別する。
 
 ### P2並行: Semantic JSON出力・Python連携（必須）
 
@@ -139,10 +174,38 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 ### 次の実装・検証順序
 
-1. P2の関数公開範囲、out／参照引数、override元との完全な署名一致をSemantic IR・Reflection・Generatorで共通検証する。
-2. 複数の通常関数とイベントを持つ実UObject Blueprintを一つのUCLASSへ変換する縦断統合テストを追加する。
-3. P1のパターン別Lowerer選択を、関数グラフ単位の共通Statement Loweringへ段階的に移行する。
+1. P2の関数公開範囲、out／参照引数の拒否Policy、native Blueprint event override署名照合のUE検証を行う。Interface継承生成と残るoverride形式を段階的に拡張する。
+2. 拡充した`MultipleFunctionGraphs`で、通常関数2つ＋Custom Eventを持つ実UObject BlueprintのUCLASS生成と実Editor export→Python E2EをUE環境で実行する。
+3. 単一Entry／Sequence／ForLoop／Branchの共通Callを基盤に、複雑LoopとネストBranchのBeginPlay依存を共通Entryへ移行し、パターン別Lowerer選択を段階的に整理する。
 4. 対応済みCFGと複数関数について、実Editor exportからPython schema／roundtripまでの対象アセットを拡張する。
+
+### P1 Branchの共通CallとJSON同期（2026-10-30、UE検証待ち）
+
+- `LowerBranchImpl`の単一Branch／ネストBranchのCall式構築を`LowerEntryCallExpression`へ統合し、独立していたReflection解決・Target・リテラル引数処理を削除。`Lower`のBranch振り分けからPrintString必須条件を除去し、native static／self void Callだけの枝も扱う。
+- 単一Branchのリテラル／数値比較条件、通常関数の両枝Result到達、ネストBranchの木構造／合流／循環／到達領域の検証を維持する。ネストBranchのBeginPlay・boolリテラル条件への限定は継続し、通常関数のネストBranchや任意のStatement混在は本変更の対象外。
+- 実Blueprintの`FunctionBranchNativeCalls`（UObject・staticのみ）、`FunctionBranchStaticAndSelf`（Actor通常関数）、`FunctionBranchMixedPrint`、`NestedBranchNativeCalls`（Actor BeginPlay）を追加。既存`FunctionBranch`とfixtureを共有し、C++／JSON出力、両枝のResult到達、型／関数パス／static属性改変、ネスト葉の不正Call拒否と部分関数非公開を検証する。
+- C++ Serializerが既に出力する`kind: branch`をPythonが未受理だった不整合を修正。`semantic_json.py`へ再帰Statement検証を追加し、bool条件、then／else配列、子Statement／式／GUID、深さ上限64を確認する。明示CFGの枝（子配列は空で後続Blockを参照）と、入れ子の枝の双方を保持する。通常文に非空の枝配列を隠した入力は拒否する。
+- JSON v2の既存出力表現を受理する拡張であり、schema_versionは2を維持。既存の通常Statementと空の枝配列を持つ出力は引き続き受理し、移行時の書き換えは不要。Loop／Break StatementのPython同期は依然未完了のため、JSON全体のチェックは継続する。
+- Branch CFG／入れ子／共通CallのJSON往復とMock Provider、不正な子Statement／条件／枝配列／深さ超過の拒否を追加。関連Pythonテスト95件と`git diff --check`が成功。UE環境がないためUHT／UBTとAutomation Testは未実施。
+
+### P1 単一Entryからの直列Call Lowering（2026-10-30、UE検証待ち）
+
+- `LowerSingleEntryPrintStringImpl`を`LowerSingleEntryCallsImpl`へ置き換え、通常関数／Custom Event／BeginPlayから単一または直列のnative void呼び出しをLoweringする。パターン選択からPrintString必須条件を除去し、BeginPlayの既存単一PrintString経路は保持する。
+- `LowerEntryCallExpression`でSequenceと単一Entryの呼び出し式構築を共有。通常のstatic／selfリテラルCallは既存`LowerLiteralNativeCall`へ渡し、PrintStringのWorldContext／色／名前／既定値Analyzer分岐は一箇所へ集約した。共通メタデータ式Loweringへの移行・撤去条件は残存処理表で追跡する。
+- ノード配列順ではなくThen→Executeの実Exec edgeから順序を決める。到達可能領域を対象に重複・不正ノードID、複数後続、循環、不正ピン、未消費の入出力Exec edge、接続されたデータ式／Target、未対応Statementを拒否する。非void関数の戻り値Loweringは未対応として明示拒否し、void通常関数の末尾Resultは許容する。
+- 全CallとExec接続の検証、および変数抽出が成功するまで関数をOutIRへ追加しない。単一グラフの途中で不正なCallが見つかった場合も、部分的な関数本体を公開しない。
+- `SingleNativeCall`、`FunctionCallChain`、`CustomEventCallChain`、`BeginPlayCallChain`、`MixedPrintCallChain`の実Blueprint Automation Testを追加。Graph IR内のノード／edge配列反転に依存しない実行順、C++・JSONの文数、重複後続・不正Execピン・循環・追加流入・Data接続・末尾関数パス改変の拒否を検証する。
+- Semantic IR／JSON schemaは変更なし。既存のCall列roundtripを通常関数／Custom Event／BeginPlayのメタデータとstatic／self／PrintStringの組み合わせへ拡張し、関連Pythonテスト83件と`git diff --check`が成功。UE環境がないためUHT／UBTとAutomation Testは未実施。
+- Branchの独立したCall Lowering、複雑LoopのBeginPlay依存、制御フローの任意混在、接続データ式と非void ReturnのLoweringは残るため、P1全体の完了チェックは継続する。
+
+### P1 Sequenceの共通Call Lowering（2026-10-30、UE検証待ち）
+
+- `LowerSequenceImpl`のStatement候補をPrintStringから一般のCallFunctionへ変更し、`Lower`のSequence振り分けからPrintString有無の条件を除去。通常関数／Custom Event／BeginPlayの共通Entry検証と、出力ピン順・最後のFunction Result到達の既存検証を維持する。
+- `LowerLiteralNativeCall`を追加し、通常関数ForLoopの既存リテラル引数処理を抽出してSequenceと共有する。Reflection解決済みnative void関数のstatic／self呼び出し、bool／int32／有限float・doubleの非参照・非const単一値入力を対象とする。未対応データ接続、任意Target、private／アクセスできないprotected、関数パス不一致、重複・余分なピン、型／値不一致を診断付きで拒否する。
+- PrintStringは既存のWorldContext／色／名前／既定値のAnalyzerを維持し、Sequence内で共通Callと混在できる。新たな専用Emitterは追加していない。残るAnalyzer分岐は、メタデータに基づく共通式Loweringへこれらの入力型・既定値検証を統合した時点で撤去する（下表へ追跡項目を追加）。
+- 実Blueprintの`FunctionSequenceNativeCalls`（UObject・staticのみ）、`FunctionSequenceStaticAndSelf`（Actor・static＋self）、`FunctionSequenceMixedPrint`、`FunctionSequenceNumericCall`のAutomation Testを追加。出力順・所有者include・JSONのCall文保持、改ざんした関数パス／引数型／値／static属性／重複ピン／native属性、self以外の明示Target拒否を検証する。既存ForLoopも同じ共通ヘルパーを使用するためUE回帰確認が必要。
+- Semantic IR／JSON schemaは変更なし。Pythonでstaticのみ／static＋self／PrintString混在のCall順・引数型・TargetをJSON往復とMock Providerまで保持するケースを追加。関連Pythonテスト77件と`git diff --check`が成功。UE環境がないためUHT／UBTとAutomation Testは未実施。
+- パターン別Lowerer選択、単一Entry／BranchのCall Lowering統合、複雑LoopのBeginPlay依存、データ接続・より広い引数型対応は残るため、P1全体のチェックは継続する。
 
 ### P1追加実装（2026-10-26、検証済み）
 
@@ -192,11 +255,21 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 | 箇所 | 現状・問題 | 移行先／削除条件 |
 | --- | --- | --- |
 | `BPSemanticLowering.cpp::Lower` | ノードの有無でパターンを選択 | 関数単位のEntry／Statement Loweringへ移行後に撤去 |
+| `LowerEntryCallExpression`のPrintString Analyzer分岐 | 単一Entry／Sequence／BranchのWorldContext／色／名前／既定値検証を既存Analyzerへ集約。一般のリテラルnative callはForLoopと共通化（UE検証待ち） | メタデータ由来の共通式Loweringに入力型・既定値検証を統合後、関数名分岐を削除 |
 | 複雑ForLoop／ForEachLoop Lowering | BeginPlay前提の検証 | 共通Entry解析とクラス固有Policyへ分離後に整理 |
 | `BPSemanticCodeGenerator.cpp::Generate` | 複数関数と明示CFGに対応済みだが、受理するCFG形状を構造化Branch／Loopへ限定 | 共通CFG走査と診断を拡張し、対応ノードを増やす際もBlock順から意味を推測しない |
-| `BPSemanticJsonSerializer.cpp`／`PythonServer/app/semantic_json.py` | schema_version 2 の表現と検証の同期が必要 | 新IR表現ごとに両側を更新しgolden／roundtripで確認 |
+| `BPSemanticCodeGenerator.cpp::BuildFunctionShape` | out値／可変参照／参照戻り値を未対応Policyで拒否し、native Blueprint event override元をReflection照合（UE検証待ち）。公開範囲をReflection／IR／C++／JSONへ保持（UE検証待ち）。Interface継承は未完了 | 公開範囲・署名PolicyのUE検証。出力代入・寿命検証を実装して拒否Policyを段階的に解除し、Interface継承と対応override形式を拡張 |
+| `BPSemanticJsonSerializer.cpp`／`PythonServer/app/semantic_json.py` | schema_version 2。Branch／入れ子枝は同期済み（Python検証済み・実UE待ち）、Loop／Break Statementなどは未同期 | 新IR表現ごとに両側を更新しgolden／roundtripで確認 |
 
 ## 最新の検証結果
+
+- 2026-10-30（新規変更、UE検証待ち）: Branchの単一・ネストCallを共通Loweringへ移行し、PythonにBranch文の再帰検証を追加。実Blueprint回帰4ケースを追加、関連Pythonテスト95件成功。UHT／UBT・Automation Testは未実施。
+
+- 2026-10-30（新規変更、UE検証待ち）: 単一EntryのPrintString限定Loweringをstatic／selfの直列Call走査へ拡張。実Blueprint回帰5ケースを追加、関連Pythonテスト83件成功。UHT／UBT・Automation Testは未実施。
+
+- 2026-10-30（新規変更、UE検証待ち）: SequenceをPrintString非依存のnative void callへ拡張し、通常関数ForLoopとリテラルCall Loweringを共通化。実Blueprint回帰4ケースを追加、関連Pythonテスト77件成功。UHT／UBT・Automation Testは未実施。
+
+- 2026-10-30（新規変更、UE検証待ち）: 複数関数統合の重複・部分結果防止、通常関数2つ＋Custom Eventの実Blueprint export fixture、E2Eテスト選択を追加。関連Pythonテスト74件成功。UHT／UBT・Automation Test・実Editor export E2Eは未実施。
 
 - 2026-10-30: 関数署名の引数名・宣言順、戻り値パラメータ、override／interfaceメタデータ整合性をGenerator入口で検証。UE 5.7 UHT／UBT成功、追加テスト成功、`BlueprintAIConverter` 全148件のAutomation Test成功（Exit Code 0）。
 - 2026-10-29: `2961277`でBranch合流、Loop Body／Completedとback-edge、Returnを明示Semantic CFGとしてLowering／生成し、Loop Body内Branchを含む回帰テストを追加。

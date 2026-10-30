@@ -12,10 +12,7 @@ from pathlib import Path
 ARTIFACT_PATTERN = re.compile(
     r"SEMANTIC_ROUNDTRIP_ARTIFACT=(?P<path>[^\r\n]+\.semantic\.json)",
 )
-TEST_SUCCESS_PATTERN = re.compile(
-    r"Test Completed\. Result=\{Success\}.*"
-    r"Path=\{BlueprintAIConverter\.SemanticJson\.EditorRoundtrip\}",
-)
+DEFAULT_AUTOMATION_TEST = "BlueprintAIConverter.SemanticJson.EditorRoundtrip"
 SUITE_SUCCESS_MARKER = "TEST COMPLETE. EXIT CODE: 0"
 
 
@@ -46,8 +43,13 @@ def run_e2e(
     python_executable: Path = Path(sys.executable),
     python_server: Path | None = None,
     timeout: int = 300,
+    automation_test: str = DEFAULT_AUTOMATION_TEST,
 ) -> dict:
     """Export from a real transient Blueprint, then invoke the public validation CLI."""
+    if not re.fullmatch(r"BlueprintAIConverter(?:\.[A-Za-z0-9_]+)+", automation_test):
+        raise SemanticEditorE2EError("invalid BlueprintAIConverter Automation test path")
+    success_pattern = re.compile(
+        r"Test Completed\. Result=\{Success\}.*Path=\{" + re.escape(automation_test) + r"\}")
     editor = editor.resolve()
     project = project.resolve()
     python_executable = python_executable.resolve()
@@ -64,7 +66,7 @@ def run_e2e(
     editor_result = _run([
         str(editor),
         str(project),
-        "-ExecCmds=Automation RunTests BlueprintAIConverter.SemanticJson.EditorRoundtrip; Quit",
+        f"-ExecCmds=Automation RunTests {automation_test}; Quit",
         "-unattended",
         "-nop4",
         "-nosplash",
@@ -77,11 +79,11 @@ def run_e2e(
     if editor_result.returncode != 0:
         raise SemanticEditorE2EError(
             f"Editor process failed with exit code {editor_result.returncode}")
-    if not TEST_SUCCESS_PATTERN.search(editor_output) or SUITE_SUCCESS_MARKER not in editor_output:
-        raise SemanticEditorE2EError("EditorRoundtrip did not report a successful Automation result")
+    if not success_pattern.search(editor_output) or SUITE_SUCCESS_MARKER not in editor_output:
+        raise SemanticEditorE2EError(f"{automation_test} did not report a successful Automation result")
     artifacts = ARTIFACT_PATTERN.findall(editor_output)
     if not artifacts:
-        raise SemanticEditorE2EError("EditorRoundtrip did not report its exported artifact")
+        raise SemanticEditorE2EError(f"{automation_test} did not report its exported artifact")
     artifact = Path(artifacts[-1].strip().strip('"')).resolve()
     if not artifact.is_file():
         raise SemanticEditorE2EError(f"reported Semantic JSON artifact does not exist: {artifact}")
@@ -111,11 +113,13 @@ def run_e2e(
 
     return {
         "status": "ok",
+        "automation_test": automation_test,
         "artifact": str(artifact),
         "asset_path": reports[-1].get("asset_path"),
         "semantic_status": reports[-1].get("semantic_status"),
         "variables": reports[-1].get("variables"),
         "functions": reports[-1].get("functions"),
+        "graph_traces": reports[-1].get("graph_traces"),
         "provider_status": reports[-1].get("provider_status"),
     }
 
@@ -128,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--python-server", type=Path)
     parser.add_argument("--timeout", type=int, default=300, help="Per-process timeout in seconds")
+    parser.add_argument("--automation-test", default=DEFAULT_AUTOMATION_TEST,
+                        help="BlueprintAIConverter Automation test that exports a roundtrip artifact")
     args = parser.parse_args(argv)
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
@@ -138,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
             python_executable=args.python,
             python_server=args.python_server,
             timeout=args.timeout,
+            automation_test=args.automation_test,
         )
     except SemanticEditorE2EError as exc:
         print(json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False))

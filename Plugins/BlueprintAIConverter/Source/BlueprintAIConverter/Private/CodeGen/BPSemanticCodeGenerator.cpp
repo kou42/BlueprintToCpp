@@ -1,6 +1,8 @@
 #include "BPSemanticCodeGenerator.h"
 #include "BPGenericFunctionExpressionEmitter.h"
 #include "BPGeneratedFunctionShape.h"
+#include "BPFunctionSignatureResolver.h"
+#include "BPSemanticFunctionExtractor.h"
 #include "BPNumericArithmeticResolver.h"
 #include "BPNumericComparisonResolver.h"
 #include "BPParentClassResolver.h"
@@ -250,6 +252,15 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
 {
     OutShape = FBPGeneratedFunctionShape();
     const FString FunctionName = Function.Name.ToString();
+    EBPSemanticFunctionVisibility EffectiveVisibility = Function.Visibility;
+    if (EffectiveVisibility != EBPSemanticFunctionVisibility::Unspecified &&
+        EffectiveVisibility != EBPSemanticFunctionVisibility::Public &&
+        EffectiveVisibility != EBPSemanticFunctionVisibility::Protected &&
+        EffectiveVisibility != EBPSemanticFunctionVisibility::Private)
+    {
+        Diagnostics.Add(TEXT("Semantic function has an invalid visibility"));
+        return false;
+    }
     if (IsIdentifier(FunctionName) == false)
     {
         Diagnostics.Add(TEXT("Semantic function name must be a valid C++ identifier"));
@@ -274,6 +285,16 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
         return false;
     }
 
+    // Reference returns require a lifetime policy that is not yet implemented.
+    if (Function.ReturnType.bIsReference || Function.ReturnType.bIsConst ||
+        (Function.ReturnType.Kind == EBPSemanticTypeKind::Void &&
+            Function.ReturnType.ContainerKind != TEXT("none")))
+    {
+        Diagnostics.Add(FString::Printf(
+            TEXT("Semantic function %s has unsupported return type qualifiers or void container"),
+            *FunctionName));
+        return false;
+    }
     FString ReturnType;
     if (EmitFunctionType(Function.ReturnType, ReturnType, Diagnostics) == false)
     {
@@ -309,6 +330,17 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
                 return false;
             }
             continue;
+        }
+        // Output assignment/dataflow is not implemented. Const reference inputs
+        // remain supported even when Reflection also marks them CPF_OutParm.
+        if ((Parameter.bIsOut &&
+                (Parameter.Type.bIsReference == false || Parameter.Type.bIsConst == false)) ||
+            (Parameter.Type.bIsReference && Parameter.Type.bIsConst == false))
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Semantic function %s parameter %s has unsupported output or mutable reference direction"),
+                *FunctionName, *ParameterName));
+            return false;
         }
         if (Parameter.DeclarationIndex < 0 ||
             DeclarationIndices.Contains(Parameter.DeclarationIndex))
@@ -364,7 +396,10 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
     if (FunctionName == TEXT("BeginPlay"))
     {
         if (ParentClass.bSupportsBeginPlay == false || Parameters.IsEmpty() == false ||
-            Function.bIsConst)
+            Function.bIsConst || ReturnType != TEXT("void") ||
+            Function.bIsInterfaceImplementation ||
+            (EffectiveVisibility != EBPSemanticFunctionVisibility::Unspecified &&
+                EffectiveVisibility != EBPSemanticFunctionVisibility::Protected))
         {
             Diagnostics.Add(FString::Printf(
                 TEXT("Parent class does not provide the required BeginPlay lifecycle signature: %s"),
@@ -375,6 +410,7 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
         bCallSuper = true;
         // ReceiveBeginPlayではなく、ネイティブのBeginPlay lifecycleを生成する。
         bEventImplementation = false;
+        EffectiveVisibility = EBPSemanticFunctionVisibility::Protected;
     }
     else if (bOverride &&
         (Function.SignatureSource != TEXT("generated_class_reflection") ||
@@ -394,9 +430,107 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
         return false;
     }
 
+    if (bOverride && FunctionName != TEXT("BeginPlay"))
+    {
+        const UClass* Parent = LoadObject<UClass>(nullptr, *ParentClass.ClassPath);
+        const auto ValidateTarget = [&](const UFunction* Target, const FString& TargetPath)
+        {
+            // UFunction does not describe arbitrary C++ virtual methods. Only a
+            // native Blueprint event proves the _Implementation override contract.
+            if (Target == nullptr || Target->GetPathName() != TargetPath ||
+                Target->GetFName() != Function.Name ||
+                Target->HasAnyFunctionFlags(FUNC_Native) == false ||
+                Target->HasAnyFunctionFlags(FUNC_BlueprintEvent) == false ||
+                Target->HasAnyFunctionFlags(FUNC_Final | FUNC_Static | FUNC_Private) ||
+                Function.bIsBlueprintEvent == false || bEventImplementation == false)
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Override target for %s is not an accessible native Blueprint event: %s"),
+                    *FunctionName, *TargetPath));
+                return false;
+            }
+            FBPResolvedFunctionSignature Signature;
+            const EBPSemanticFunctionVisibility TargetVisibility =
+                FBPSemanticFunctionExtractor::ResolveVisibility(Target);
+            if (TargetVisibility == EBPSemanticFunctionVisibility::Unspecified ||
+                (EffectiveVisibility != EBPSemanticFunctionVisibility::Unspecified &&
+                    EffectiveVisibility != TargetVisibility))
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Override visibility mismatch for %s"), *FunctionName));
+                return false;
+            }
+            EffectiveVisibility = TargetVisibility;
+            if (FBPFunctionSignatureResolver::Resolve(Target, Signature, Diagnostics) == false)
+            {
+                return false;
+            }
+            if (Signature.bStatic != Function.bIsStatic ||
+                Signature.bConst != Function.bIsConst ||
+                SemanticTypesMatch(Signature.ReturnType, Function.ReturnType, 0) == false ||
+                Signature.ParameterNames.Num() != OrderedParameters.Num())
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Override signature mismatch for %s: return type, qualifiers or parameter count"),
+                    *FunctionName));
+                return false;
+            }
+            for (int32 Index = 0; Index < OrderedParameters.Num(); ++Index)
+            {
+                const FBPSemanticParameter& Parameter = *OrderedParameters[Index];
+                const bool bOutput = Parameter.bIsOut && Parameter.Type.bIsConst == false;
+                if (Parameter.Name != Signature.ParameterNames[Index] ||
+                    SemanticTypesMatch(Parameter.Type, Signature.ParameterTypes[Index], 0) == false ||
+                    bOutput != Signature.OutputParameters[Index])
+                {
+                    Diagnostics.Add(FString::Printf(
+                        TEXT("Override signature mismatch for %s parameter %s at index %d"),
+                        *FunctionName, *Parameter.Name.ToString(), Index));
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (Function.bIsOverride &&
+            ValidateTarget(Parent != nullptr ? Parent->FindFunctionByName(Function.Name) : nullptr,
+                Function.OverriddenFunctionPath) == false)
+        {
+            return false;
+        }
+        if (Function.bIsInterfaceImplementation)
+        {
+            const UClass* Interface = LoadObject<UClass>(nullptr, *Function.InterfaceClassPath);
+            // The generated class currently inherits only ParentClass. A newly
+            // introduced interface needs an explicit inheritance emitter first.
+            if (Parent == nullptr || Interface == nullptr ||
+                Interface->HasAnyClassFlags(CLASS_Interface) == false ||
+                Parent->ImplementsInterface(Interface) == false)
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Interface override for %s requires an interface implemented by the native parent"),
+                    *FunctionName));
+                return false;
+            }
+            if (ValidateTarget(Interface->FindFunctionByName(Function.Name),
+                    Function.InterfaceFunctionPath) == false)
+            {
+                return false;
+            }
+        }
+    }
+
     const FString OverrideSuffix = bOverride ? TEXT(" override") : TEXT("");
-    const TCHAR* Visibility = FunctionName == TEXT("BeginPlay")
+    if (EffectiveVisibility == EBPSemanticFunctionVisibility::Private && bEventImplementation)
+    {
+        Diagnostics.Add(FString::Printf(
+            TEXT("Private Blueprint native events are unsupported: %s"), *FunctionName));
+        return false;
+    }
+    const TCHAR* Visibility = EffectiveVisibility == EBPSemanticFunctionVisibility::Private
+        ? TEXT("private") : EffectiveVisibility == EBPSemanticFunctionVisibility::Protected
         ? TEXT("protected") : TEXT("public");
+    const FString ProtectedMetadata = EffectiveVisibility == EBPSemanticFunctionVisibility::Protected
+        ? TEXT(", meta=(BlueprintProtected)") : FString();
     FString DefinitionFunctionName = FunctionName;
     if (bEventImplementation)
     {
@@ -410,10 +544,10 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
         else
         {
             OutShape.Declaration = FString::Printf(
-                TEXT("%s:\n    UFUNCTION(BlueprintNativeEvent, BlueprintCallable)\n")
+                TEXT("%s:\n    UFUNCTION(BlueprintNativeEvent, BlueprintCallable%s)\n")
                 TEXT("    %s %s(%s)%s;\n")
                 TEXT("    virtual %s %s(%s)%s;\n"),
-                Visibility, *ReturnType, *FunctionName, *Parameters, *ConstSuffix,
+                Visibility, *ProtectedMetadata, *ReturnType, *FunctionName, *Parameters, *ConstSuffix,
                 *ReturnType, *DefinitionFunctionName, *Parameters, *ConstSuffix);
         }
     }
@@ -421,7 +555,7 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
     {
         const FString ReflectionDeclaration = bOverride
             ? FString()
-            : TEXT("    UFUNCTION(BlueprintCallable)\n");
+            : FString::Printf(TEXT("    UFUNCTION(BlueprintCallable%s)\n"), *ProtectedMetadata);
         OutShape.Declaration = FString::Printf(
             TEXT("%s:\n%s    %s%s %s(%s)%s%s;\n"),
             Visibility, *ReflectionDeclaration, bOverride ? TEXT("virtual ") : TEXT(""),

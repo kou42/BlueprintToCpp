@@ -144,12 +144,22 @@ struct FBPSemanticParameter
     FGuid DefaultValueSourcePinId;
 };
 
+enum class EBPSemanticFunctionVisibility : uint8
+{
+    Unspecified,
+    Public,
+    Protected,
+    Private
+};
+
 struct FBPSemanticFunction
 {
     FName Name;
     FBPSemanticType ReturnType;
     FString OwnerClassPath;
     FString SignatureSource;
+    // Unspecified preserves legacy IR; reflected functions explicitly record access.
+    EBPSemanticFunctionVisibility Visibility = EBPSemanticFunctionVisibility::Unspecified;
     // リフレクションから得た属性。NativeであってもBP Override可能なため単一の実装区分に集約しない。
     bool bIsNative = false;
     bool bIsStatic = false;

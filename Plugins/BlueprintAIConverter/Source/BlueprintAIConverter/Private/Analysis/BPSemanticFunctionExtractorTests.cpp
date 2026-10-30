@@ -4,6 +4,8 @@
 
 #include "BPSemanticFunctionExtractor.h"
 #include "BPEmitterTestActor.h"
+#include "Engine/Blueprint.h"
+#include "UObject/Class.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticInterfaceSignatureTest,
     "BlueprintAIConverter.SemanticIR.Function.InterfaceSignature",
@@ -50,6 +52,40 @@ bool FBPSemanticInterfaceSignatureTest::RunTest(const FString& Parameters)
         FBPSemanticFunctionExtractor::HasMatchingInterfaceSignature(MismatchedDirection, Declaration));
     TestFalse(TEXT("関数const属性の不一致を拒否"),
         FBPSemanticFunctionExtractor::HasMatchingInterfaceSignature(MismatchedConst, Declaration));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticFunctionVisibilityExtractionTest,
+    "BlueprintAIConverter.SemanticIR.Function.VisibilityExtraction",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticFunctionVisibilityExtractionTest::RunTest(const FString& Parameters)
+{
+    UBlueprint* Blueprint = NewObject<UBlueprint>();
+    Blueprint->GeneratedClass = ABPEmitterTestActor::StaticClass();
+    FBPSemanticIR IR;
+    FBPSemanticFunctionExtractor::Append(Blueprint, IR);
+    const auto CheckVisibility = [&](const TCHAR* Name, EBPSemanticFunctionVisibility Expected)
+    {
+        const FBPSemanticFunction* Function = IR.Functions.FindByPredicate(
+            [Name](const FBPSemanticFunction& Candidate) { return Candidate.Name == FName(Name); });
+        if (TestNotNull(Name, Function)) { TestEqual(Name, Function->Visibility, Expected); }
+    };
+    CheckVisibility(TEXT("VerifiedOverride"), EBPSemanticFunctionVisibility::Public);
+    CheckVisibility(TEXT("ProtectedVisibility"), EBPSemanticFunctionVisibility::Protected);
+    CheckVisibility(TEXT("PrivateVisibility"), EBPSemanticFunctionVisibility::Private);
+    TestEqual(TEXT("nullからアクセスを推測しない"),
+        FBPSemanticFunctionExtractor::ResolveVisibility(nullptr),
+        EBPSemanticFunctionVisibility::Unspecified);
+    UFunction* Invalid = NewObject<UFunction>();
+    Invalid->FunctionFlags = FUNC_Public | FUNC_Private;
+    TestEqual(TEXT("矛盾したアクセスフラグを拒否"),
+        FBPSemanticFunctionExtractor::ResolveVisibility(Invalid),
+        EBPSemanticFunctionVisibility::Unspecified);
+    Invalid->FunctionFlags = FUNC_None;
+    TestEqual(TEXT("アクセスフラグなしを推測しない"),
+        FBPSemanticFunctionExtractor::ResolveVisibility(Invalid),
+        EBPSemanticFunctionVisibility::Unspecified);
     return true;
 }
 

@@ -12,7 +12,7 @@ class SemanticJsonError(ValueError):
 TYPE_KINDS = frozenset(("unresolved", "void", "bool", "int32", "int64",
                         "float", "double", "string", "name", "text", "object", "struct"))
 EXPRESSION_KINDS = frozenset(("literal", "variable_reference", "function_call"))
-STATEMENT_KINDS = frozenset(("expression", "assignment", "return"))
+STATEMENT_KINDS = frozenset(("expression", "assignment", "return", "branch"))
 BLOCK_TERMINATORS = frozenset(("unspecified", "end", "fallthrough",
                                "return", "branch", "loop"))
 STATUSES = frozenset(("complete", "partial", "unsupported"))
@@ -99,6 +99,29 @@ def _expression(raw: Any, path: str, depth: int = 0) -> None:
         _nullable_string(obj[key], path + "." + key)
     for i, arg in enumerate(_array(obj["arguments"], path + ".arguments")):
         _expression(arg, f"{path}.arguments[{i}]", depth + 1)
+
+
+def _statement(raw: Any, path: str, depth: int = 0) -> None:
+    if depth > 64:
+        raise SemanticJsonError(f"{path}: statement nesting exceeds 64")
+    obj = _object(raw, path)
+    _required(obj, ("kind", "source_node_id", "assignment_target", "expression"), path)
+    kind = _enum(obj["kind"], STATEMENT_KINDS, path + ".kind")
+    _guid(obj["source_node_id"], path + ".source_node_id")
+    _nullable_string(obj["assignment_target"], path + ".assignment_target")
+    _expression(obj["expression"], path + ".expression")
+    if kind == "branch":
+        _required(obj, ("then_statements", "else_statements"), path)
+        if obj["expression"]["type"]["kind"] != "bool":
+            raise SemanticJsonError(f"{path}.expression.type: branch requires a bool condition")
+    for field in ("then_statements", "else_statements"):
+        if field not in obj:
+            continue
+        children = _array(obj[field], path + "." + field)
+        if kind != "branch" and children:
+            raise SemanticJsonError(f"{path}.{field}: only branch statements may contain branches")
+        for index, child in enumerate(children):
+            _statement(child, f"{path}.{field}[{index}]", depth + 1)
 
 
 def parse_semantic_json(raw: Any) -> dict:
@@ -193,6 +216,10 @@ def parse_semantic_json(raw: Any) -> dict:
             raise SemanticJsonError(f"{path}: duplicate function {name}")
         function_names.add(name)
         _type(f["return_type"], path + ".return_type")
+        # Additive v2 field: omission keeps legacy access defaults in older exports.
+        if "visibility" in f:
+            _enum(f["visibility"], ("unspecified", "public", "protected", "private"),
+                  path + ".visibility")
         # 旧v2にはシグネチャがない。新形式のフィールドがある場合は一式を検証。
         if any(key in f for key in ("signature_source", "owner_class_path", "parameters")):
             _required(f, ("signature_source", "owner_class_path", "parameters"), path)
@@ -253,13 +280,7 @@ def parse_semantic_json(raw: Any) -> dict:
                         raise SemanticJsonError(f"{successor_path}: successor cannot be null")
                     successor_references.append((successor.lower(), successor_path))
             for si, statement in enumerate(_array(b["statements"], bp + ".statements")):
-                sp = f"{bp}.statements[{si}]"
-                s = _object(statement, sp)
-                _required(s, ("kind", "source_node_id", "assignment_target", "expression"), sp)
-                _enum(s["kind"], STATEMENT_KINDS, sp + ".kind")
-                _guid(s["source_node_id"], sp + ".source_node_id")
-                _nullable_string(s["assignment_target"], sp + ".assignment_target")
-                _expression(s["expression"], sp + ".expression")
+                _statement(statement, f"{bp}.statements[{si}]")
         for successor, successor_path in successor_references:
             if successor not in block_ids:
                 raise SemanticJsonError(
