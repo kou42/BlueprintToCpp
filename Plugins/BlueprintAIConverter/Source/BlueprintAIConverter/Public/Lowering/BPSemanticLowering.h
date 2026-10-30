@@ -26,8 +26,9 @@ public:
     static bool LowerActorLocation(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
 
-    // BeginPlayまたは通常関数Entryからboolリテラルまたは反射検証済み
+    // BeginPlay／通常関数／Custom Eventからboolリテラルまたは反射検証済み
     // 数値比較のBranchを通り、両枝でPrintStringまたはリテラル入力のnative void Callを呼ぶLowering。
+    // ネストBranchはbool条件に限定。通常関数では全経路が同じ末尾Resultへ到達するvoid形状を検証する。
     static bool LowerBranch(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
 
@@ -36,7 +37,7 @@ public:
     static bool LowerSequence(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
 
-    // BeginPlay -> ForLoop -> PrintString、または通常関数の
+    // BeginPlay／Custom EventのForLoop -> PrintString、または通常関数の
     // ForLoop -> 反射検証済みvoid関数呼び出しを、両端を含むfor文へLoweringする。
     static bool LowerForLoop(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR);
 
