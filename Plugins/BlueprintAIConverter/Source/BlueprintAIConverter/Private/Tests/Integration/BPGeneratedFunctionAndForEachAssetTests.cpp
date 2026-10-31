@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "../BPSemanticRoundtripTestUtils.h"
 
 #include "BPCopilotGraphJsonExporter.h"
 #include "BPGraphIR.h"
@@ -180,9 +181,10 @@ bool CheckJsonNodesAndPins(const FBPIRGraph& Graph, const TSharedPtr<FJsonObject
     return SeenNodes.Num() == Graph.Nodes.Num();
 }
 
-bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
+bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach, const bool bWithBreak = false)
 {
-    const FString AssetName = bForEach ? TEXT("BP_Test_ForEachLoop") : TEXT("BP_Test_FunctionCall");
+    const FString AssetName = bWithBreak ? TEXT("BP_Test_ForEachLoopWithBreak")
+        : (bForEach ? TEXT("BP_Test_ForEachLoop") : TEXT("BP_Test_FunctionCall"));
     const FString PackagePath = TEXT("/Game/BlueprintToCppTests/") + AssetName;
     UPackage* Package = CreatePackage(*PackagePath);
     if (Test.TestNotNull(TEXT("パッケージ"), Package) == false)
@@ -250,7 +252,9 @@ bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
         }
         FKismetEditorUtilities::CompileBlueprint(Blueprint);
         UEdGraph* MacroGraph = LoadObject<UEdGraph>(nullptr,
-            TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoop"));
+            bWithBreak
+                ? TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoopWithBreak")
+                : TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros:ForEachLoop"));
         if (Test.TestNotNull(TEXT("標準ForEachLoop"), MacroGraph) == false)
         {
             return false;
@@ -271,6 +275,11 @@ bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
                 TEXT("LoopBody"), Body, UEdGraphSchema_K2::PN_Execute)) == false ||
             Test.TestTrue(TEXT("Completed -> Print"), ConnectPins(Graph, Loop,
                 TEXT("Completed"), Done, UEdGraphSchema_K2::PN_Execute)) == false)
+        {
+            return false;
+        }
+        if (bWithBreak && Test.TestTrue(TEXT("Bodyの末尾からBreak入力へ接続"),
+            ConnectPins(Graph, Body, UEdGraphSchema_K2::PN_Then, Loop, TEXT("Break"))) == false)
         {
             return false;
         }
@@ -310,7 +319,7 @@ bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
         return false;
     }
     Test.TestEqual(TEXT("期待ノード数"), Event->Nodes.Num(), bForEach ? 5 : 2);
-    Test.TestEqual(TEXT("期待Exec接続数"), Event->ExecEdges.Num(), bForEach ? 3 : 1);
+    Test.TestEqual(TEXT("期待Exec接続数"), Event->ExecEdges.Num(), bForEach ? (bWithBreak ? 4 : 3) : 1);
     Test.TestEqual(TEXT("期待Data接続数"), Event->DataEdges.Num(), bForEach ? 1 : 0);
 
     FString JsonPath;
@@ -386,6 +395,59 @@ bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
             Generated.SourceContent.Contains(TEXT("ForEach body")));
         Test.TestTrue(TEXT("ForEach完了処理をC++へ生成"),
             Generated.SourceContent.Contains(TEXT("ForEach completed")));
+        if (bWithBreak)
+        {
+            if (Test.TestEqual(TEXT("Break付きForEachの関数数"), Semantic.Functions.Num(), 1) == false ||
+                Test.TestEqual(TEXT("Break付きForEachのCFG Block数"), Semantic.Functions[0].Blocks.Num(), 3) == false)
+            {
+                return false;
+            }
+            const TArray<FBPSemanticStatement>& BodyStatements = Semantic.Functions[0].Blocks[1].Statements;
+            Test.TestTrue(TEXT("実マクロのBody末尾にBreak文を保持"),
+                BodyStatements.IsEmpty() == false && BodyStatements.Last().Kind == EBPSemanticStatementKind::Break);
+            const TSharedRef<FJsonObject> SemanticJson = FBPSemanticJsonSerializer::ToJson(
+                Semantic, FEngineVersion::Current().ToString());
+            const TArray<TSharedPtr<FJsonValue>>& JsonBody = SemanticJson->GetArrayField(TEXT("functions"))[0]
+                ->AsObject()->GetArrayField(TEXT("blocks"))[1]->AsObject()->GetArrayField(TEXT("statements"));
+            if (Test.TestEqual(TEXT("JSONにBodyとBreakの文数を保持"), JsonBody.Num(), BodyStatements.Num()) == false ||
+                Test.TestTrue(TEXT("JSONのBodyが空でない"), JsonBody.IsEmpty() == false) == false)
+            {
+                return false;
+            }
+            Test.TestEqual(TEXT("JSONにBreak種別を保持"),
+                JsonBody.Last()->AsObject()->GetStringField(TEXT("kind")), FString(TEXT("break")));
+            const int32 BodyPosition = Generated.SourceContent.Find(TEXT("ForEach body"));
+            const int32 BreakPosition = Generated.SourceContent.Find(TEXT("break;"));
+            const int32 CompletedPosition = Generated.SourceContent.Find(TEXT("ForEach completed"));
+            Test.TestTrue(TEXT("Body、Break、Completedの出力順を保持"),
+                BodyPosition != INDEX_NONE && BreakPosition > BodyPosition && CompletedPosition > BreakPosition);
+
+            // Mutate copies so the exported Graph Trace still describes the valid compiled Blueprint.
+            for (int32 CaseIndex = 0; CaseIndex < 2; ++CaseIndex)
+            {
+                FBPGraphIR Invalid = IR;
+                FBPIRGraph* Target = Invalid.Graphs.FindByPredicate(
+                    [](const FBPIRGraph& Graph) { return Graph.Kind == TEXT("event"); });
+                if (Test.TestNotNull(TEXT("Break拒否系Graph"), Target) == false) { return false; }
+                FBPIRNode* LoopNode = Target->Nodes.FindByPredicate(
+                    [](const FBPIRNode& Node) { return Node.MacroGraphName == TEXT("ForEachLoopWithBreak"); });
+                if (Test.TestNotNull(TEXT("Break拒否系Macro"), LoopNode) == false) { return false; }
+                const FBPIRPin* BreakPin = LoopNode->Pins.FindByPredicate(
+                    [](const FBPIRPin& Pin) { return Pin.Name == TEXT("Break") && Pin.Direction == EGPD_Input; });
+                if (Test.TestNotNull(TEXT("Break拒否系Pin"), BreakPin) == false) { return false; }
+                const int32 EdgeIndex = Target->ExecEdges.IndexOfByPredicate(
+                    [LoopNode, BreakPin](const FBPIRLink& Edge)
+                    { return Edge.TargetNode == LoopNode->Id && Edge.TargetPin == BreakPin->Id; });
+                if (Test.TestTrue(TEXT("Breakへ戻る接続を特定"), EdgeIndex != INDEX_NONE) == false) { return false; }
+                if (CaseIndex == 0) { Target->ExecEdges.RemoveAt(EdgeIndex); }
+                else { Target->ExecEdges[EdgeIndex].TargetPin = FGuid::NewGuid(); }
+                FBPSemanticIR Rejected;
+                Test.TestFalse(TEXT("Break接続の欠落・不明Pinを拒否"),
+                    FBPSemanticLowering::Lower(Blueprint, Invalid, Rejected));
+                Test.TestTrue(TEXT("Break拒否の診断を保持し部分関数を公開しない"),
+                    Rejected.HasErrors() && Rejected.Functions.IsEmpty());
+            }
+        }
     }
     else
     {
@@ -408,7 +470,7 @@ bool GenerateFixture(FAutomationTestBase& Test, const bool bForEach)
     }
     Test.AddInfo(FString::Printf(TEXT("GENERATED_BLUEPRINT=%s"), *Filename));
     Test.AddInfo(FString::Printf(TEXT("GENERATED_GRAPH_JSON=%s"), *JsonPath));
-    return true;
+    return BPSemanticTestUtils::ExportRoundtrip(Test, Blueprint, IR, Semantic);
 }
 }
 
@@ -428,6 +490,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPGeneratedForEachAssetTest,
 bool FBPGeneratedForEachAssetTest::RunTest(const FString& Parameters)
 {
     return GenerateFixture(*this, true);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPGeneratedForEachBreakAssetTest,
+    "BlueprintAIConverter.GeneratedAssets.ForEachLoopWithBreak",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPGeneratedForEachBreakAssetTest::RunTest(const FString& Parameters)
+{
+    return GenerateFixture(*this, true, true);
 }
 
 #endif

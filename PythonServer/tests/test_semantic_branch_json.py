@@ -1,12 +1,16 @@
 """The C++ serializer emits Branch statements in CFG blocks and nested trees."""
 import copy
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from app.semantic_json import SemanticJsonError, parse_semantic_json
 from app.semantic_roundtrip import validate_file
+from app import semantic_editor_e2e
+from app.semantic_editor_e2e import SemanticEditorE2EError, run_e2e
 
 GOLDEN = Path(__file__).parent / "golden" / "semantic_j2_roundtrip.json"
 
@@ -108,3 +112,52 @@ def test_uobject_nested_branch_entry_and_common_continuation_roundtrip(tmp_path,
     target = tmp_path / "nested-uobject.semantic.json"
     target.write_text(json.dumps(data), encoding="utf-8")
     assert validate_file(target, check_provider=True)["provider_status"] == "mocked"
+
+
+@pytest.mark.parametrize("shape,test_name", [
+    ("cfg", "FunctionBranchNativeCalls"),
+    ("nested", "NestedBranchNativeCalls"),
+])
+@pytest.mark.parametrize("invalid", [False, True])
+def test_selected_branch_export_runs_real_python_cli(tmp_path, monkeypatch, shape, test_name, invalid):
+    # Only the Editor process is simulated; schema validation and Mock Provider run in a subprocess.
+    editor = tmp_path / "UnrealEditor-Cmd"
+    project = tmp_path / "Branch.uproject"
+    editor.touch()
+    project.touch()
+    data = branch_document(shape)
+    if shape == "nested":
+        data["source"]["parent_class_path"] = "/Script/Engine.Actor"
+        data["functions"][0].update(name="BeginPlay", is_event_graph=True)
+    if invalid:
+        data["functions"][0]["blocks"][0]["statements"][0]["source_node_id"] = "invalid"
+    artifact = tmp_path / "branch.semantic.json"
+    artifact.write_text(json.dumps(data), encoding="utf-8")
+    selected = "BlueprintAIConverter.Conversion.RealBlueprint." + test_name
+    real_run = subprocess.run
+    commands = []
+
+    def fake_editor(command, **kwargs):
+        commands.append(command)
+        if command[0] == str(editor.resolve()):
+            output = (f"Test Completed. Result={{Success}} Path={{{selected}}}\n"
+                      f"SEMANTIC_ROUNDTRIP_ARTIFACT={artifact}\n"
+                      "**** TEST COMPLETE. EXIT CODE: 0 ****")
+            return subprocess.CompletedProcess(command, 0, output, "")
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(semantic_editor_e2e.subprocess, "run", fake_editor)
+    arguments = dict(python_executable=Path(sys.executable),
+                     python_server=Path(__file__).resolve().parents[1], automation_test=selected)
+    if invalid:
+        with pytest.raises(SemanticEditorE2EError, match="Semantic JSON CLI validation failed"):
+            run_e2e(editor, project, **arguments)
+    else:
+        report = run_e2e(editor, project, **arguments)
+        assert report["automation_test"] == selected
+        assert report["artifact"] == str(artifact.resolve())
+        assert report["functions"] == 1
+        assert report["provider_status"] == "mocked"
+        assert report["graph_traces"] == len(data["graph_traces"])
+    assert len(commands) == 2
+    assert f"-ExecCmds=Automation RunTests {selected}; Quit" in commands[0]

@@ -10,7 +10,8 @@ class SemanticJsonError(ValueError):
 
 
 TYPE_KINDS = frozenset(("unresolved", "void", "bool", "int32", "int64",
-                        "float", "double", "string", "name", "text", "object", "struct"))
+                        "float", "double", "string", "name", "text", "object", "struct",
+                        "enum", "byte", "delegate", "multicast_delegate"))
 EXPRESSION_KINDS = frozenset(("literal", "variable_reference", "function_call"))
 LOOP_KINDS = frozenset(("for_loop", "for_each_loop"))
 STATEMENT_KINDS = frozenset(("expression", "assignment", "return", "branch", "break")) | LOOP_KINDS
