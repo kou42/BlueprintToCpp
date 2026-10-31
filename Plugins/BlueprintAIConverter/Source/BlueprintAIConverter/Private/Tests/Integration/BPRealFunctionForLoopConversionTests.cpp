@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "../BPSemanticRoundtripTestUtils.h"
 
 #include "BPGraphIR.h"
 #include "BPSemanticCodeGenerator.h"
@@ -299,7 +300,7 @@ bool FBPRealFunctionForLoopConversionTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("未解決のループ本体関数を拒否"),
         FBPSemanticLowering::Lower(Blueprint, UnresolvedCallIR, RejectedIR));
     TestTrue(TEXT("未解決関数の診断を保持"), RejectedIR.HasErrors());
-    return true;
+    return BPSemanticTestUtils::ExportRoundtrip(*this, Blueprint, GraphIR, SemanticIR);
 }
 
 #endif

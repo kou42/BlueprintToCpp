@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "../BPSemanticRoundtripTestUtils.h"
 
 #include "BPGraphIR.h"
 #include "BPSemanticCodeGenerator.h"
@@ -560,7 +561,7 @@ static bool RunFunctionBranchConversion(FAutomationTestBase& Test, int32 Mode)
     Test.TestFalse(TEXT("Function Resultへ到達しない枝を拒否"),
         FBPSemanticLowering::Lower(Blueprint, MissingResultIR, RejectedIR));
     Test.TestTrue(TEXT("Result欠落の診断を保持"), RejectedIR.HasErrors());
-    return true;
+    return BPSemanticTestUtils::ExportRoundtrip(Test, Blueprint, GraphIR, SemanticIR);
 }
 
 bool FBPRealFunctionBranchConversionTest::RunTest(const FString& Parameters)
@@ -791,7 +792,8 @@ static bool RunNestedNativeBranchTest(FAutomationTestBase& Test, int32 Mode)
             Test.TestTrue(TEXT("拒否時に部分関数を公開しない"), Rejected.Functions.IsEmpty() && Rejected.HasErrors());
         }
     }
-    for (FBPIRGraph& Target : GraphIR.Graphs)
+    FBPGraphIR InvalidGraphIR = GraphIR;
+    for (FBPIRGraph& Target : InvalidGraphIR.Graphs)
     {
         for (FBPIRNode& Node : Target.Nodes)
         {
@@ -799,9 +801,9 @@ static bool RunNestedNativeBranchTest(FAutomationTestBase& Test, int32 Mode)
         }
     }
     FBPSemanticIR Rejected;
-    Test.TestFalse(TEXT("ネスト枝の不正Callも拒否"), FBPSemanticLowering::Lower(Blueprint, GraphIR, Rejected));
+    Test.TestFalse(TEXT("ネスト枝の不正Callも拒否"), FBPSemanticLowering::Lower(Blueprint, InvalidGraphIR, Rejected));
     Test.TestTrue(TEXT("ネスト失敗時に部分関数を公開しない"), Rejected.Functions.IsEmpty() && Rejected.HasErrors());
-    return true;
+    return BPSemanticTestUtils::ExportRoundtrip(Test, Blueprint, GraphIR, IR);
 }
 
 bool FBPRealNestedNativeBranchTest::RunTest(const FString& Parameters) { return RunNestedNativeBranchTest(*this, 0); }

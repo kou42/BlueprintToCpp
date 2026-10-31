@@ -1,6 +1,6 @@
 # BlueprintToCpp ロードマップ
 
-最終更新: 2026-10-30
+最終更新: 2026-10-31
 
 ## 目的と原則
 
@@ -179,6 +179,57 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 3. 通常関数ForLoopの単一Loop／Body Call制約を整理し、多重ループ・Completed後続の共有Result到達を検証して拡張する。ForEachの一般Call対応、ネストBranchの接続条件式・戻り値対応も段階的に進める。
 4. 対応済みCFGと複数関数について、実Editor exportからPython schema／roundtripまでの対象アセットを拡張する。
 
+### 入れ子ForLoopの実Blueprint export（2026-10-31、Python検証済み・UE検証待ち）
+
+- `BlueprintAIConverter.GeneratedAssets.NestedForLoop`を追加。専用の`BP_Test_NestedForLoop`アセットへ標準ForLoopマクロを2段接続し、外側1～3、内側2～4の境界、内側Body・内側Completed・外側Completedを持つ実Blueprintを構築する。
+- 共通fixtureのLowering入口を`Lower(Blueprint, GraphIR, Semantic)`へ統一し、実Blueprintと共通Entry監査を経由する。既存の単一ForLoop／算術比較fixtureにも共通export検証を追加し、正常なIRへクラス情報と全Graph Traceを付加してSemantic JSONを保存・成果物通知する。新しいLowerer機能の追加ではなく、既存対応の実Blueprint縦断検証を拡張する変更。
+- 入れ子のSemantic IRについて内側Loopと双方のCompleted文数を検査し、生成C++の内側Index名・境界値とBody→内側Completed→外側Completedの順序を確認する。Graph IRのコピーで不正な境界値・重複Exec edgeを作り、診断付き拒否と部分関数非公開を確認する。
+- 実UEでは`python -m app.semantic_editor_e2e --editor <UnrealEditor-Cmd> --project <project.uproject> --automation-test BlueprintAIConverter.GeneratedAssets.NestedForLoop`を実行する。既存GeneratedAssetsテストと同様にuassetとGraph JSONも保存する。単一ForLoopと算術比較もそれぞれ`BlueprintAIConverter.GeneratedAssets.ForLoop`／`BlueprintAIConverter.GeneratedAssets.ArithmeticComparison`でexportを選択可能。
+- Pythonに2件を追加。Editor呼び出しのみを模擬し、内側／外側Completedを持つ入れ子Loop JSONを実CLI／Mock Providerへ渡す正常系と、内側Completedの不正GUIDによるE2E失敗を確認する。関連Pythonテスト191件と`git diff --check`成功。
+- 新規fixtureと既存fixtureの入口変更についてUHT／UBT・Automation Test・実Editor export E2EはUE環境がないため未実施。複雑Loopの共通Entry移行と専用Lowerer整理は引き続き未完了。JSON連携全体のチェックは実UE検証まで継続する。
+
+### Break付きForEachの実Blueprint export（2026-10-31、Python検証済み・UE検証待ち）
+
+- `BlueprintAIConverter.GeneratedAssets.ForEachLoopWithBreak`を追加。通常ForEachと共通の実Blueprint fixtureから標準`ForEachLoopWithBreak`マクロを生成し、int32配列Getter・Body Call・Body末尾からBreak入力へのExec接続・Completed Callを構築する。専用の`BP_Test_ForEachLoopWithBreak`アセットを使用する。
+- コンパイル後の実Graph IRについて、Breakを含むExec edge数と全Node／Pin／接続のGraph JSON一致を検査する。Lowering後のBody末尾のBreak文、Semantic JSONの文数と`kind: break`、C++のBody→Break→Completedの出力順を確認し、共通ヘルパーでSavedへのSemantic JSON出力と成果物通知まで行う。
+- 正常Graph IRのコピーでBreak edge欠落と不明な入力Pinを作り、Loweringの拒否、診断保持、部分関数を公開しないことを検査する。正常なexportのGraph Traceは改変しない。
+- 実UEでは`python -m app.semantic_editor_e2e --editor <UnrealEditor-Cmd> --project <project.uproject> --automation-test BlueprintAIConverter.GeneratedAssets.ForEachLoopWithBreak`を実行する。既存GeneratedAssetsテストと同様にuassetとGraph JSONも保存する。
+- Pythonに2件を追加。Editor呼び出しのみを模擬し、Break文を持つForEach CFGのJSONを実CLI／Mock Providerへ渡す正常系と、不正なBreak出典GUIDでE2Eが失敗する拒否系を確認する。関連Pythonテスト189件と`git diff --check`成功。
+- 新規C++ fixtureのUHT／UBT・Automation Test・実Editor export E2EはUE環境がないため未実施。既存Lowererの機能追加ではなく、既存Break対応を実Blueprintとexportで検証する経路の追加として扱う。入れ子Loopの実export拡張、複雑Loopの共通Entry移行とUE実行確認は引き続き未完了。
+
+### Loopの実Editor export経路（2026-10-31、Python検証済み・UE検証待ち）
+
+- 実UObject Blueprintの通常関数`FunctionForLoopCall`と、Actor Blueprintの`GeneratedAssets.ForEachLoop`へSemantic JSONのSaved出力と`SEMANTIC_ROUNDTRIP_ARTIFACT`通知を追加。前者はBody／Completed／back-edgeを持つ3 Block CFG、後者は配列Getter・配列要素型・Body／Completedを含む既存Lowering／C++生成結果をそのまま保存する。
+- Branchの保存検証を`Private/Tests/BPSemanticRoundtripTestUtils.h`の共通ヘルパーへ移行し、Loopでも使用する。入力IRのコピーへクラス情報・全Graph Traceを付加し、SerializerとExporterの一致、再読込・再解析、関数数・変数数・Graph Trace数・親クラスを検証する。検査に失敗した場合は成果物通知を出さない。
+- ForEachと共通fixtureを使用する`GeneratedAssets.FunctionCall`にも同じexport検証を追加。GeneratedAssetsテストは従来どおり`/Game/BlueprintToCppTests`配下のuassetとGraph JSONも保存する。
+- 実UEでは`python -m app.semantic_editor_e2e --editor <UnrealEditor-Cmd> --project <project.uproject> --automation-test BlueprintAIConverter.Conversion.RealBlueprint.FunctionForLoopCall`を実行する。選択名を`BlueprintAIConverter.GeneratedAssets.ForEachLoop`へ変更すると実ForEachを確認できる。
+- Pythonに4件を追加。Editor呼び出しのみを模擬し、通常関数ForLoop CFGとActor ForEachの配列型ツリー／Completedを持つJSONを実Python CLIとMock Providerへ渡す。不明なCFG後続と不正な配列要素型でE2Eが失敗することも確認する。関連Pythonテスト187件と`git diff --check`成功。
+- UE環境がないため、共通ヘルパーと追加export経路のUHT／UBT・Automation Test・実Editor E2Eは未実施。実export経路の準備とPython検証まで完了し、UE検証待ちとして扱う。Break／入れ子Loopを含む実export対象の拡張も残るため、JSON連携全体のチェックは継続する。
+
+### Branchの実Editor export経路（2026-10-31、Python検証済み・UE検証待ち）
+
+- `BPRealBranchConversionTests.cpp`の通常関数Branch共通fixtureとネストBranch fixtureに、実際にLowering・C++生成したIRのSavedへのエクスポートを追加。通常関数の`FunctionBranch`／`FunctionBranchNativeCalls`／`FunctionBranchStaticAndSelf`／`FunctionBranchMixedPrint`と、Actor BeginPlayの`NestedBranchNativeCalls`が対象。
+- 共有テストヘルパーで実Blueprintのクラス情報と全Graph Traceを付加し、SerializerとExporterの内容一致、保存JSONの再読込・再解析、関数数・Graph Trace数・親クラスの保持を確認する。`SEMANTIC_ROUNDTRIP_ARTIFACT`を出力し、既存E2Eランナーから今回の成果物を選択できる。ネスト枝の拒否テストはGraph IRのコピーを改変し、正常なexportの追跡情報を汚さない。
+- 実UEでは`python -m app.semantic_editor_e2e --editor <UnrealEditor-Cmd> --project <project.uproject> --automation-test BlueprintAIConverter.Conversion.RealBlueprint.FunctionBranchNativeCalls`で通常関数Branchを確認する。同じコマンドの選択名を`BlueprintAIConverter.Conversion.RealBlueprint.NestedBranchNativeCalls`へ変更するとネストBranchを確認できる。他の通常関数Branchケースも同様に選択可能。
+- Python側に4件を追加。上記2つの選択名についてEditor呼び出しのみを模擬し、Branch CFG／ネストJSONを実Python CLIとMock Providerへ渡す正常系と、不正GUIDを持つ成果物によってE2Eが失敗する拒否系を確認する。関連Pythonテスト183件と`git diff --check`成功。
+- UE環境がないため、C++ヘルパーのビルド、Automation Test、実Editor export E2Eは未実施。通常関数Branch／ネストBranchの実export経路は準備済みだが検証待ちとし、Loop系の実export対象拡張とJSON連携全体のチェックは継続する。
+
+### Semantic JSONの再帰型ツリー同期（2026-10-31、Python検証済み・実UE待ち）
+
+- `TypeToJson`とPythonの契約を照合し、未受理だった`enum`／`byte`／`delegate`／`multicast_delegate`を同期した。delegate署名パスなどの`type_path`もJSON往復で保持する。C++生成対応を増やす変更ではなく、既存Serializerの出力を受理する変更。
+- `container_kind`の`none`／`array`／`set`／`map`、`inner_type`／`key_type`／`value_type`文字列、`element_type_info`／`key_type_info`／`value_type_info`の再帰構造を検証する。子型の不正な形状・属性・深さ64超過は、子フィールドまで含むパス付きで拒否する。
+- 旧v2の追加フィールド省略、文字列だけのコンテナ型、未解決コンテナ根、nullの子型は引き続き受理する。型の構造検証とC++生成可否は分離し、Reflectionの型解決結果やコンテナ文字列と子型の意味的一致をPythonで推測しない。既存v2の出力契約への同期のためschema_versionは2を維持し、既存exportの移行は不要。
+- `test_semantic_type_json.py`へ49件を追加。C++の既存`SerializeV2` fixtureに沿うMap／Set型ツリーを、変数・戻り値・引数・式・Call引数・ForEach要素型で検証し、JSON往復／Mock Provider、追加型種別、不正な子型、旧形式、深さ64の受理／65の拒否を確認した。
+- 新規49件を含む関連Pythonテスト179件と`git diff --check`成功。C++コード変更なし。UE環境がないためUHT／UBT・Automation Test・実Editor export E2Eは未実施。JSON連携全体のチェック項目は、実export対象の拡張とUE検証が残るため継続する。
+
+### Semantic JSONのLoop／Break同期（2026-10-31、Python検証済み・実UE待ち）
+
+- 現在の実装を照合し、C++ Serializerが既に出力する`for_loop`／`for_each_loop`／`break`をPython側が未受理だった不整合を修正した。`semantic_json.py`で受理するStatement種別を同期し、Index名、First／Last式、配列式、Element名／型、Body／Completed配列を検証する。
+- Body／Completed内もBranchと共通の再帰Statement検証へ渡し、子Statement・式・GUID・深さ上限64を検証する。通常文に非空のBody／Completed配列を隠した入力は拒否する。Serializerが通常文へ出力する空のループ情報と、旧v2での同フィールド省略は維持する。
+- JSON v2の既存出力表現への受理拡張であり、schema_versionは2を維持する。構造検証とC++生成可能性は区別し、Breakのループスコープ、CFGの構造化可否、配列要素型の意味的一致はGenerator側の検証を引き続き使用する。型ツリー全体のPython検証拡充と実Editor exportによる確認は残る。
+- `test_semantic_loop_json.py`へ35件を追加。ForLoop／ForEachの入れ子・Branch内ループ・明示CFG・Break・CompletedをJSON往復とMock Provider境界まで保持し、必須情報欠落、不正な子配列／式／型、深さ超過を拒否する。関連Pythonテスト130件成功。`git diff --check`成功。
+- C++ Serializer／IRは変更なし。UE環境がないため、UHT／UBT・Automation Test・実Editor export E2Eは未実施。JSON連携全体のチェック項目は継続する。
+
 ### P1 複雑ForLoopのCustom Event対応（2026-10-30、UE検証待ち）
 
 - 複雑ForLoopのイベント経路からBeginPlay必須条件を除去し、実Blueprintでは共通`ResolveEntryFunction`で署名・親クラス・void戻り値を検証する。UObjectのCustom Eventにも対応し、多重ループ・既存二重ループfallback・単一ループ経路が反射済み関数名／公開範囲／Entry種別を保持する。
@@ -301,9 +352,23 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 | ForEachLoopのStatement／式Lowering | 共通Entryに対応（UE検証待ち）。int32配列・PrintString・Index／Element変換に限定 | 一般のCall／式Loweringと任意の要素型へReflection・スコープ検証を保って段階的に拡張 |
 | `BPSemanticCodeGenerator.cpp::Generate` | 複数関数と明示CFGに対応済みだが、受理するCFG形状を構造化Branch／Loopへ限定 | 共通CFG走査と診断を拡張し、対応ノードを増やす際もBlock順から意味を推測しない |
 | `BPSemanticCodeGenerator.cpp::BuildFunctionShape` | out値／可変参照／参照戻り値を未対応Policyで拒否し、native Blueprint event override元をReflection照合（UE検証待ち）。公開範囲をReflection／IR／C++／JSONへ保持（UE検証待ち）。Interface継承は未完了 | 公開範囲・署名PolicyのUE検証。出力代入・寿命検証を実装して拒否Policyを段階的に解除し、Interface継承と対応override形式を拡張 |
-| `BPSemanticJsonSerializer.cpp`／`PythonServer/app/semantic_json.py` | schema_version 2。Branch／Loop／BreakのStatement種別と入れ子、任意のコンテナ型ツリーを同期（Python検証済み・実UE待ち）。型種別・参照関係の完全監査は未完了 | 新IR表現ごとに両側を更新しgolden／roundtripで確認 |
+| `BPSemanticJsonSerializer.cpp`／`PythonServer/app/semantic_json.py` | schema_version 2。Branch／Loop／Breakと再帰Statement、コンテナ型ツリー・enum／byte／delegate種別は同期済み。通常関数Branch／ネストBranch／通常関数ForLoop／Actor ForEach／Break付きForEach／入れ子ForLoopの実export fixtureを追加（Python検証済み・実UE待ち） | 新IR表現ごとに両側を更新しgolden／roundtripで確認。準備済みの実Editor E2Eを実行し、共通Entry移行時も同じ対象で回帰確認する |
 
 ## 最新の検証結果
+
+- 2026-10-31（PR作成時の統合確認）: `6f89a9d`（PR #114）までのmainへ統合。既存のLoop／Break・型ツリー検証、空container種別の互換性、共通Entry対応を保持し、追加のLoop export E2Eテストを`test_semantic_loop_export_json.py`へ分離した。内側Completedを親Bodyの後続へ置く最新IRに入れ子fixtureを同期。関連Pythonテスト202件と`git diff --check`成功。UHT／UBT・Automation Test・実Editor export E2Eは未実施。
+
+- 2026-10-31: 標準ForLoopを2段接続する実Blueprint fixtureとSemantic JSON exportを追加。内側／外側Completedを持つJSONの実Python CLI連携2件を含む関連Pythonテスト191件と`git diff --check`成功。新規fixture・既存fixtureの入口変更のUHT／UBT・Automation Test・実Editor export E2Eは未実施。
+
+- 2026-10-31: 標準ForEachLoopWithBreakを使う実Blueprint fixtureとSemantic JSON exportを追加。実Python CLIでの正常系・不正Break出典GUIDの拒否系2件を含む関連Pythonテスト189件と`git diff --check`成功。新規C++ fixtureのUHT／UBT・Automation Test・実Editor export E2Eは未実施。
+
+- 2026-10-31: 通常関数ForLoopとActor ForEachの実export経路を追加し、Branchと保存検証を共通化。実Python CLIでの正常系・CFG後続／配列要素型の拒否系4件を含む関連Pythonテスト187件と`git diff --check`成功。UHT／UBT・Automation Test・実Editor export E2Eは未実施。
+
+- 2026-10-31: 通常関数BranchとネストBranchの実BlueprintテストへSavedへのexportと成果物通知を追加。Editorを模擬して実Python CLIへ渡す4件を含む関連Pythonテスト183件と`git diff --check`成功。新規C++コードのビルド・Automation Test・実Editor export E2Eは未実施。
+
+- 2026-10-31: 再帰型ツリーとenum／byte／delegate種別のPython契約を同期。新規49件を含む関連Pythonテスト179件と`git diff --check`成功。C++変更なし。UHT／UBT・Automation Test・実Editor export E2Eは未実施。
+
+- 2026-10-31: Loop／Break StatementのPython受理と再帰検証を同期。新規35件を含む関連Pythonテスト130件と`git diff --check`成功。C++変更なし。UHT／UBT・Automation Test・実Editor export E2Eは未実施。
 
 - 2026-10-30（新規変更、UE検証待ち）: 複雑ForLoopのイベント経路をUObject Custom Eventへ拡張し、多重ループの先行文・最上位Completedを正規化。実Blueprint回帰3ケースを追加、関連Pythonテスト141件成功。UHT／UBT・Automation Test・実Editor E2Eは未実施。
 

@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "../BPSemanticRoundtripTestUtils.h"
 
 #include "BPCopilotGraphJsonExporter.h"
 #include "BPGraphIR.h"
@@ -62,7 +63,7 @@ UK2Node_CallFunction* AddFixturePrint(UEdGraph* Graph, UFunction* Function,
     return Print;
 }
 
-bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& Test)
+bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& Test, bool bNested = false)
 {
     const FString PackagePath = TEXT("/Game/BlueprintToCppTests/") + AssetName;
     UPackage* Package = CreatePackage(*PackagePath);
@@ -115,8 +116,8 @@ bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& 
         return false;
     }
 
-    const int32 ExpectedNodes = bLoop ? 4 : 10;
-    const int32 ExpectedExecEdges = bLoop ? 3 : 3;
+    const int32 ExpectedNodes = bNested ? 6 : (bLoop ? 4 : 10);
+    const int32 ExpectedExecEdges = bNested ? 5 : 3;
     const int32 ExpectedDataEdges = bLoop ? 0 : 6;
 
     if (bLoop)
@@ -135,9 +136,26 @@ bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& 
         Loop->FindPinChecked(TEXT("LastIndex"))->DefaultValue = TEXT("3");
         UK2Node_CallFunction* Body = AddFixturePrint(Graph, PrintFunction, TEXT("Loop body"));
         UK2Node_CallFunction* Done = AddFixturePrint(Graph, PrintFunction, TEXT("Loop completed"));
+        UK2Node_MacroInstance* BodyLoop = Loop;
+        if (bNested)
+        {
+            BodyLoop = AddFixtureNode<UK2Node_MacroInstance>(Graph);
+            BodyLoop->SetMacroGraph(MacroGraph);
+            BodyLoop->AllocateDefaultPins();
+            BodyLoop->FindPinChecked(TEXT("FirstIndex"))->DefaultValue = TEXT("2");
+            BodyLoop->FindPinChecked(TEXT("LastIndex"))->DefaultValue = TEXT("4");
+            UK2Node_CallFunction* InnerDone = AddFixturePrint(Graph, PrintFunction, TEXT("Inner completed"));
+            if (Test.TestTrue(TEXT("外側LoopBodyから内側ForLoop"), ConnectFixture(Graph, Loop,
+                    TEXT("LoopBody"), BodyLoop, UEdGraphSchema_K2::PN_Execute)) == false ||
+                Test.TestTrue(TEXT("内側CompletedからPrint"), ConnectFixture(Graph, BodyLoop,
+                    TEXT("Completed"), InnerDone, UEdGraphSchema_K2::PN_Execute)) == false)
+            {
+                return false;
+            }
+        }
         if (Test.TestTrue(TEXT("BeginPlayからForLoop"), ConnectFixture(Graph, Begin,
                 UEdGraphSchema_K2::PN_Then, Loop, UEdGraphSchema_K2::PN_Execute)) == false ||
-            Test.TestTrue(TEXT("LoopBodyからPrint"), ConnectFixture(Graph, Loop,
+            Test.TestTrue(TEXT("LoopBodyからPrint"), ConnectFixture(Graph, BodyLoop,
                 TEXT("LoopBody"), Body, UEdGraphSchema_K2::PN_Execute)) == false ||
             Test.TestTrue(TEXT("CompletedからPrint"), ConnectFixture(Graph, Loop,
                 TEXT("Completed"), Done, UEdGraphSchema_K2::PN_Execute)) == false)
@@ -260,9 +278,7 @@ bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& 
     }
 
     FBPSemanticIR Semantic;
-    const bool bLowered = bLoop ?
-        FBPSemanticLowering::LowerForLoop(IR, Semantic) :
-        FBPSemanticLowering::Lower(Blueprint, IR, Semantic);
+    const bool bLowered = FBPSemanticLowering::Lower(Blueprint, IR, Semantic);
     if (Test.TestTrue(TEXT("Semantic Lowering"), bLowered) == false)
     {
         for (const FBPSemanticDiagnostic& Diagnostic : Semantic.Diagnostics)
@@ -288,6 +304,61 @@ bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& 
             Files.SourceContent.Contains(TEXT("if (")) &&
             Files.SourceContent.Contains(TEXT("Arithmetic True")));
 
+    if (bNested)
+    {
+        if (Test.TestEqual(TEXT("入れ子Loopの関数数"), Semantic.Functions.Num(), 1) == false ||
+            Test.TestEqual(TEXT("入れ子Loopの構造化Block数"), Semantic.Functions[0].Blocks.Num(), 1) == false ||
+            Test.TestEqual(TEXT("外側Loop文数"), Semantic.Functions[0].Blocks[0].Statements.Num(), 1) == false)
+        {
+            return false;
+        }
+        const FBPSemanticStatement& Outer = Semantic.Functions[0].Blocks[0].Statements[0];
+        if (Test.TestTrue(TEXT("外側Bodyに内側LoopとそのCompleted後続を保持"), Outer.LoopBodyStatements.Num() == 2 &&
+                Outer.LoopBodyStatements[0].Kind == EBPSemanticStatementKind::ForLoop) == false) { return false; }
+        const FBPSemanticStatement& Inner = Outer.LoopBodyStatements[0];
+        Test.TestEqual(TEXT("内側Body文数"), Inner.LoopBodyStatements.Num(), 1);
+        Test.TestTrue(TEXT("内側Completedを外側Bodyの後続へ正規化"), Inner.CompletedStatements.IsEmpty() &&
+            Outer.LoopBodyStatements[1].Kind == EBPSemanticStatementKind::Expression);
+        Test.TestEqual(TEXT("外側Completed文数"), Outer.CompletedStatements.Num(), 1);
+        Test.TestTrue(TEXT("内側Indexと境界値を生成"),
+            Files.SourceContent.Contains(TEXT("for (int32 InnerIndex = 2; InnerIndex <= 4; ++InnerIndex)")));
+        const int32 BodyPosition = Files.SourceContent.Find(TEXT("Loop body"));
+        const int32 InnerDonePosition = Files.SourceContent.Find(TEXT("Inner completed"));
+        const int32 OuterDonePosition = Files.SourceContent.Find(TEXT("Loop completed"));
+        Test.TestTrue(TEXT("内側Body、内側Completed、外側Completedの順序を保持"),
+            BodyPosition != INDEX_NONE && InnerDonePosition > BodyPosition && OuterDonePosition > InnerDonePosition);
+        for (int32 CaseIndex = 0; CaseIndex < 2; ++CaseIndex)
+        {
+            FBPGraphIR Invalid = IR;
+            FBPIRGraph* Target = Invalid.Graphs.FindByPredicate(
+                [](const FBPIRGraph& Candidate) { return Candidate.Kind == TEXT("event"); });
+            if (Test.TestNotNull(TEXT("入れ子拒否系Graph"), Target) == false) { return false; }
+            FBPIRNode* Loop = Target->Nodes.FindByPredicate(
+                [](const FBPIRNode& Node) { return Node.MacroGraphName == TEXT("ForLoop"); });
+            if (Test.TestNotNull(TEXT("入れ子拒否系Loop"), Loop) == false) { return false; }
+            if (CaseIndex == 0)
+            {
+                FBPIRPin* Bound = Loop->Pins.FindByPredicate(
+                    [](const FBPIRPin& Pin) { return Pin.Name == TEXT("LastIndex") && Pin.Direction == EGPD_Input; });
+                if (Test.TestNotNull(TEXT("入れ子拒否系境界Pin"), Bound) == false) { return false; }
+                Bound->DefaultValue = TEXT("invalid");
+            }
+            else
+            {
+                const FBPIRLink* Edge = Target->ExecEdges.FindByPredicate(
+                    [Loop](const FBPIRLink& Link) { return Link.SourceNode == Loop->Id; });
+                if (Test.TestNotNull(TEXT("入れ子拒否系Exec edge"), Edge) == false) { return false; }
+                const FBPIRLink Duplicate = *Edge;
+                Target->ExecEdges.Add(Duplicate);
+            }
+            FBPSemanticIR Rejected;
+            Test.TestFalse(TEXT("不正な境界値と重複Exec接続を拒否"),
+                FBPSemanticLowering::Lower(Blueprint, Invalid, Rejected));
+            Test.TestTrue(TEXT("入れ子拒否の診断と部分関数非公開"),
+                Rejected.HasErrors() && Rejected.Functions.IsEmpty());
+        }
+    }
+
     // JSON/C++を生成してからアセットを保存することで、検証失敗時の不完全なBP保存を防ぐ。
     Blueprint->MarkPackageDirty();
     const FString Filename = FPackageName::LongPackageNameToFilename(
@@ -302,7 +373,7 @@ bool GenerateFixture(const FString& AssetName, bool bLoop, FAutomationTestBase& 
     }
     Test.AddInfo(FString::Printf(TEXT("GENERATED_BLUEPRINT=%s"), *Filename));
     Test.AddInfo(FString::Printf(TEXT("GENERATED_GRAPH_JSON=%s"), *JsonPath));
-    return true;
+    return BPSemanticTestUtils::ExportRoundtrip(Test, Blueprint, IR, Semantic);
 }
 }
 
@@ -322,6 +393,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPGeneratedForLoopAssetTest,
 bool FBPGeneratedForLoopAssetTest::RunTest(const FString& Parameters)
 {
     return GenerateFixture(TEXT("BP_Test_ForLoop"), true, *this);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPGeneratedNestedForLoopAssetTest,
+    "BlueprintAIConverter.GeneratedAssets.NestedForLoop",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPGeneratedNestedForLoopAssetTest::RunTest(const FString& Parameters)
+{
+    return GenerateFixture(TEXT("BP_Test_NestedForLoop"), true, *this, true);
 }
 
 #endif
