@@ -40,6 +40,10 @@ public:
     void VerifiedOverride(int32 Value);
     virtual void VerifiedOverride_Implementation(int32 Value) {}
 
+    UFUNCTION(BlueprintNativeEvent)
+    int32 VerifiedReturn(int32 Value) const;
+    virtual int32 VerifiedReturn_Implementation(int32 Value) const { return Value; }
+
     UFUNCTION(BlueprintImplementableEvent)
     int32 MatchingSignature(const FString& Input, int32& Output) const;
 

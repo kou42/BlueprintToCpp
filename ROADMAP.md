@@ -55,10 +55,30 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 - [x] `Generate` から単一関数制約を除去し、関数ごとに宣言・定義・includeを組み立てる。
 - [x] BasicBlock間の接続、Branch合流、Loop、Returnの意味をSemantic IRで明示する。
-- [ ] 同名関数、override、引数／戻り値、可視性、重複宣言を検証する。
-- [ ] 複数関数を持つUObject Blueprintを一つのUCLASSとして生成する統合テストを追加する。
+- [ ] 同名関数、override、引数／戻り値、可視性、重複宣言を検証する（実装・回帰ケース追加済み。一括検証待ち）。
+- [ ] 複数関数を持つUObject Blueprintを一つのUCLASSとして生成する統合テストを追加する（通常関数＋Custom Event、通常関数＋native Interfaceのfixture追加済み。一括検証待ち）。
 
 **完了条件:** 複数の通常関数・イベントを一つのクラスに安全に生成できること。
+
+#### P2残実装の集約（2026-10-31、実装済み・一括検証待ち）
+
+**進め方:** P2の実装と回帰ケースを先にそろえ、検証はまとめて実施する。以下の対応範囲に対する残実装を追加した。チェックボックスは冒頭の完了定義に従い、検証完了まで未チェックを維持する。今回の新規変更についてPython／UHT／UBT／Automation／実Editor E2Eは実行していない。過去の202件成功は今回の変更の成功を意味しない。
+
+| 項目 | 実装した契約 | 回帰ケース |
+| --- | --- | --- |
+| クラス全体の宣言 | 単一・複数関数で、同名、メンバー名、生成`_Implementation`名、クラス名、C++予約語、`GENERATED_BODY`の主要予約名、継承Reflectionメンバーとの衝突を生成前に拒否 | `ClassDeclarationContract`、既存の複数関数・署名テスト |
+| native Interface | Blueprintで実装可能なnative Interfaceを`ClassInfo.InterfacePaths`から解決し、公開ヘッダーを`generated.h`前へ追加して`IInterface`を明示継承。新規Interfaceの全反射メソッドについて実装の存在と署名を照合。親が実装済みなら重複継承しない | `InterfaceContract`、`InterfaceArraySignature` |
+| Interfaceと通常関数の統合 | 通常の`Lower`成功時にクラス情報を保持し、複数関数生成と同じEmitterでInterface実装を生成。Interface単一関数も同じ入口へ通す | `Conversion.RealBlueprint.InterfaceContract`：実UObject BlueprintへInterface実装＋通常関数を作成し、C++生成・Saved exportまで検査 |
+| native event override | 生成クラス側のNative／BlueprintEventフラグやEvent Graph種別だけで判断せず、親・Interfaceの実UFunctionにあるnative Blueprint event契約を照合して`_Implementation`を選択 | 既存`OverrideSignature`を更新、`NativeReturnOverride` |
+| 非void override | `SuperCallPolicy::Omit`を明示した場合に、検証済みnative eventの戻り値本体を生成。`Automatic`は従来のvoid Super先行呼び出しを維持し、非voidの暗黙Superは拒否。BeginPlayのSuper必須Policyは維持 | `NativeReturnOverride`、JSON往復・監査ケース |
+| 配列・入力方向 | Reflection署名Resolverと関数型Emitterで要素型ツリーから一段の`TArray`を生成。const参照入力を保持し、修飾付き要素・入れ子コンテナ・未対応型を拒否 | 実UFunctionの`const TArray<int32>&`を使う`InterfaceArraySignature` |
+| JSONとPython監査 | クラス／Interface情報、関数属性、既定値・宣言順・由来GUIDの形状検証を追加。Interface／overrideの生成名、const／override修飾、宣言順でC++ヘッダーを監査 | `test_semantic_function_contract.py`、既存signature／declaration audit |
+
+**P2での明示的な拒否範囲:** out値・可変参照・参照戻り値・const戻り値、Set／Map／入れ子コンテナや未対応の関数署名型、Blueprint Interface、Interface間継承、Blueprintから実装不可のInterface、BlueprintImplementableEvent／非反射C++仮想関数／RPC等の未検証override契約は診断付きで拒否する。NativeEventのFString／FText／配列入力は、UHTの暗黙補正で署名が変わらないよう、検証済みconst参照に限定する。これらを曖昧に生成せず、P2の受理範囲を上表に固定する。任意ノードの混在・非voidグラフのLowering拡張はP1の課題として区別する。
+
+**JSON互換性:** `functions[].super_call_policy`をv2の任意フィールドとして追加。`automatic`／`omit`を出力し、旧JSONの省略は従来のAutomaticに相当する。既存class_info／関数属性／既定値フィールドは出力形式を変えず、存在する値の検証を追加した。schema_versionは2を維持し、旧exportの書き換えは不要。JSONの構造検証・署名監査はReflectionによる生成可否や実行時の等価性とは区別する。
+
+**一括検証ゲート:** UE 5.7.4 UHT／UBT → `BlueprintAIConverter` Automation全体 → Python全体（少なくともSemantic JSON／roundtrip／signature audit／declaration audit／Editor E2E／新規function contract） → 実Editor export E2Eをまとめて実施する。実exportは既存の`MultipleFunctionGraphs`、Branch／Loop群に加え、`--automation-test BlueprintAIConverter.Conversion.RealBlueprint.InterfaceContract`を対象へ追加する。P2とP2並行項目の完了チェックは、この結果を記録してから更新する。
 
 #### P2進捗（2026-10-28、検証済み）
 
@@ -118,7 +138,7 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - [ ] `BPSemanticJsonSerializer` と `PythonServer/app/semantic_json.py` のスキーマ契約を同期する。互換性を壊す変更はバージョン方針と移行手順を明示する。
 - [ ] JSON出力の決定性（同じ入力で安定した結果）、型・GUID・参照関係、エラー時の診断をテストする。
 - [x] JSONのgolden test、Python側schema validation、export→parse→必要に応じたroundtrip／C++生成の統合テストを追加・更新する。
-- [ ] C++生成に対応する機能がJSONでも扱えるかをPRレビューの必須確認項目にする。
+- [x] C++生成に対応する機能がJSONでも扱えるかをPRレビューの必須確認項目にする（`.github/pull_request_template.md`へ追加）。
 
 **完了条件:** 対応済みのSemantic IR表現をJSONに損失なく出力し、Python側が同じスキーマで検証でき、対応する往復／回帰テストが通ること。
 
@@ -174,8 +194,8 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 ### 次の実装・検証順序
 
-1. P2の関数公開範囲、out／参照引数の拒否Policy、native Blueprint event override署名照合のUE検証を行う。Interface継承生成と残るoverride形式を段階的に拡張する。
-2. 拡充した`MultipleFunctionGraphs`で、通常関数2つ＋Custom Eventを持つ実UObject BlueprintのUCLASS生成と実Editor export→Python E2EをUE環境で実行する。
+1. P2は「残実装の集約」に定めた受理範囲・拒否Policyで実装と回帰ケース追加を完了し、一括検証待ちとする。実装中に個別のテストを繰り返さず、上記の一括検証ゲートへ集約する。
+2. 一括検証時に`MultipleFunctionGraphs`と`InterfaceContract`で通常関数・Custom Event・native Interfaceを持つUObject BlueprintのUCLASS生成と実Editor export→Python E2Eを確認する。結果に基づいてP2完了を判定する。
 3. 通常関数ForLoopの単一Loop／Body Call制約を整理し、多重ループ・Completed後続の共有Result到達を検証して拡張する。ForEachの一般Call対応、ネストBranchの接続条件式・戻り値対応も段階的に進める。
 4. 対応済みCFGと複数関数について、実Editor exportからPython schema／roundtripまでの対象アセットを拡張する。
 
@@ -351,10 +371,12 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 | 複雑ForLoop Lowering | 実BlueprintのBeginPlay／Custom Eventは共通Entryへ移行（UE検証待ち）。通常関数は単一Loop／Body Callに限定。Graph IRのみではBeginPlay Policyを維持 | 通常関数の多重ループ・Completed後続をResult到達監査付きで拡張し、パターン別走査を整理 |
 | ForEachLoopのStatement／式Lowering | 共通Entryに対応（UE検証待ち）。int32配列・PrintString・Index／Element変換に限定 | 一般のCall／式Loweringと任意の要素型へReflection・スコープ検証を保って段階的に拡張 |
 | `BPSemanticCodeGenerator.cpp::Generate` | 複数関数と明示CFGに対応済みだが、受理するCFG形状を構造化Branch／Loopへ限定 | 共通CFG走査と診断を拡張し、対応ノードを増やす際もBlock順から意味を推測しない |
-| `BPSemanticCodeGenerator.cpp::BuildFunctionShape` | out値／可変参照／参照戻り値を未対応Policyで拒否し、native Blueprint event override元をReflection照合（UE検証待ち）。公開範囲をReflection／IR／C++／JSONへ保持（UE検証待ち）。Interface継承は未完了 | 公開範囲・署名PolicyのUE検証。出力代入・寿命検証を実装して拒否Policyを段階的に解除し、Interface継承と対応override形式を拡張 |
+| `BPSemanticCodeGenerator.cpp::BuildFunctionShape`／`BuildInterfacePlan` | 公開範囲・入力方向・native event署名を検証し、native Interface継承と非void overrideの明示Super省略を実装。クラス全体の宣言衝突も生成前に拒否（実装済み・一括検証待ち） | P2の受理範囲・拒否Policyを上記スコープで一括検証。未対応出力・寿命・Interface／override形式は診断付き拒否を維持 |
 | `BPSemanticJsonSerializer.cpp`／`PythonServer/app/semantic_json.py` | schema_version 2。Branch／Loop／Breakと再帰Statement、コンテナ型ツリー・enum／byte／delegate種別は同期済み。通常関数Branch／ネストBranch／通常関数ForLoop／Actor ForEach／Break付きForEach／入れ子ForLoopの実export fixtureを追加（Python検証済み・実UE待ち） | 新IR表現ごとに両側を更新しgolden／roundtripで確認。準備済みの実Editor E2Eを実行し、共通Entry移行時も同じ対象で回帰確認する |
 
 ## 最新の検証結果
+
+- 2026-10-31（P2残実装、一括検証待ち）: native Interface継承、非void native overrideの明示Super省略、const配列署名、宣言衝突／予約語検査、JSONと署名／宣言監査の追従を実装。回帰ケースと実Interface Blueprint export fixtureを追加。ユーザー指定により新規変更のPython・UHT／UBT・Automation・実Editor E2Eは未実施。過去の成功件数は流用しない。
 
 - 2026-10-31（PR作成時の統合確認）: `6f89a9d`（PR #114）までのmainへ統合。既存のLoop／Break・型ツリー検証、空container種別の互換性、共通Entry対応を保持し、追加のLoop export E2Eテストを`test_semantic_loop_export_json.py`へ分離した。内側Completedを親Bodyの後続へ置く最新IRに入れ子fixtureを同期。関連Pythonテスト202件と`git diff --check`成功。UHT／UBT・Automation Test・実Editor export E2Eは未実施。
 

@@ -10,6 +10,7 @@
 #include "BPNumericComparisonResolver.h"
 #include "BPOutputParameterStorage.h"
 #include "BPSemanticFunctionExtractor.h"
+#include "BPSemanticClassExtractor.h"
 #include "BPSemanticVariableExtractor.h"
 
 #include "EdGraphSchema_K2.h"
@@ -5758,6 +5759,21 @@ bool PromoteTopLevelLoopToCfg(FBPSemanticIR& IR)
 }
 
 bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
+    const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+{
+    if (LowerImpl(Blueprint, GraphIR, OutIR) == false) { return false; }
+    // Interfaceの継承宣言も生成契約の一部。通常Loweringの全成功経路へ渡す。
+    if (FBPSemanticClassExtractor::Append(Blueprint, OutIR) == false)
+    {
+        OutIR.Functions.Reset();
+        OutIR.Variables.Reset();
+        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("Compiled Blueprint class contract could not be extracted"));
+        return false;
+    }
+    return true;
+}
+
+bool FBPSemanticLowering::LowerImpl(const UBlueprint* Blueprint,
     const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
     OutIR = FBPSemanticIR();

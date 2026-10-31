@@ -1259,6 +1259,10 @@ bool FBPSemanticGeneratorOverrideSignatureTest::RunTest(const FString& Parameter
             TEXT("AVerifiedActor"), FString(), Files, Diagnostics));
 
     const FBPSemanticIR Valid = Semantic;
+    Semantic.Functions[0].bIsNative = false;
+    Semantic.Functions[0].bIsEventGraph = false;
+    TestTrue(TEXT("生成クラスのFunction Graph overrideも親のnative署名で検証"),
+        FBPSemanticCodeGenerator::Generate(Semantic, TEXT("AVerifiedActor"), FString(), Files, Diagnostics));
     for (int32 CaseIndex = 0; CaseIndex < 13; ++CaseIndex)
     {
         Semantic = Valid;
@@ -1271,7 +1275,7 @@ bool FBPSemanticGeneratorOverrideSignatureTest::RunTest(const FString& Parameter
         case 3: Invalid.Parameters.Reset(); break;
         case 4: Invalid.bIsConst = true; break;
         case 5: Invalid.ReturnType.Kind = EBPSemanticTypeKind::Bool; break;
-        case 6: Invalid.bIsEventGraph = false; break;
+        case 6: Invalid.SignatureSource = TEXT("unverified"); break;
         case 7: Semantic.ParentClassPath = TEXT("/Script/Engine.Actor"); break;
         case 8:
             Invalid.Parameters[0].Type.bIsReference = true;
@@ -1282,7 +1286,10 @@ bool FBPSemanticGeneratorOverrideSignatureTest::RunTest(const FString& Parameter
             Invalid.OverriddenFunctionPath = AActor::StaticClass()->FindFunctionByName(
                 TEXT("SetActorTickEnabled"))->GetPathName();
             break;
-        case 10: Invalid.bIsNative = false; break;
+        case 10:
+            Invalid.Name = TEXT("MatchingSignature");
+            Invalid.OverriddenFunctionPath = Parent->FindFunctionByName(Invalid.Name)->GetPathName();
+            break;
         case 11: Invalid.Visibility = EBPSemanticFunctionVisibility::Protected; break;
         case 12: Invalid.Visibility = EBPSemanticFunctionVisibility::Private; break;
         }

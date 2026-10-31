@@ -9,11 +9,12 @@ import re
 from .cpp_signature_diff import extract_signatures
 from .output_comparison import GenerationArtifact
 from .semantic_json import parse_semantic_json
+from .semantic_function_contract import generated_function_name
 
 _CPP_TYPES = {
     "void": "void", "bool": "bool", "int32": "int32", "int64": "int64",
     "float": "float", "double": "double", "string": "FString",
-    "name": "FName", "text": "FText",
+    "name": "FName", "text": "FText", "byte": "uint8",
 }
 
 # type_pathだけから任意のUClass/UScriptStructのC++接頭辞を推測しない。
@@ -33,7 +34,16 @@ _CPP_PATH_TYPES = {
 def _cpp_type(semantic_type: dict) -> str | None:
     kind = semantic_type["kind"]
     type_path = semantic_type["type_path"]
-    if type_path:
+    container = semantic_type.get("container_kind", "none")
+    if container not in ("", "none"):
+        element = semantic_type.get("element_type_info")
+        if container != "array" or element is None:
+            return None
+        element_cpp = _cpp_type(element)
+        if element_cpp is None:
+            return None
+        base = f"TArray<{element_cpp}>"
+    elif type_path:
         base = _CPP_PATH_TYPES.get((kind, type_path))
     else:
         base = _CPP_TYPES.get(kind)
@@ -72,11 +82,22 @@ def audit_semantic_signatures(semantic: dict, artifact: GenerationArtifact) -> d
         if function.get("signature_source") != "generated_class_reflection":
             diagnostics.append(f"{function['name']}: no reflected signature")
             continue
-        candidates = found.get(function["name"], [])
+        candidates = found.get(generated_function_name(function), [])
         if len(candidates) != 1:
             diagnostics.append(f"{function['name']}: expected one unambiguous C++ declaration")
             continue
         actual = candidates[0]
+        qualifiers = {}
+        if "is_const" in function:
+            qualifiers["const"] = function["is_const"]
+        if "is_override" in function or "is_interface_implementation" in function:
+            qualifiers["override"] = (function.get("is_override", False) or
+                                      function.get("is_interface_implementation", False) or
+                                      function["name"] == "BeginPlay")
+        for field, expected in qualifiers.items():
+            if actual[field] != expected:
+                differences.append({"function": function["name"], "field": field,
+                                    "expected": str(expected), "actual": str(actual[field])})
         expected_return = _cpp_type(function["return_type"])
         if expected_return is None:
             diagnostics.append(f"{function['name']}: unsupported return type")
@@ -85,6 +106,12 @@ def audit_semantic_signatures(semantic: dict, artifact: GenerationArtifact) -> d
                                 "expected": expected_return, "actual": actual["return_type"]})
 
         parameters = [p for p in function["parameters"] if p["is_return"] is False]
+        if any("declaration_index" in parameter for parameter in parameters):
+            if not all("declaration_index" in parameter for parameter in parameters) or \
+                    sorted(parameter["declaration_index"] for parameter in parameters) != list(range(len(parameters))):
+                diagnostics.append(f"{function['name']}: ambiguous parameter declaration indices")
+                continue
+            parameters.sort(key=lambda parameter: parameter["declaration_index"])
         # C++側は単純な '型 名前' だけを対象にする。複雑な引数構文を
         # 分割すると誤判定を招くため、カンマや既定値のある宣言は保留する。
         raw_args = actual["arguments"].strip()

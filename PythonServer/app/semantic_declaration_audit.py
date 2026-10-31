@@ -8,6 +8,7 @@ from .cpp_signature_diff import extract_signatures
 from .cpp_structure_diff import extract_declarations
 from .output_comparison import GenerationArtifact
 from .semantic_json import parse_semantic_json
+from .semantic_function_contract import generated_function_name
 
 
 def audit_semantic_declarations(semantic: dict, artifact: GenerationArtifact) -> dict:
@@ -38,7 +39,7 @@ def audit_semantic_declarations(semantic: dict, artifact: GenerationArtifact) ->
     for function in parsed["functions"]:
         # Blueprintのイベントや継承関数は生成ヘッダーに現れないこともある。
         # 欠落を確定エラーにせず、レビュー対象の候補としてのみ報告する。
-        if function["name"] not in functions:
+        if generated_function_name(function) not in functions:
             missing.append({"scope": "function", "name": function["name"]})
 
     if headers == 0:
