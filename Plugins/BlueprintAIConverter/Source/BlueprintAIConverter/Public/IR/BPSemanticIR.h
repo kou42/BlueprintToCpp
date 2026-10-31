@@ -152,8 +152,17 @@ enum class EBPSemanticFunctionVisibility : uint8
     Private
 };
 
+// Automaticは既存のvoid overrideのSuper先行呼び出しを維持する。
+// 非void overrideは戻り値を暗黙に破棄せず、Omitを明示した本体のみ受理する。
+enum class EBPSemanticSuperCallPolicy : uint8
+{
+    Automatic,
+    Omit
+};
+
 struct FBPSemanticFunction
 {
+    EBPSemanticSuperCallPolicy SuperCallPolicy = EBPSemanticSuperCallPolicy::Automatic;
     FName Name;
     FBPSemanticType ReturnType;
     FString OwnerClassPath;

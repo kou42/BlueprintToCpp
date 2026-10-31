@@ -307,6 +307,9 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
         }
         FunctionJson->SetStringField(TEXT("visibility"), Visibility);
         FunctionJson->SetObjectField(TEXT("return_type"), TypeToJson(Function.ReturnType));
+        FunctionJson->SetStringField(TEXT("super_call_policy"),
+            Function.SuperCallPolicy == EBPSemanticSuperCallPolicy::Automatic ? TEXT("automatic") :
+            Function.SuperCallPolicy == EBPSemanticSuperCallPolicy::Omit ? TEXT("omit") : TEXT("invalid"));
         if (Function.SignatureSource.IsEmpty() == false)
         {
             FunctionJson->SetStringField(TEXT("owner_class_path"), Function.OwnerClassPath);

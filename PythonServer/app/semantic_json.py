@@ -155,6 +155,47 @@ def _statement(raw: Any, path: str, depth: int = 0) -> None:
             _statement(child, f"{path}.{field}[{index}]", depth + 1)
 
 
+def _class_info(raw: Any) -> None:
+    obj = _object(raw, "class_info")
+    # 旧v2にはこの領域がない。既存の任意フィールドは省略を維持し、存在する契約を検証する。
+    if "origin" in obj:
+        _enum(obj["origin"], frozenset(("unknown", "blueprint", "native")), "class_info.origin")
+    for field in ("class_path", "class_name", "native_parent_class_path"):
+        if field in obj:
+            _string(obj[field], "class_info." + field)
+    paths: set[str] = set()
+    for index, raw_path in enumerate(_array(obj.get("interface_paths", []), "class_info.interface_paths")):
+        path = _string(raw_path, f"class_info.interface_paths[{index}]")
+        if not path or path in paths:
+            raise SemanticJsonError("class_info.interface_paths: empty or duplicate interface path")
+        paths.add(path)
+    for field in ("declared_properties", "declared_functions"):
+        for index, raw_member in enumerate(_array(obj.get(field, []), "class_info." + field)):
+            path = f"class_info.{field}[{index}]"
+            member = _object(raw_member, path)
+            _required(member, ("name", "cpp_type", "reflection_path", "flags"), path)
+            for key in ("name", "cpp_type", "reflection_path", "flags"):
+                _string(member[key], path + "." + key)
+    for index, raw_signature in enumerate(_array(obj.get("declared_function_signatures", []),
+                                                "class_info.declared_function_signatures")):
+        path = f"class_info.declared_function_signatures[{index}]"
+        signature = _object(raw_signature, path)
+        _required(signature, ("name", "reflection_path", "flags", "return_cpp_type", "parameters"), path)
+        for key in ("name", "reflection_path", "flags", "return_cpp_type"):
+            _string(signature[key], path + "." + key)
+        for key in ("is_native", "is_static", "is_const", "is_blueprint_event", "is_net", "is_final"):
+            if key in signature:
+                _bool(signature[key], path + "." + key)
+        for pi, raw_parameter in enumerate(_array(signature["parameters"], path + ".parameters")):
+            pp = f"{path}.parameters[{pi}]"
+            parameter = _object(raw_parameter, pp)
+            _required(parameter, ("name", "cpp_type", "is_out", "is_reference", "is_const"), pp)
+            for key in ("name", "cpp_type"):
+                _string(parameter[key], pp + "." + key)
+            for key in ("is_out", "is_reference", "is_const"):
+                _bool(parameter[key], pp + "." + key)
+
+
 def parse_semantic_json(raw: Any) -> dict:
     """v2の形状を検証して返す。意味的一致やC++生成可能性は保証しない。"""
     root = _object(raw, "semantic")
@@ -172,6 +213,8 @@ def parse_semantic_json(raw: Any) -> dict:
     _required(source, ("asset_path", "parent_class_path", "snapshot_schema_version"), "source")
     _string(source["asset_path"], "source.asset_path")
     _string(source["parent_class_path"], "source.parent_class_path")
+    if "class_info" in root:
+        _class_info(root["class_info"])
     if type(source["snapshot_schema_version"]) is not int or source["snapshot_schema_version"] != 1:
         raise SemanticJsonError("source.snapshot_schema_version: expected 1")
     # 旧v2 JSONにはvariablesが存在しないため、省略を許容する。
@@ -247,6 +290,17 @@ def parse_semantic_json(raw: Any) -> dict:
             raise SemanticJsonError(f"{path}: duplicate function {name}")
         function_names.add(name)
         _type(f["return_type"], path + ".return_type")
+        if "super_call_policy" in f:
+            _enum(f["super_call_policy"], frozenset(("automatic", "omit")), path + ".super_call_policy")
+        for field in ("is_native", "is_static", "is_const", "is_blueprint_event", "is_event_graph",
+                      "is_override", "is_interface_implementation"):
+            if field in f:
+                _bool(f[field], path + "." + field)
+        for field in ("interface_class_path", "interface_function_path", "overridden_function_path"):
+            if field in f:
+                _nullable_string(f[field], path + "." + field)
+        if "function_attributes_source" in f:
+            _string(f["function_attributes_source"], path + ".function_attributes_source")
         # Additive v2 field: omission keeps legacy access defaults in older exports.
         if "visibility" in f:
             _enum(f["visibility"], ("unspecified", "public", "protected", "private"),
@@ -271,6 +325,23 @@ def parse_semantic_json(raw: Any) -> dict:
                 _bool(p["is_out"], pp + ".is_out")
                 if _bool(p["is_return"], pp + ".is_return"):
                     return_count += 1
+                if "declaration_index" in p and type(p["declaration_index"]) is not int:
+                    raise SemanticJsonError(f"{pp}.declaration_index: expected integer")
+                for field in ("default_value_source", "default_value_status"):
+                    if field in p:
+                        _string(p[field], pp + "." + field)
+                for field in ("default_value_source_node_id", "default_value_source_pin_id"):
+                    if field in p:
+                        _guid(p[field], pp + "." + field)
+                if "has_default_value" in p:
+                    available = _bool(p["has_default_value"], pp + ".has_default_value")
+                    _required(p, ("default_value",), pp)
+                    if available:
+                        _string(p["default_value"], pp + ".default_value")
+                    elif p["default_value"] is not None:
+                        raise SemanticJsonError(f"{pp}.default_value: expected null when unavailable")
+                elif "default_value" in p:
+                    _nullable_string(p["default_value"], pp + ".default_value")
             if return_count > 1:
                 raise SemanticJsonError(f"{path}: multiple return parameters")
 

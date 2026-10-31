@@ -11,12 +11,31 @@
 #include "UObject/Class.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UnrealType.h"
+#include "UObject/Interface.h"
 
 namespace
 {
 bool IsIdentifier(const FString& Name)
 {
-    if (Name.IsEmpty())
+    static const TSet<FString> Keywords = {
+        TEXT("alignas"), TEXT("alignof"), TEXT("and"), TEXT("and_eq"), TEXT("asm"), TEXT("auto"),
+        TEXT("bitand"), TEXT("bitor"), TEXT("bool"), TEXT("break"), TEXT("case"), TEXT("catch"),
+        TEXT("char"), TEXT("char8_t"), TEXT("char16_t"), TEXT("char32_t"), TEXT("class"), TEXT("compl"),
+        TEXT("concept"), TEXT("const"), TEXT("consteval"), TEXT("constexpr"), TEXT("constinit"),
+        TEXT("const_cast"), TEXT("continue"), TEXT("co_await"), TEXT("co_return"), TEXT("co_yield"),
+        TEXT("decltype"), TEXT("default"), TEXT("delete"), TEXT("do"), TEXT("double"), TEXT("dynamic_cast"),
+        TEXT("else"), TEXT("enum"), TEXT("explicit"), TEXT("export"), TEXT("extern"), TEXT("false"),
+        TEXT("float"), TEXT("for"), TEXT("friend"), TEXT("goto"), TEXT("if"), TEXT("inline"), TEXT("int"),
+        TEXT("long"), TEXT("mutable"), TEXT("namespace"), TEXT("new"), TEXT("noexcept"), TEXT("not"),
+        TEXT("not_eq"), TEXT("nullptr"), TEXT("operator"), TEXT("or"), TEXT("or_eq"), TEXT("private"),
+        TEXT("protected"), TEXT("public"), TEXT("register"), TEXT("reinterpret_cast"), TEXT("requires"),
+        TEXT("return"), TEXT("short"), TEXT("signed"), TEXT("sizeof"), TEXT("static"), TEXT("static_assert"),
+        TEXT("static_cast"), TEXT("struct"), TEXT("switch"), TEXT("template"), TEXT("this"), TEXT("thread_local"),
+        TEXT("throw"), TEXT("true"), TEXT("try"), TEXT("typedef"), TEXT("typeid"), TEXT("typename"),
+        TEXT("union"), TEXT("unsigned"), TEXT("using"), TEXT("virtual"), TEXT("void"), TEXT("volatile"),
+        TEXT("wchar_t"), TEXT("while"), TEXT("xor"), TEXT("xor_eq")
+    };
+    if (Name.IsEmpty() || Keywords.Contains(Name))
     {
         return false;
     }
@@ -195,39 +214,40 @@ bool EmitFunctionType(const FBPSemanticType& Type, FString& OutType,
         return false;
     }
     FString ValueType;
-    switch (Type.Kind)
-    {
-    case EBPSemanticTypeKind::Void: ValueType = TEXT("void"); break;
-    case EBPSemanticTypeKind::Bool: ValueType = TEXT("bool"); break;
-    case EBPSemanticTypeKind::Int32: ValueType = TEXT("int32"); break;
-    case EBPSemanticTypeKind::Int64: ValueType = TEXT("int64"); break;
-    case EBPSemanticTypeKind::Float: ValueType = TEXT("float"); break;
-    case EBPSemanticTypeKind::Double: ValueType = TEXT("double"); break;
-    case EBPSemanticTypeKind::String: ValueType = TEXT("FString"); break;
-    case EBPSemanticTypeKind::Name: ValueType = TEXT("FName"); break;
-    case EBPSemanticTypeKind::Text: ValueType = TEXT("FText"); break;
-    case EBPSemanticTypeKind::Byte: ValueType = TEXT("uint8"); break;
-    default:
-        Diagnostics.Add(FString::Printf(
-            TEXT("Function signature contains an unsupported type path: %s"), *Type.TypePath));
-        return false;
-    }
-
+    // Reflectionの配列根はUnresolvedになり得る。要素型を先に解決し、根をスカラー扱いしない。
     if (Type.ContainerKind != TEXT("none"))
     {
-        if (Type.ContainerKind != TEXT("array") || Type.ElementType.IsValid() == false)
+        if (Type.ContainerKind != TEXT("array") || Type.ElementType.IsValid() == false ||
+            Type.ElementType->ContainerKind != TEXT("none") ||
+            Type.ElementType->bIsReference || Type.ElementType->bIsConst)
         {
-            Diagnostics.Add(FString::Printf(
-                TEXT("Unsupported function parameter container: %s"), *Type.ContainerKind));
+            Diagnostics.Add(TEXT("Function signatures support only arrays of unqualified scalar elements"));
             return false;
         }
         FString ElementType;
         if (EmitFunctionType(*Type.ElementType, ElementType, Diagnostics, Depth + 1) == false ||
-            ElementType == TEXT("void"))
+            ElementType == TEXT("void")) { return false; }
+        ValueType = FString::Printf(TEXT("TArray<%s>"), *ElementType);
+    }
+    else
+    {
+        switch (Type.Kind)
         {
+        case EBPSemanticTypeKind::Void: ValueType = TEXT("void"); break;
+        case EBPSemanticTypeKind::Bool: ValueType = TEXT("bool"); break;
+        case EBPSemanticTypeKind::Int32: ValueType = TEXT("int32"); break;
+        case EBPSemanticTypeKind::Int64: ValueType = TEXT("int64"); break;
+        case EBPSemanticTypeKind::Float: ValueType = TEXT("float"); break;
+        case EBPSemanticTypeKind::Double: ValueType = TEXT("double"); break;
+        case EBPSemanticTypeKind::String: ValueType = TEXT("FString"); break;
+        case EBPSemanticTypeKind::Name: ValueType = TEXT("FName"); break;
+        case EBPSemanticTypeKind::Text: ValueType = TEXT("FText"); break;
+        case EBPSemanticTypeKind::Byte: ValueType = TEXT("uint8"); break;
+        default:
+            Diagnostics.Add(FString::Printf(
+                TEXT("Function signature contains an unsupported type path: %s"), *Type.TypePath));
             return false;
         }
-        ValueType = FString::Printf(TEXT("TArray<%s>"), *ElementType);
     }
 
     if (Type.bIsReference)
@@ -246,12 +266,165 @@ bool EmitFunctionType(const FBPSemanticType& Type, FString& OutType,
 bool SemanticTypesMatch(const FBPSemanticType& Left,
     const FBPSemanticType& Right, int32 Depth);
 
+struct FSemanticInterfacePlan
+{
+    TSet<FString> ImplementedPaths;
+    FString AdditionalBases;
+    FString Includes;
+};
+
+bool BuildInterfacePlan(const FBPSemanticIR& IR, const FBPResolvedParentClass& ParentClass,
+    FSemanticInterfacePlan& OutPlan, TArray<FString>& Diagnostics)
+{
+    if (IR.ClassInfo.NativeParentClassPath.IsEmpty() == false &&
+        IR.ClassInfo.NativeParentClassPath != ParentClass.ClassPath)
+    {
+        Diagnostics.Add(TEXT("Class contract native parent does not match the Semantic parent"));
+        return false;
+    }
+    const UClass* Parent = LoadObject<UClass>(nullptr, *ParentClass.ClassPath);
+    TSet<FString> DeclaredPaths;
+    TSet<FName> InterfaceMethodNames;
+    TArray<FString> Paths = IR.ClassInfo.InterfacePaths;
+    Paths.Sort();
+    for (const FString& Path : Paths)
+    {
+        const UClass* Interface = LoadObject<UClass>(nullptr, *Path);
+        if (DeclaredPaths.Contains(Path) || Interface == nullptr || Interface->GetPathName() != Path ||
+            Interface->HasAllClassFlags(CLASS_Interface | CLASS_Native) == false ||
+            Interface->GetBoolMetaData(TEXT("CannotImplementInterfaceInBlueprint")) ||
+            Interface->GetSuperClass() != UInterface::StaticClass())
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Interface contract requires a unique canonical native interface without interface inheritance: %s"), *Path));
+            return false;
+        }
+        DeclaredPaths.Add(Path);
+        OutPlan.ImplementedPaths.Add(Path);
+        if (Parent != nullptr && Parent->ImplementsInterface(Interface)) { continue; }
+
+        FBPResolvedParentClass ResolvedInterface;
+        if (FBPParentClassResolver::ResolveParent(Path, ResolvedInterface, Diagnostics) == false) { return false; }
+        const FString CppInterface = TEXT("I") + Interface->GetName();
+        if (IsIdentifier(CppInterface) == false)
+        {
+            Diagnostics.Add(TEXT("Interface has an invalid C++ name"));
+            return false;
+        }
+        OutPlan.AdditionalBases += TEXT(", public ") + CppInterface;
+        const FString Include = FString::Printf(TEXT("#include \"%s\"\n"), *ResolvedInterface.HeaderPath);
+        if (OutPlan.Includes.Contains(Include, ESearchCase::CaseSensitive) == false) { OutPlan.Includes += Include; }
+
+        // 新規継承では全メソッドを監査する。欠落・非反射C++契約を既定実装で補完しない。
+        for (TFieldIterator<UFunction> It(Interface, EFieldIteratorFlags::ExcludeSuper); It; ++It)
+        {
+            const UFunction* Method = *It;
+            if (Method->HasAllFunctionFlags(FUNC_Native | FUNC_BlueprintEvent) == false ||
+                Method->HasAnyFunctionFlags(FUNC_Static | FUNC_Final | FUNC_Private | FUNC_Net) ||
+                InterfaceMethodNames.Contains(Method->GetFName()))
+            {
+                Diagnostics.Add(FString::Printf(
+                    TEXT("Interface method requires an unambiguous native Blueprint event contract: %s"), *Method->GetPathName()));
+                return false;
+            }
+            InterfaceMethodNames.Add(Method->GetFName());
+            const FBPSemanticFunction* Implementation = IR.Functions.FindByPredicate(
+                [Method](const FBPSemanticFunction& Function) { return Function.Name == Method->GetFName(); });
+            if (Implementation == nullptr || Implementation->bIsInterfaceImplementation == false ||
+                Implementation->InterfaceClassPath != Path ||
+                Implementation->InterfaceFunctionPath != Method->GetPathName())
+            {
+                Diagnostics.Add(FString::Printf(TEXT("Interface method has no verified Semantic implementation: %s"),
+                    *Method->GetPathName()));
+                return false;
+            }
+        }
+    }
+    for (const FBPSemanticFunction& Function : IR.Functions)
+    {
+        if (Function.bIsInterfaceImplementation == false) { continue; }
+        const UClass* Interface = LoadObject<UClass>(nullptr, *Function.InterfaceClassPath);
+        if (Interface != nullptr && Interface->HasAllClassFlags(CLASS_Interface | CLASS_Native) &&
+            Parent != nullptr && Parent->ImplementsInterface(Interface))
+        {
+            OutPlan.ImplementedPaths.Add(Function.InterfaceClassPath);
+        }
+        if (OutPlan.ImplementedPaths.Contains(Function.InterfaceClassPath) == false)
+        {
+            Diagnostics.Add(FString::Printf(
+                TEXT("Interface override requires a declared interface or an interface implemented by the native parent: %s"),
+                *Function.InterfaceClassPath));
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ValidateClassDeclarations(const FBPSemanticIR& IR, const FBPResolvedParentClass& ParentClass,
+    const FString& ClassName, TArray<FString>& Diagnostics)
+{
+    const UClass* Parent = LoadObject<UClass>(nullptr, *ParentClass.ClassPath);
+    TSet<FName> Names;
+    // GENERATED_BODYの宣言・typedefと衝突する名前はReflection検索だけでは見つからない。
+    Names.Add(TEXT("Super"));
+    Names.Add(TEXT("ThisClass"));
+    Names.Add(TEXT("StaticClass"));
+    Names.Add(TEXT("GetPrivateStaticClass"));
+    for (const FBPSemanticVariable& Variable : IR.Variables)
+    {
+        if (Variable.Name.ToString() == ClassName || Names.Contains(Variable.Name) ||
+            (Parent != nullptr && Parent->FindFunctionByName(Variable.Name) != nullptr))
+        {
+            Diagnostics.Add(FString::Printf(TEXT("Class declaration collision for member %s"), *Variable.Name.ToString()));
+            return false;
+        }
+        Names.Add(Variable.Name);
+    }
+    for (const FBPSemanticFunction& Function : IR.Functions)
+    {
+        const FName DefinitionName = (Function.bIsEventGraph || Function.bIsInterfaceImplementation || Function.bIsOverride) &&
+            Function.Name != TEXT("BeginPlay")
+            ? FName(*(Function.Name.ToString() + TEXT("_Implementation"))) : Function.Name;
+        if (Function.Name.IsNone() || Function.Name.ToString() == ClassName ||
+            Names.Contains(Function.Name) ||
+            (DefinitionName != Function.Name && Names.Contains(DefinitionName)))
+        {
+            Diagnostics.Add(FString::Printf(TEXT("Generated C++ function definition name collision or class declaration collision: %s"), *Function.Name.ToString()));
+            return false;
+        }
+        Names.Add(Function.Name);
+        Names.Add(DefinitionName);
+        const UFunction* InheritedFunction = Parent != nullptr ? Parent->FindFunctionByName(Function.Name) : nullptr;
+        if (IR.Variables.ContainsByPredicate([DefinitionName](const FBPSemanticVariable& Variable)
+                { return Variable.Name == DefinitionName; }) ||
+            (Parent != nullptr && FindFProperty<FProperty>(Parent, Function.Name) != nullptr) ||
+            (InheritedFunction != nullptr &&
+                Function.Name != TEXT("BeginPlay") && Function.bIsOverride == false &&
+                (Function.bIsInterfaceImplementation == false ||
+                    InheritedFunction->GetOuterUClass()->HasAnyClassFlags(CLASS_Interface) == false)))
+        {
+            Diagnostics.Add(FString::Printf(TEXT("Function %s conflicts with a member or an inherited function contract"),
+                *Function.Name.ToString()));
+            return false;
+        }
+    }
+    return true;
+}
+
 bool BuildFunctionShape(const FBPSemanticFunction& Function,
     const FBPResolvedParentClass& ParentClass, const FString& ClassName,
+    const TSet<FString>& ImplementedInterfaces,
     FBPGeneratedFunctionShape& OutShape, TArray<FString>& Diagnostics)
 {
     OutShape = FBPGeneratedFunctionShape();
     const FString FunctionName = Function.Name.ToString();
+    if ((Function.SuperCallPolicy != EBPSemanticSuperCallPolicy::Automatic &&
+            Function.SuperCallPolicy != EBPSemanticSuperCallPolicy::Omit) ||
+        (Function.SuperCallPolicy == EBPSemanticSuperCallPolicy::Omit && Function.bIsOverride == false))
+    {
+        Diagnostics.Add(FString::Printf(TEXT("Invalid Super call policy for function %s"), *FunctionName));
+        return false;
+    }
     EBPSemanticFunctionVisibility EffectiveVisibility = Function.Visibility;
     if (EffectiveVisibility != EBPSemanticFunctionVisibility::Unspecified &&
         EffectiveVisibility != EBPSemanticFunctionVisibility::Public &&
@@ -307,7 +480,7 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
     for (const FBPSemanticParameter& Parameter : Function.Parameters)
     {
         const FString ParameterName = Parameter.Name.ToString();
-        if (IsIdentifier(ParameterName) == false ||
+        if (IsIdentifier(ParameterName) == false || ParameterName == TEXT("Super") || ParameterName == TEXT("ThisClass") ||
             ParameterNames.Contains(Parameter.Name))
         {
             Diagnostics.Add(FString::Printf(
@@ -391,13 +564,28 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
 
     const FString ConstSuffix = Function.bIsConst ? TEXT(" const") : TEXT("");
     bool bOverride = Function.bIsOverride || Function.bIsInterfaceImplementation;
-    bool bCallSuper = Function.bIsOverride;
-    bool bEventImplementation = Function.bIsEventGraph;
+    bool bCallSuper = Function.bIsOverride && Function.SuperCallPolicy == EBPSemanticSuperCallPolicy::Automatic;
+    bool bEventImplementation = Function.bIsEventGraph || Function.bIsInterfaceImplementation || Function.bIsOverride;
+    // UHTがNativeEventの大きな入力をconst参照へ補正することによる署名不一致を避ける。
+    if (bEventImplementation)
+    {
+        for (const FBPSemanticParameter* Parameter : OrderedParameters)
+        {
+            const FBPSemanticType& Type = Parameter->Type;
+            if ((Type.Kind == EBPSemanticTypeKind::String || Type.Kind == EBPSemanticTypeKind::Text ||
+                    Type.ContainerKind != TEXT("none")) && (Type.bIsReference == false || Type.bIsConst == false))
+            {
+                Diagnostics.Add(FString::Printf(TEXT("Native event input %s requires a verified const-reference signature"),
+                    *Parameter->Name.ToString()));
+                return false;
+            }
+        }
+    }
     if (FunctionName == TEXT("BeginPlay"))
     {
         if (ParentClass.bSupportsBeginPlay == false || Parameters.IsEmpty() == false ||
             Function.bIsConst || ReturnType != TEXT("void") ||
-            Function.bIsInterfaceImplementation ||
+            Function.bIsInterfaceImplementation || Function.SuperCallPolicy != EBPSemanticSuperCallPolicy::Automatic ||
             (EffectiveVisibility != EBPSemanticFunctionVisibility::Unspecified &&
                 EffectiveVisibility != EBPSemanticFunctionVisibility::Protected))
         {
@@ -422,14 +610,6 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
             *FunctionName));
         return false;
     }
-    if (bEventImplementation && bOverride && Function.bIsNative == false)
-    {
-        Diagnostics.Add(FString::Printf(
-            TEXT("Blueprint event override %s has no verified native _Implementation target"),
-            *FunctionName));
-        return false;
-    }
-
     if (bOverride && FunctionName != TEXT("BeginPlay"))
     {
         const UClass* Parent = LoadObject<UClass>(nullptr, *ParentClass.ClassPath);
@@ -441,8 +621,8 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
                 Target->GetFName() != Function.Name ||
                 Target->HasAnyFunctionFlags(FUNC_Native) == false ||
                 Target->HasAnyFunctionFlags(FUNC_BlueprintEvent) == false ||
-                Target->HasAnyFunctionFlags(FUNC_Final | FUNC_Static | FUNC_Private) ||
-                Function.bIsBlueprintEvent == false || bEventImplementation == false)
+                Target->HasAnyFunctionFlags(FUNC_Final | FUNC_Static | FUNC_Private | FUNC_Net) ||
+                bEventImplementation == false)
             {
                 Diagnostics.Add(FString::Printf(
                     TEXT("Override target for %s is not an accessible native Blueprint event: %s"),
@@ -500,14 +680,12 @@ bool BuildFunctionShape(const FBPSemanticFunction& Function,
         if (Function.bIsInterfaceImplementation)
         {
             const UClass* Interface = LoadObject<UClass>(nullptr, *Function.InterfaceClassPath);
-            // The generated class currently inherits only ParentClass. A newly
-            // introduced interface needs an explicit inheritance emitter first.
             if (Parent == nullptr || Interface == nullptr ||
-                Interface->HasAnyClassFlags(CLASS_Interface) == false ||
-                Parent->ImplementsInterface(Interface) == false)
+                Interface->HasAllClassFlags(CLASS_Interface | CLASS_Native) == false ||
+                ImplementedInterfaces.Contains(Function.InterfaceClassPath) == false)
             {
                 Diagnostics.Add(FString::Printf(
-                    TEXT("Interface override for %s requires an interface implemented by the native parent"),
+                    TEXT("Interface override for %s has no verified interface inheritance contract"),
                     *FunctionName));
                 return false;
             }
@@ -2825,7 +3003,8 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     {
         return false;
     }
-    if (ClassName.Len() <= ParentClass.GeneratedClassPrefix.Len() ||
+    if (ClassName == ParentClass.CppClassName ||
+        ClassName.Len() <= ParentClass.GeneratedClassPrefix.Len() ||
         ClassName.StartsWith(ParentClass.GeneratedClassPrefix) == false ||
         IsIdentifier(ClassName) == false)
     {
@@ -2840,7 +3019,17 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         OutDiagnostics.Add(TEXT("Semantic code generation requires at least one function"));
         return false;
     }
-    if (IR.Functions.Num() > 1)
+    FSemanticInterfacePlan InterfacePlan;
+    if (ValidateClassDeclarations(IR, ParentClass, ClassName, OutDiagnostics) == false ||
+        BuildInterfacePlan(IR, ParentClass, InterfacePlan, OutDiagnostics) == false)
+    {
+        return false;
+    }
+    const FString ClassBases = ParentClass.CppClassName + InterfacePlan.AdditionalBases;
+    const FString ClassHeaderIncludes = FString::Printf(TEXT("#include \"%s\"\n"),
+        *ParentClass.HeaderPath) + InterfacePlan.Includes;
+    // 新規Interfaceは単一関数の場合も共通の関数列Emitterを使用する。
+    if (IR.Functions.Num() > 1 || InterfacePlan.ImplementedPaths.IsEmpty() == false)
     {
         FString VariableDeclarations;
         FString ConstructorBody;
@@ -2903,6 +3092,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
 
             FBPGeneratedFunctionShape CurrentShape;
             if (BuildFunctionShape(CurrentFunction, ParentClass, ClassName,
+                    InterfacePlan.ImplementedPaths,
                     CurrentShape, OutDiagnostics) == false)
             {
                 return false;
@@ -3009,9 +3199,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         Files.HeaderFileName = BaseName + TEXT(".h");
         Files.SourceFileName = BaseName + TEXT(".cpp");
         Files.HeaderContent = FString::Printf(
-            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
-            *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
-            *ParentClass.CppClassName, *VariableDeclarations,
+            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n%s#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
+            *ClassHeaderIncludes, *BaseName, *ApiPrefix, *ClassName,
+            *ClassBases, *VariableDeclarations,
             *ConstructorDeclaration, *FunctionDeclarations);
         Files.SourceContent = FString::Printf(
             TEXT("#include \"%s.h\"\n%s%s%s%s"),
@@ -3028,6 +3218,7 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     }
     FBPGeneratedFunctionShape FunctionShape;
     if (BuildFunctionShape(Function, ParentClass, ClassName,
+        InterfacePlan.ImplementedPaths,
         FunctionShape, OutDiagnostics) == false)
     {
         return false;
@@ -3100,9 +3291,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         Files.HeaderFileName = BaseName + TEXT(".h");
         Files.SourceFileName = BaseName + TEXT(".cpp");
         Files.HeaderContent = FString::Printf(
-            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
-            *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
-            *ParentClass.CppClassName, *VariableDeclarations,
+            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n%s#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
+            *ClassHeaderIncludes, *BaseName, *ApiPrefix, *ClassName,
+            *ClassBases, *VariableDeclarations,
             *ConstructorDeclaration, *FunctionShape.Declaration);
         const FString Body = LeadingCode + ReturnCode;
         Files.SourceContent = FString::Printf(
@@ -3142,9 +3333,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         Files.HeaderFileName = BaseName + TEXT(".h");
         Files.SourceFileName = BaseName + TEXT(".cpp");
         Files.HeaderContent = FString::Printf(
-            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
-            *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
-            *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
+            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n%s#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
+            *ClassHeaderIncludes, *BaseName, *ApiPrefix, *ClassName,
+            *ClassBases, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
         const FString Body = LeadingCode + ForEachCode;
         Files.SourceContent = FString::Printf(
@@ -3251,9 +3442,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         Files.HeaderFileName = BaseName + TEXT(".h");
         Files.SourceFileName = BaseName + TEXT(".cpp");
         Files.HeaderContent = FString::Printf(
-            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
-            *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
-            *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
+            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n%s#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
+            *ClassHeaderIncludes, *BaseName, *ApiPrefix, *ClassName,
+            *ClassBases, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
         const FString Body = FString::Printf(
             TEXT("%s    for (int32 %s = %d; %s <= %d; ++%s)\n    {\n%s    }\n%s"),
@@ -3320,9 +3511,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         Files.HeaderFileName = BaseName + TEXT(".h");
         Files.SourceFileName = BaseName + TEXT(".cpp");
         Files.HeaderContent = FString::Printf(
-            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
-            *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
-            *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
+            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n%s#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
+            *ClassHeaderIncludes, *BaseName, *ApiPrefix, *ClassName,
+            *ClassBases, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
         const FString Body = LeadingCode + BranchCode;
         Files.SourceContent = FString::Printf(
@@ -3367,9 +3558,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         Files.HeaderFileName = BaseName + TEXT(".h");
         Files.SourceFileName = BaseName + TEXT(".cpp");
         Files.HeaderContent = FString::Printf(
-            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
-            *ParentClass.HeaderPath, *BaseName, *ApiPrefix, *ClassName,
-            *ParentClass.CppClassName, *VariableDeclarations, *ConstructorDeclaration,
+            TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n%s#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s%s%s};\n"),
+            *ClassHeaderIncludes, *BaseName, *ApiPrefix, *ClassName,
+            *ClassBases, *VariableDeclarations, *ConstructorDeclaration,
             *FunctionShape.Declaration);
         const FString Body = LeadingCode + ExpressionStatementCode;
         Files.SourceContent = FString::Printf(

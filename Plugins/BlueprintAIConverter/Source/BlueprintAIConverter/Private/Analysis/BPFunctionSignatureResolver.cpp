@@ -5,9 +5,9 @@
 
 namespace
 {
-bool ResolvePropertyType(const FProperty* Property, FBPSemanticType& OutType)
+bool ResolvePropertyType(const FProperty* Property, FBPSemanticType& OutType, int32 Depth = 0)
 {
-    if (Property == nullptr)
+    if (Property == nullptr || Depth > 16)
     {
         return false;
     }
@@ -15,7 +15,20 @@ bool ResolvePropertyType(const FProperty* Property, FBPSemanticType& OutType)
     OutType.bIsConst = Property->HasAnyPropertyFlags(CPF_ConstParm);
     OutType.bIsReference = Property->HasAnyPropertyFlags(CPF_ReferenceParm);
 
-    if (CastField<FBoolProperty>(Property) != nullptr) { OutType.Kind = EBPSemanticTypeKind::Bool; }
+    if (const FArrayProperty* Array = CastField<FArrayProperty>(Property))
+    {
+        if (Array->Inner == nullptr) { return false; }
+        OutType.ContainerKind = TEXT("array");
+        OutType.InnerType = Array->Inner->GetCPPType();
+        OutType.ElementType = MakeShared<FBPSemanticType>();
+        return ResolvePropertyType(Array->Inner, *OutType.ElementType, Depth + 1);
+    }
+    if (const FByteProperty* Byte = CastField<FByteProperty>(Property))
+    {
+        if (Byte->Enum != nullptr) { return false; }
+        OutType.Kind = EBPSemanticTypeKind::Byte;
+    }
+    else if (CastField<FBoolProperty>(Property) != nullptr) { OutType.Kind = EBPSemanticTypeKind::Bool; }
     else if (CastField<FIntProperty>(Property) != nullptr) { OutType.Kind = EBPSemanticTypeKind::Int32; }
     else if (CastField<FInt64Property>(Property) != nullptr) { OutType.Kind = EBPSemanticTypeKind::Int64; }
     else if (CastField<FFloatProperty>(Property) != nullptr) { OutType.Kind = EBPSemanticTypeKind::Float; }
