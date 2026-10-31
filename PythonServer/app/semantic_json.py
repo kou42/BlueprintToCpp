@@ -12,7 +12,8 @@ class SemanticJsonError(ValueError):
 TYPE_KINDS = frozenset(("unresolved", "void", "bool", "int32", "int64",
                         "float", "double", "string", "name", "text", "object", "struct"))
 EXPRESSION_KINDS = frozenset(("literal", "variable_reference", "function_call"))
-STATEMENT_KINDS = frozenset(("expression", "assignment", "return", "branch"))
+LOOP_KINDS = frozenset(("for_loop", "for_each_loop"))
+STATEMENT_KINDS = frozenset(("expression", "assignment", "return", "branch", "break")) | LOOP_KINDS
 BLOCK_TERMINATORS = frozenset(("unspecified", "end", "fallthrough",
                                "return", "branch", "loop"))
 STATUSES = frozenset(("complete", "partial", "unsupported"))
@@ -73,13 +74,25 @@ def _required(obj: dict, names: tuple[str, ...], path: str) -> None:
             raise SemanticJsonError(f"{path}.{name}: missing field")
 
 
-def _type(raw: Any, path: str) -> None:
+def _type(raw: Any, path: str, depth: int = 0) -> None:
+    if depth > 64:
+        raise SemanticJsonError(f"{path}: type nesting exceeds 64")
     obj = _object(raw, path)
     _required(obj, ("kind", "type_path", "is_reference", "is_const"), path)
     _enum(obj["kind"], TYPE_KINDS, path + ".kind")
     _string(obj["type_path"], path + ".type_path")
     _bool(obj["is_reference"], path + ".is_reference")
     _bool(obj["is_const"], path + ".is_const")
+    # Container metadata is optional in older v2 files; validate it when present.
+    if "container_kind" in obj:
+        _enum(obj["container_kind"], frozenset(("", "none", "array", "set", "map")),
+              path + ".container_kind")
+    for field in ("inner_type", "key_type", "value_type"):
+        if field in obj:
+            _string(obj[field], path + "." + field)
+    for field in ("element_type_info", "key_type_info", "value_type_info"):
+        if field in obj and obj[field] is not None:
+            _type(obj[field], path + "." + field, depth + 1)
 
 
 def _expression(raw: Any, path: str, depth: int = 0) -> None:
@@ -114,12 +127,29 @@ def _statement(raw: Any, path: str, depth: int = 0) -> None:
         _required(obj, ("then_statements", "else_statements"), path)
         if obj["expression"]["type"]["kind"] != "bool":
             raise SemanticJsonError(f"{path}.expression.type: branch requires a bool condition")
-    for field in ("then_statements", "else_statements"):
+    if kind in LOOP_KINDS:
+        _required(obj, ("loop_index_variable", "loop_body_statements", "completed_statements"), path)
+    if kind == "for_loop":
+        _required(obj, ("loop_first_index", "loop_last_index"), path)
+    if kind == "for_each_loop":
+        _required(obj, ("loop_array", "loop_element_variable", "loop_element_type"), path)
+    for field in ("loop_index_variable", "loop_element_variable"):
+        if field in obj:
+            _nullable_string(obj[field], path + "." + field)
+    for field in ("loop_first_index", "loop_last_index", "loop_array"):
+        if field in obj:
+            _expression(obj[field], path + "." + field)
+    if "loop_element_type" in obj:
+        _type(obj["loop_element_type"], path + ".loop_element_type")
+    for field in ("then_statements", "else_statements", "loop_body_statements", "completed_statements"):
         if field not in obj:
             continue
         children = _array(obj[field], path + "." + field)
-        if kind != "branch" and children:
-            raise SemanticJsonError(f"{path}.{field}: only branch statements may contain branches")
+        if field in ("then_statements", "else_statements"):
+            if kind != "branch" and children:
+                raise SemanticJsonError(f"{path}.{field}: only branch statements may contain branches")
+        elif kind not in LOOP_KINDS and children:
+            raise SemanticJsonError(f"{path}.{field}: only loop statements may contain loop bodies or Completed")
         for index, child in enumerate(children):
             _statement(child, f"{path}.{field}[{index}]", depth + 1)
 

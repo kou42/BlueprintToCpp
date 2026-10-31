@@ -176,8 +176,48 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 1. P2の関数公開範囲、out／参照引数の拒否Policy、native Blueprint event override署名照合のUE検証を行う。Interface継承生成と残るoverride形式を段階的に拡張する。
 2. 拡充した`MultipleFunctionGraphs`で、通常関数2つ＋Custom Eventを持つ実UObject BlueprintのUCLASS生成と実Editor export→Python E2EをUE環境で実行する。
-3. 単一Entry／Sequence／ForLoop／Branchの共通Callを基盤に、複雑LoopとネストBranchのBeginPlay依存を共通Entryへ移行し、パターン別Lowerer選択を段階的に整理する。
+3. 通常関数ForLoopの単一Loop／Body Call制約を整理し、多重ループ・Completed後続の共有Result到達を検証して拡張する。ForEachの一般Call対応、ネストBranchの接続条件式・戻り値対応も段階的に進める。
 4. 対応済みCFGと複数関数について、実Editor exportからPython schema／roundtripまでの対象アセットを拡張する。
+
+### P1 複雑ForLoopのCustom Event対応（2026-10-30、UE検証待ち）
+
+- 複雑ForLoopのイベント経路からBeginPlay必須条件を除去し、実Blueprintでは共通`ResolveEntryFunction`で署名・親クラス・void戻り値を検証する。UObjectのCustom Eventにも対応し、多重ループ・既存二重ループfallback・単一ループ経路が反射済み関数名／公開範囲／Entry種別を保持する。
+- 各形状での`Function.Name = BeginPlay`固定生成を共通Entryテンプレートへ置き換え、PrintString解析も共通Entry対応Analyzerへ移行。Graph IRだけを入力する既存APIは、反射で署名を復元できないCustom Eventを拒否し、BeginPlay lifecycle Policyを維持する。
+- 多重ループの汎用チェーン走査は最上位Loopが一つの形に限定し、その後のCallを当該LoopのCompletedへ正規化する。先行Printを保持し、内側Completedは親Body内の後続として配置する。これにより前処理と各Completedを持つ三重ループも受理し、実行順とIndexの有効範囲を維持する。
+- 到達領域外からのExec流入を拒否する。循環、範囲リテラル不正、外側CompletedからのIndex参照、親クラス改変の既存検証も維持する。通常関数の単純ForLoop専用経路は維持し、通常関数の多重ループ・複数Body Call・Completed後続にはまだ拡張していない。
+- `CustomEventForLoop`、`CustomEventNestedForLoop`、`CustomEventTripleForLoop`の実Blueprint Automation Testを追加。UObjectのイベント署名、深さ1／2／3、最内側Index、内側→外側Completedの単一生成、ノード／edge配列順に依存しない順序、拒否系と実JSON exportを確認する。既存Actor多重ループにも正規化変更の回帰確認が必要。
+- Semantic IR／JSON schemaは変更なし。Custom Eventの深さ1／2／3のForLoop・Completed・メタデータをJSON往復／Mock Providerまで確認し、関連Python141件と`git diff --check`が成功。UE環境がないためUHT／UBT・Automation Test・実Editor export→Python E2Eは未実施。
+- 通常関数の複雑ForLoop、一般Callや接続された条件式の統合、パターン別Lowerer選択は残るためP1全体の完了チェックは継続する。
+
+### P1 ForEachの共通Entry化（2026-10-30、UE検証待ち）
+
+- `LowerForEachLoopImpl`からネイティブ親のBeginPlay対応必須条件を除去し、`ResolveEntryFunction`で通常関数／Custom Event／BeginPlayの署名と親クラスを共通検証する。生成する関数名・Entry種別・公開範囲も保持し、PrintStringの既定値解析を共通Entry対応Analyzerへ切り替えた。
+- UObject通常関数はvoidに限定し、唯一のFunction ResultへCompletedの末尾から到達することを要求する。Bodyからの途中Return、Result未到達、複数Result、Result後の継続を拒否する。Custom EventはResultを含まない形を維持する。
+- 標準ForEach／ForEachWithBreakの正規マクロパス、int32配列の反射型、Entry→Loop／Body／Completed／Break接続、Index／Elementの寿命検証を維持する。到達領域外からのExec流入も拒否し、変数抽出エラーがある場合は関数を公開しない。
+- `FunctionForEach`、`CustomEventForEach`、`FunctionForEachWithBreak`、`CustomEventForEachWithBreak`の実Blueprint Automation Testを追加。UObject通常関数のElementとCustom EventのIndex、ループ前Print、CompletedとBreakの順序、Actor lifecycle非混入を検証する。マクロパス／親クラス改変、Completedからのローカル参照、外部Exec流入、不正Result経路の拒否も追加。
+- 各fixtureは実Blueprint由来のSemantic JSONを保存し、成果物パスをログへ出す。E2Eランナーへ`--automation-test BlueprintAIConverter.Conversion.RealBlueprint.FunctionForEach`などの正確なテスト名を渡して検証できる。配列メンバーのC++生成テストは既存Policyと同じDeclarationOnlyモードであり、配列既定値の再現を保証しない。
+- Semantic IR／JSON schemaは変更なし。通常関数／Custom EventのForEach CFG、型付きIndex／Element参照、Breakの有無をJSON往復・Mock Providerまで検証するPythonケースを追加。前項までのJSON同期を含む関連138件と`git diff --check`が成功。UE環境がないためUHT／UBT・Automation Test・実Editor export→Python E2Eは未実施。
+- 複雑ForLoopのBeginPlay依存、ForEach内の一般Call／任意式、int32以外の配列要素型、非void Returnは残るため、P1全体の完了チェックは継続する。
+
+### P1 ネストBranchの共通Entry化（2026-10-30、UE検証待ち）
+
+- `LowerBranchImpl`のネストBranchからBeginPlay限定条件を除去し、通常関数／Custom Eventも`ResolveEntryFunction`による反射署名・親クラス検証を使用する。boolリテラル条件、native void Call、構造化できる合流の既存Policyは維持する。
+- 通常関数はvoidかつ到達可能なFunction Resultが一つの形に限定し、全経路が同じ末尾Resultへ到達することを走査して検証する。枝の途中で終わる経路、複数Result、Resultからの継続、循環、到達領域外からのExec流入は拒否する。非void戻り値、途中Return、複数の独立したResultを持つネスト関数は引き続き対象外。
+- 共有Resultは全経路の検証後に末尾として一度だけ消費し、枝内の途中Returnとして出力しない。合流後の共通Callも既存の構造化走査で一度だけ生成する。Custom EventではResultを含まない形を維持する。
+- 既存`NestedBranchNativeCalls`を共通fixtureへ整理し、`NestedBranchCustomEvent`、`NestedBranchFunction`、`NestedBranchFunctionJoin`を追加。UObjectのEntry種別とC++定義、Actor lifecycle非混入、合流後Callの単一生成、正常系JSON出力とResult／Exec不正形状の拒否を確認するAutomation Testを追加した。
+- Semantic IR／JSON schemaは変更なし。UObject通常関数／Custom Eventの入れ子Branchと共通後続CallをJSON往復・Mock Providerまで保持するPythonケースを追加し、前項のLoop／Break同期を含む関連134件成功。`git diff --check`成功。UE環境がないためUHT／UBTとAutomation Testは未実施。
+- 複雑Loopの共通Entry化、ネストBranchの接続条件式・非void Returnや任意Statement混在への拡張、パターン別Lowerer選択は残るため、P1全体の完了チェックは継続する。
+
+### P2 JSON Loop／Breakの同期（2026-10-30、Python検証済み・UE検証待ち）
+
+- PR #113のマージ（`036ccaf`）を確認し、そのmainから`feat/semantic-loop-json-validation`で継続作業。
+- `semantic_json.py`へC++ Serializerが既に出力する`for_loop / for_each_loop / break`の検証を追加。ForLoopの開始／終了式、ForEachの配列式・要素変数／型、共通Index名、Body／Completedを保持し、子StatementをBranchと同じ再帰検証へ通す。明示CFGではBody／Completedが別Blockにある空の子配列も受理する。
+- コンテナ型の任意フィールドと`element_type_info / key_type_info / value_type_info`を再帰検証。旧v2の型ツリー省略・nullと空のcontainer種別は維持し、存在する不正型・コンテナ種別・過剰な入れ子は拒否する。Statement／型ツリーの深さ上限は64。
+- C++ Serializerが全Statementへ出力する空のBody／Completedや未使用ループ式・null変数名を引き続き受理する。非Loop文に非空Body／Completedを隠した入力は拒否する。JSON検証は構造確認であり、Breakの実行スコープ・境界式や配列要素の型互換・C++生成可否はGeneratorの検証と区別する。
+- `BlueprintAIConverter.SemanticJson.LoopContracts`を追加。ForLoop内Branch→Break、Completedの共通Call、ForEachの要素型・配列型ツリー・ネストLoop・由来GUIDをC++ Serializer出力で確認し、Python検証用の成果物パスをログへ出す。これはSemantic IRを直接構築するSerializer契約fixtureであり、実Blueprint変換の成功を意味しない。
+- 実UE確認時はE2Eコマンドへ`--automation-test BlueprintAIConverter.SemanticJson.LoopContracts`を指定できる。UHT／UBT・Automation Test・実Serializer出力→Python E2Eは本環境では未実施。
+- PythonではForLoop／ForEachの構造化表現・入れ子・明示CFGとback-edge、Branch内Break、CompletedをJSON往復→Mock Providerまで確認。必須フィールド欠落、不正な子Statement／式／GUID／型ツリー、深さ超過と旧入力の互換性も検証し、関連132件成功。`git diff --check`成功。
+- 既存v2表現の受理拡張でありschema_versionは2を維持。新しいIR表現やC++生成ロジックは追加していない。Statement種別の同期は進んだが、実Editor export範囲と型種別・参照関係の完全な契約監査は未完了のためJSON全体のチェックは継続する。
 
 ### P1 Branchの共通CallとJSON同期（2026-10-30、UE検証待ち）
 
@@ -256,12 +296,22 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 | --- | --- | --- |
 | `BPSemanticLowering.cpp::Lower` | ノードの有無でパターンを選択 | 関数単位のEntry／Statement Loweringへ移行後に撤去 |
 | `LowerEntryCallExpression`のPrintString Analyzer分岐 | 単一Entry／Sequence／BranchのWorldContext／色／名前／既定値検証を既存Analyzerへ集約。一般のリテラルnative callはForLoopと共通化（UE検証待ち） | メタデータ由来の共通式Loweringに入力型・既定値検証を統合後、関数名分岐を削除 |
-| 複雑ForLoop／ForEachLoop Lowering | BeginPlay前提の検証 | 共通Entry解析とクラス固有Policyへ分離後に整理 |
+| ネストBranch Lowering | 共通Entryに移行（UE検証待ち）。boolリテラル条件に限定し、通常関数は全経路が同じ末尾Resultへ到達するvoid形状のみ | 接続された条件式、途中Return／非void戻り値、任意Statement混在を明示CFGと署名検証で段階的に拡張 |
+| 複雑ForLoop Lowering | 実BlueprintのBeginPlay／Custom Eventは共通Entryへ移行（UE検証待ち）。通常関数は単一Loop／Body Callに限定。Graph IRのみではBeginPlay Policyを維持 | 通常関数の多重ループ・Completed後続をResult到達監査付きで拡張し、パターン別走査を整理 |
+| ForEachLoopのStatement／式Lowering | 共通Entryに対応（UE検証待ち）。int32配列・PrintString・Index／Element変換に限定 | 一般のCall／式Loweringと任意の要素型へReflection・スコープ検証を保って段階的に拡張 |
 | `BPSemanticCodeGenerator.cpp::Generate` | 複数関数と明示CFGに対応済みだが、受理するCFG形状を構造化Branch／Loopへ限定 | 共通CFG走査と診断を拡張し、対応ノードを増やす際もBlock順から意味を推測しない |
 | `BPSemanticCodeGenerator.cpp::BuildFunctionShape` | out値／可変参照／参照戻り値を未対応Policyで拒否し、native Blueprint event override元をReflection照合（UE検証待ち）。公開範囲をReflection／IR／C++／JSONへ保持（UE検証待ち）。Interface継承は未完了 | 公開範囲・署名PolicyのUE検証。出力代入・寿命検証を実装して拒否Policyを段階的に解除し、Interface継承と対応override形式を拡張 |
-| `BPSemanticJsonSerializer.cpp`／`PythonServer/app/semantic_json.py` | schema_version 2。Branch／入れ子枝は同期済み（Python検証済み・実UE待ち）、Loop／Break Statementなどは未同期 | 新IR表現ごとに両側を更新しgolden／roundtripで確認 |
+| `BPSemanticJsonSerializer.cpp`／`PythonServer/app/semantic_json.py` | schema_version 2。Branch／Loop／BreakのStatement種別と入れ子、任意のコンテナ型ツリーを同期（Python検証済み・実UE待ち）。型種別・参照関係の完全監査は未完了 | 新IR表現ごとに両側を更新しgolden／roundtripで確認 |
 
 ## 最新の検証結果
+
+- 2026-10-30（新規変更、UE検証待ち）: 複雑ForLoopのイベント経路をUObject Custom Eventへ拡張し、多重ループの先行文・最上位Completedを正規化。実Blueprint回帰3ケースを追加、関連Pythonテスト141件成功。UHT／UBT・Automation Test・実Editor E2Eは未実施。
+
+- 2026-10-30（新規変更、UE検証待ち）: ForEach／ForEachWithBreakをUObject通常関数・Custom Eventへ拡張し、Completedからの末尾Result到達を監査。実Blueprint回帰4ケースを追加、関連Pythonテスト138件成功。UHT／UBT・Automation Test・実Editor E2Eは未実施。
+
+- 2026-10-30（新規変更、UE検証待ち）: ネストBranchをUObject通常関数／Custom Eventへ拡張し、通常関数の全経路の共有Result到達を監査。実Blueprint回帰3ケースを追加、Loop／Break同期を含む関連Pythonテスト134件成功。UHT／UBT・Automation Testは未実施。
+
+- 2026-10-30（新規変更、UE検証待ち）: JSON v2のForLoop／ForEach／Breakと任意のコンテナ型ツリー検証を追加。関連Pythonテスト132件成功。LoopContracts Serializer fixtureを追加したが、UHT／UBT・Automation Test・実Serializer出力E2Eは未実施。
 
 - 2026-10-30（新規変更、UE検証待ち）: Branchの単一・ネストCallを共通Loweringへ移行し、PythonにBranch文の再帰検証を追加。実Blueprint回帰4ケースを追加、関連Pythonテスト95件成功。UHT／UBT・Automation Testは未実施。
 

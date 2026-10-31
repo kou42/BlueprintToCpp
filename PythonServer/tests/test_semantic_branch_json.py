@@ -91,3 +91,20 @@ def test_non_branch_statement_cannot_hide_unvalidated_children():
     data["functions"][0]["blocks"][0]["statements"][0]["kind"] = "expression"
     with pytest.raises(SemanticJsonError, match="only branch statements"):
         parse_semantic_json(data)
+
+
+@pytest.mark.parametrize("event_graph", [False, True])
+def test_uobject_nested_branch_entry_and_common_continuation_roundtrip(tmp_path, event_graph):
+    data = branch_document("nested")
+    function = data["functions"][0]
+    function.update(name="OnNested" if event_graph else "RunNested", is_event_graph=event_graph)
+    statements = function["blocks"][0]["statements"]
+    join = copy.deepcopy(statements[0]["else_statements"][0])
+    statements.append(join)
+    parsed = parse_semantic_json(json.loads(json.dumps(data)))
+    assert parsed["source"]["parent_class_path"] == "/Script/CoreUObject.Object"
+    assert parsed["functions"][0] == function
+    assert len(parsed["functions"][0]["blocks"][0]["statements"]) == 2
+    target = tmp_path / "nested-uobject.semantic.json"
+    target.write_text(json.dumps(data), encoding="utf-8")
+    assert validate_file(target, check_provider=True)["provider_status"] == "mocked"

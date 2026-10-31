@@ -15,6 +15,7 @@
 #include "HAL/FileManager.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
+#include "K2Node_CustomEvent.h"
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_FunctionResult.h"
 #include "K2Node_IfThenElse.h"
@@ -586,19 +587,58 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealNestedNativeBranchTest,
     "BlueprintAIConverter.Conversion.RealBlueprint.NestedBranchNativeCalls",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FBPRealNestedNativeBranchTest::RunTest(const FString& Parameters)
+static bool RunNestedNativeBranchTest(FAutomationTestBase& Test, int32 Mode)
 {
-    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(AActor::StaticClass(), GetTransientPackage(),
+    const bool bBeginPlay = Mode == 0;
+    const bool bFunction = Mode >= 2;
+    const bool bJoinCall = Mode == 3;
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
+        bBeginPlay ? AActor::StaticClass() : UObject::StaticClass(), GetTransientPackage(),
         MakeUniqueObjectName(GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_NestedNative")),
         BPTYPE_Normal, NAME_None);
-    if (TestNotNull(TEXT("ネストBranch用Blueprint"), Blueprint) == false) { return false; }
-    UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
-    if (TestNotNull(TEXT("Event Graph"), Graph) == false) { return false; }
-    Graph->Nodes.Reset();
-    UK2Node_Event* Entry = AddBranchNode<UK2Node_Event>(Graph);
-    Entry->EventReference.SetExternalMember(TEXT("ReceiveBeginPlay"), AActor::StaticClass());
-    Entry->bOverrideFunction = true;
-    Entry->AllocateDefaultPins();
+    if (Test.TestNotNull(TEXT("ネストBranch用Blueprint"), Blueprint) == false) { return false; }
+    UEdGraph* Graph = nullptr;
+    UK2Node* Entry = nullptr;
+    UK2Node_FunctionResult* Result = nullptr;
+    if (bFunction)
+    {
+        Graph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, TEXT("RunNested"),
+            UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+        FBlueprintEditorUtils::AddFunctionGraph<UFunction>(Blueprint, Graph, true, nullptr);
+        for (UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (UK2Node_FunctionEntry* Candidate = Cast<UK2Node_FunctionEntry>(Node)) { Entry = Candidate; }
+            if (UK2Node_FunctionResult* Candidate = Cast<UK2Node_FunctionResult>(Node)) { Result = Candidate; }
+        }
+        if (Result == nullptr)
+        {
+            Result = AddBranchNode<UK2Node_FunctionResult>(Graph);
+            Result->FunctionReference.SetSelfMember(TEXT("RunNested"));
+            Result->AllocateDefaultPins();
+        }
+    }
+    else
+    {
+        Graph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+        if (Test.TestNotNull(TEXT("Event Graph"), Graph) == false) { return false; }
+        Graph->Nodes.Reset();
+        if (bBeginPlay)
+        {
+            UK2Node_Event* Event = AddBranchNode<UK2Node_Event>(Graph);
+            Event->EventReference.SetExternalMember(TEXT("ReceiveBeginPlay"), AActor::StaticClass());
+            Event->bOverrideFunction = true;
+            Entry = Event;
+        }
+        else
+        {
+            UK2Node_CustomEvent* Event = AddBranchNode<UK2Node_CustomEvent>(Graph);
+            Event->CustomFunctionName = TEXT("OnNested");
+            Entry = Event;
+        }
+        Entry->AllocateDefaultPins();
+    }
+    if (Test.TestNotNull(TEXT("共通Entry"), Entry) == false) { return false; }
+    Entry->FindPinChecked(UEdGraphSchema_K2::PN_Then)->BreakAllPinLinks();
     UK2Node_IfThenElse* Root = AddBranchNode<UK2Node_IfThenElse>(Graph);
     Root->AllocateDefaultPins();
     Root->FindPinChecked(TEXT("Condition"))->DefaultValue = TEXT("true");
@@ -615,10 +655,12 @@ bool FBPRealNestedNativeBranchTest::RunTest(const FString& Parameters)
     };
     UFunction* Static = UGameplayStatics::StaticClass()->FindFunctionByName(TEXT("SetSubtitlesEnabled"));
     UFunction* Self = AActor::StaticClass()->FindFunctionByName(TEXT("SetActorTickEnabled"));
-    if (TestNotNull(TEXT("Static署名"), Static) == false || TestNotNull(TEXT("Self署名"), Self) == false) { return false; }
+    if (Test.TestNotNull(TEXT("Static署名"), Static) == false || Test.TestNotNull(TEXT("Self署名"), Self) == false) { return false; }
     UK2Node_CallFunction* TrueCall = AddNative(Static, TEXT("true"));
     UK2Node_CallFunction* FalseCall = AddNative(Static, TEXT("false"));
-    UK2Node_CallFunction* SelfCall = AddNative(Self, TEXT("false"));
+    UK2Node_CallFunction* SelfCall = AddNative(bBeginPlay ? Self : Static,
+        bBeginPlay ? TEXT("false") : TEXT("true"));
+    UK2Node_CallFunction* Join = bJoinCall ? AddNative(Static, TEXT("false")) : nullptr;
     const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
     const auto Connect = [Schema](UK2Node* From, FName Output, UK2Node* To)
     {
@@ -630,31 +672,125 @@ bool FBPRealNestedNativeBranchTest::RunTest(const FString& Parameters)
     bConnected &= Connect(Root, TEXT("else"), SelfCall);
     bConnected &= Connect(Child, UEdGraphSchema_K2::PN_Then, TrueCall);
     bConnected &= Connect(Child, TEXT("else"), FalseCall);
-    if (TestTrue(TEXT("ネストExec接続"), bConnected) == false) { return false; }
+    if (bFunction)
+    {
+        UK2Node* Destination = Join != nullptr ? static_cast<UK2Node*>(Join) : static_cast<UK2Node*>(Result);
+        bConnected &= Connect(TrueCall, UEdGraphSchema_K2::PN_Then, Destination);
+        bConnected &= Connect(FalseCall, UEdGraphSchema_K2::PN_Then, Destination);
+        bConnected &= Connect(SelfCall, UEdGraphSchema_K2::PN_Then, Destination);
+        if (Join != nullptr) { bConnected &= Connect(Join, UEdGraphSchema_K2::PN_Then, Result); }
+    }
+    if (Test.TestTrue(TEXT("ネストExec接続"), bConnected) == false) { return false; }
     FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
     FBPGraphIR GraphIR;
-    if (TestTrue(TEXT("ネストGraph IRを構築"), FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false) { return false; }
+    if (Test.TestTrue(TEXT("ネストGraph IRを構築"), FBPGraphIRBuilder::Build(Blueprint, GraphIR)) == false) { return false; }
     FBPSemanticIR IR;
-    if (TestTrue(TEXT("PrintStringなしのネストBranchをLowering"), FBPSemanticLowering::Lower(Blueprint, GraphIR, IR)) == false)
+    if (Test.TestTrue(TEXT("PrintStringなしのネストBranchをLowering"), FBPSemanticLowering::Lower(Blueprint, GraphIR, IR)) == false)
     {
-        for (const FBPSemanticDiagnostic& Diagnostic : IR.Diagnostics) { AddError(Diagnostic.Message); }
+        for (const FBPSemanticDiagnostic& Diagnostic : IR.Diagnostics) { Test.AddError(Diagnostic.Message); }
         return false;
     }
     FBPGeneratedActorFiles Files;
     TArray<FString> Diagnostics;
-    if (TestTrue(TEXT("ネストnative CallをC++生成"), FBPSemanticCodeGenerator::Generate(
-            IR, TEXT("ANestedNative"), FString(), Files, Diagnostics)) == false)
+    if (Test.TestTrue(TEXT("ネストnative CallをC++生成"), FBPSemanticCodeGenerator::Generate(
+            IR, bBeginPlay ? TEXT("ANestedNative") : TEXT("UNestedNative"), FString(), Files, Diagnostics)) == false)
     {
-        for (const FString& Diagnostic : Diagnostics) { AddError(Diagnostic); }
+        for (const FString& Diagnostic : Diagnostics) { Test.AddError(Diagnostic); }
         return false;
     }
-    TestTrue(TEXT("内側True Call"), Files.SourceContent.Contains(TEXT("UGameplayStatics::SetSubtitlesEnabled(true);")));
-    TestTrue(TEXT("内側False Call"), Files.SourceContent.Contains(TEXT("UGameplayStatics::SetSubtitlesEnabled(false);")));
-    TestTrue(TEXT("外側False self Call"), Files.SourceContent.Contains(TEXT("this->SetActorTickEnabled(false);")));
+    Test.TestTrue(TEXT("内側True Call"), Files.SourceContent.Contains(TEXT("UGameplayStatics::SetSubtitlesEnabled(true);")));
+    Test.TestTrue(TEXT("内側False Call"), Files.SourceContent.Contains(TEXT("UGameplayStatics::SetSubtitlesEnabled(false);")));
+    Test.TestTrue(TEXT("外側False Call"), Files.SourceContent.Contains(bBeginPlay
+        ? TEXT("this->SetActorTickEnabled(false);") : TEXT("UGameplayStatics::SetSubtitlesEnabled(true);")));
+    if (bFunction)
+    {
+        Test.TestTrue(TEXT("UObject通常関数の署名"), Files.SourceContent.Contains(TEXT("UNestedNative::RunNested()")));
+        Test.TestFalse(TEXT("通常関数にlifecycleを混入しない"), Files.SourceContent.Contains(TEXT("Super::BeginPlay")));
+    }
+    else if (bBeginPlay == false)
+    {
+        Test.TestTrue(TEXT("UObject Custom Eventの本体"),
+            Files.SourceContent.Contains(TEXT("UNestedNative::OnNested_Implementation()")));
+        Test.TestFalse(TEXT("Custom Eventにlifecycleを混入しない"), Files.SourceContent.Contains(TEXT("Super::BeginPlay")));
+    }
+    if (bJoinCall)
+    {
+        TArray<FString> Pieces;
+        Files.SourceContent.ParseIntoArray(Pieces, TEXT("UGameplayStatics::SetSubtitlesEnabled(false);"), false);
+        Test.TestEqual(TEXT("内側Falseと合流後Callを各一回だけ生成"), Pieces.Num(), 3);
+    }
     FString Json;
-    TestTrue(TEXT("ネストCall JSONを生成"), FBPSemanticJsonSerializer::Serialize(IR, TEXT("5.7"), Json));
-    TestTrue(TEXT("JSONにネスト枝を保持"), Json.Contains(TEXT("then_statements")) && Json.Contains(TEXT("SetActorTickEnabled")));
+    Test.TestTrue(TEXT("ネストCall JSONを生成"), FBPSemanticJsonSerializer::Serialize(IR, TEXT("5.7"), Json));
+    Test.TestTrue(TEXT("JSONにネスト枝を保持"), Json.Contains(TEXT("then_statements")) && Json.Contains(TEXT("SetSubtitlesEnabled")));
+    if (bFunction)
+    {
+        for (int32 CaseIndex = 0; CaseIndex < 5; ++CaseIndex)
+        {
+            FBPGraphIR Invalid = GraphIR;
+            FBPIRGraph* Target = Invalid.Graphs.FindByPredicate([](const FBPIRGraph& Candidate)
+                { return Candidate.Name == TEXT("RunNested"); });
+            if (Test.TestNotNull(TEXT("拒否確認用Graph"), Target) == false) { return false; }
+            if (CaseIndex == 0)
+            {
+                Target->ExecEdges.RemoveAll([TrueCall](const FBPIRLink& Edge)
+                    { return Edge.SourceNode == TrueCall->NodeGuid; });
+            }
+            if (CaseIndex == 1)
+            {
+                FBPIRLink Extra;
+                Extra.SourceNode = Result->NodeGuid; Extra.SourcePin = FGuid::NewGuid();
+                Extra.TargetNode = TrueCall->NodeGuid;
+                Extra.TargetPin = TrueCall->FindPinChecked(UEdGraphSchema_K2::PN_Execute)->PinId;
+                Target->ExecEdges.Add(Extra);
+            }
+            if (CaseIndex == 2)
+            {
+                for (FBPIRLink& Edge : Target->ExecEdges)
+                {
+                    if (Edge.SourceNode == FalseCall->NodeGuid)
+                    {
+                        Edge.TargetNode = Child->NodeGuid;
+                        Edge.TargetPin = Child->FindPinChecked(UEdGraphSchema_K2::PN_Execute)->PinId;
+                    }
+                }
+            }
+            if (CaseIndex == 3)
+            {
+                const FBPIRNode* Original = Target->Nodes.FindByPredicate([Result](const FBPIRNode& Node)
+                    { return Node.Id == Result->NodeGuid; });
+                if (Test.TestNotNull(TEXT("共有Result"), Original) == false) { return false; }
+                FBPIRNode Other = *Original;
+                Other.Id = FGuid::NewGuid();
+                FGuid ExecuteId;
+                for (FBPIRPin& Pin : Other.Pins)
+                {
+                    Pin.Id = FGuid::NewGuid();
+                    if (Pin.Name == UEdGraphSchema_K2::PN_Execute) { ExecuteId = Pin.Id; }
+                }
+                for (FBPIRLink& Edge : Target->ExecEdges)
+                {
+                    if (Edge.SourceNode == TrueCall->NodeGuid)
+                    {
+                        Edge.TargetNode = Other.Id; Edge.TargetPin = ExecuteId;
+                    }
+                }
+                Target->Nodes.Add(MoveTemp(Other));
+            }
+            if (CaseIndex == 4)
+            {
+                FBPIRLink Extra;
+                Extra.SourceNode = FGuid::NewGuid(); Extra.SourcePin = FGuid::NewGuid();
+                Extra.TargetNode = TrueCall->NodeGuid;
+                Extra.TargetPin = TrueCall->FindPinChecked(UEdGraphSchema_K2::PN_Execute)->PinId;
+                Target->ExecEdges.Add(Extra);
+            }
+            FBPSemanticIR Rejected;
+            Test.TestFalse(TEXT("Result未到達・複数Result・循環・不正流入を拒否"),
+                FBPSemanticLowering::Lower(Blueprint, Invalid, Rejected));
+            Test.TestTrue(TEXT("拒否時に部分関数を公開しない"), Rejected.Functions.IsEmpty() && Rejected.HasErrors());
+        }
+    }
     for (FBPIRGraph& Target : GraphIR.Graphs)
     {
         for (FBPIRNode& Node : Target.Nodes)
@@ -663,9 +799,26 @@ bool FBPRealNestedNativeBranchTest::RunTest(const FString& Parameters)
         }
     }
     FBPSemanticIR Rejected;
-    TestFalse(TEXT("ネスト枝の不正Callも拒否"), FBPSemanticLowering::Lower(Blueprint, GraphIR, Rejected));
-    TestTrue(TEXT("ネスト失敗時に部分関数を公開しない"), Rejected.Functions.IsEmpty() && Rejected.HasErrors());
+    Test.TestFalse(TEXT("ネスト枝の不正Callも拒否"), FBPSemanticLowering::Lower(Blueprint, GraphIR, Rejected));
+    Test.TestTrue(TEXT("ネスト失敗時に部分関数を公開しない"), Rejected.Functions.IsEmpty() && Rejected.HasErrors());
     return true;
 }
+
+bool FBPRealNestedNativeBranchTest::RunTest(const FString& Parameters) { return RunNestedNativeBranchTest(*this, 0); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealNestedCustomEventTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.NestedBranchCustomEvent",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPRealNestedCustomEventTest::RunTest(const FString& Parameters) { return RunNestedNativeBranchTest(*this, 1); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealNestedFunctionTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.NestedBranchFunction",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPRealNestedFunctionTest::RunTest(const FString& Parameters) { return RunNestedNativeBranchTest(*this, 2); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPRealNestedFunctionJoinTest,
+    "BlueprintAIConverter.Conversion.RealBlueprint.NestedBranchFunctionJoin",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBPRealNestedFunctionJoinTest::RunTest(const FString& Parameters) { return RunNestedNativeBranchTest(*this, 3); }
 
 #endif

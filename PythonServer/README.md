@@ -115,7 +115,11 @@ for generated_file in result["files"]:
 
 関数の公開範囲は任意の`functions[].visibility`で`unspecified`、`public`、`protected`、`private`を保持します。これはv2への追加フィールドであり、旧v2の省略入力も受理します。`unspecified`または省略は公開範囲を未記録であることを示し、C++生成では従来の通常関数public、BeginPlay protected、overrideは検証済み親宣言の範囲を使用します。Python検証はJSON上の値を保持し、公開範囲を推測して補完しません。
 
-Branch文は`kind: "branch"`、bool型の`expression`、`then_statements`／`else_statements`配列で検証します。入れ子の枝と、明示CFGの後続Blockへ接続する空の枝配列を受理し、子Statementは再帰検証します（深さ上限64）。これは既存v2 Serializerの出力への対応で、バージョン変更はありません。Loop／Break Statementの検証対応は今後の課題です。
+Branch文は`kind: "branch"`、bool型の`expression`、`then_statements`／`else_statements`配列で検証します。入れ子の枝と、明示CFGの後続Blockへ接続する空の枝配列を受理し、子Statementは再帰検証します（深さ上限64）。これは既存v2 Serializerの出力への対応で、バージョン変更はありません。ForLoop／ForEachLoop／Breakも受理し、ループのBody／Completedと入れ子のStatementを同じ検証へ通します。
+
+ループは`for_loop`／`for_each_loop`で、共通の`loop_index_variable`、`loop_body_statements`、`completed_statements`を保持します。ForLoopには`loop_first_index`／`loop_last_index`、ForEachには`loop_array`／`loop_element_variable`／`loop_element_type`が必要です。明示CFGのBody／Completedが別Blockにある場合は空の子配列を受理します。配列などの任意の型ツリーも再帰検証します（深さ上限64）。旧v2の型ツリー省略と、通常Statementに付く空のループ配列も引き続き受理します。
+
+この検証はループの実行意味やBreakのスコープ、C++生成可否を保証しません。これらはGeneratorの検証で扱います。
 
 Python側では以下のようにスキーマ検証できます。
 
@@ -159,6 +163,31 @@ UObjectの通常関数2つ・Custom Event・共有変数を持つBlueprintの変
 ```
 
 選択したAutomation Testの成功ログと、そのプロセスが出力した成果物パスを確認してからPython CLIへ進みます。結果のJSONには`automation_test`、`functions`、`variables`、`graph_traces`を含みます。この追加ケースはUE環境での実行待ちです。
+
+UObjectの通常関数／Custom EventからForEachを変換する実Blueprint fixtureは、次のAutomation Test名を指定できます（UE環境での実行待ち）。
+
+- `BlueprintAIConverter.Conversion.RealBlueprint.FunctionForEach`
+- `BlueprintAIConverter.Conversion.RealBlueprint.CustomEventForEach`
+- `BlueprintAIConverter.Conversion.RealBlueprint.FunctionForEachWithBreak`
+- `BlueprintAIConverter.Conversion.RealBlueprint.CustomEventForEachWithBreak`
+
+通常関数ではCompletedの末尾から一つのFunction Resultへ到達するvoid関数を対象とします。C++の配列宣言確認にはDeclarationOnlyモードを使用し、配列の既定値再現は検証していません。
+
+UObjectのCustom Eventからの単一／二重／三重ForLoopは、次のfixtureで確認できます（UE環境での実行待ち）。
+
+- `BlueprintAIConverter.Conversion.RealBlueprint.CustomEventForLoop`
+- `BlueprintAIConverter.Conversion.RealBlueprint.CustomEventNestedForLoop`
+- `BlueprintAIConverter.Conversion.RealBlueprint.CustomEventTripleForLoop`
+
+多重ループではループ前処理、内側Completed、最上位Completedの順序とIndexのスコープを確認します。通常関数のForLoopは引き続き単一Loop／単一Body Callの経路に限定しています。
+
+SerializerのForLoop／ForEach／Break契約fixtureを検証する場合は、次を指定できます。
+
+```text
+--automation-test BlueprintAIConverter.SemanticJson.LoopContracts
+```
+
+このfixtureはSemantic IRを直接構築して実Serializer出力を保存します。実Blueprint変換のテストとは別で、UE環境での実行は未確認です。
 
 ## A1: AI Provider共通インターフェース（Mock）
 

@@ -1,5 +1,6 @@
 #include "Misc/AutomationTest.h"
 #include "BPSemanticJsonSerializer.h"
+#include "BPSemanticJsonExporter.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonReader.h"
@@ -253,6 +254,124 @@ bool FBPSemanticJsonSerializerTest::RunTest(const FString& Parameters)
         FString(TEXT("unsupported")));
     TestEqual(TEXT("診断重大度"), Failed->GetArrayField(TEXT("diagnostics"))[0]->AsObject()
         ->GetStringField(TEXT("severity")), FString(TEXT("error")));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPSemanticLoopJsonContractTest,
+    "BlueprintAIConverter.SemanticJson.LoopContracts",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPSemanticLoopJsonContractTest::RunTest(const FString& Parameters)
+{
+    // このfixtureは実アセット変換ではなく、Serializerが出力するv2契約を固定する。
+    FBPSemanticIR IR;
+    IR.AssetPath = TEXT("/Engine/Transient.BP_LoopContract");
+    IR.ParentClassPath = TEXT("/Script/Engine.Actor");
+    const auto Literal = [](EBPSemanticTypeKind Kind, const TCHAR* Value)
+    {
+        FBPSemanticExpression Expression;
+        Expression.Kind = EBPSemanticExpressionKind::Literal;
+        Expression.Type.Kind = Kind;
+        Expression.LiteralValue = Value;
+        Expression.SourceNodeId = FGuid::NewGuid();
+        Expression.SourcePinId = FGuid::NewGuid();
+        return Expression;
+    };
+    FBPSemanticStatement Break;
+    Break.Kind = EBPSemanticStatementKind::Break;
+    Break.SourceNodeId = FGuid::NewGuid();
+    FBPSemanticStatement Branch;
+    Branch.Kind = EBPSemanticStatementKind::Branch;
+    Branch.SourceNodeId = FGuid::NewGuid();
+    Branch.Expression = Literal(EBPSemanticTypeKind::Bool, TEXT("true"));
+    Branch.ThenStatements.Add(Break);
+    FBPSemanticStatement Completed;
+    Completed.Kind = EBPSemanticStatementKind::Expression;
+    Completed.SourceNodeId = FGuid::NewGuid();
+    Completed.Expression.Kind = EBPSemanticExpressionKind::FunctionCall;
+    Completed.Expression.Type.Kind = EBPSemanticTypeKind::Void;
+    Completed.Expression.SourceNodeId = Completed.SourceNodeId;
+    Completed.Expression.FunctionName = TEXT("SetSubtitlesEnabled");
+    Completed.Expression.FunctionOwnerPath = TEXT("/Script/Engine.GameplayStatics");
+    Completed.Expression.Arguments.Add(Literal(EBPSemanticTypeKind::Bool, TEXT("false")));
+    FBPSemanticStatement Range;
+    Range.Kind = EBPSemanticStatementKind::ForLoop;
+    Range.SourceNodeId = FGuid::NewGuid();
+    Range.LoopIndexVariable = TEXT("RangeIndex");
+    Range.LoopFirstIndex = Literal(EBPSemanticTypeKind::Int32, TEXT("0"));
+    Range.LoopLastIndex = Literal(EBPSemanticTypeKind::Int32, TEXT("2"));
+    Range.LoopBodyStatements.Add(Branch);
+    Range.CompletedStatements.Add(Completed);
+    FBPSemanticStatement Each;
+    Each.Kind = EBPSemanticStatementKind::ForEachLoop;
+    Each.SourceNodeId = FGuid::NewGuid();
+    Each.LoopIndexVariable = TEXT("ArrayIndex");
+    Each.LoopElementVariable = TEXT("Element");
+    Each.LoopElementType.Kind = EBPSemanticTypeKind::Int32;
+    Each.LoopArray.Kind = EBPSemanticExpressionKind::VariableReference;
+    Each.LoopArray.VariableName = TEXT("Numbers");
+    Each.LoopArray.Type.Kind = EBPSemanticTypeKind::Int32;
+    Each.LoopArray.Type.ContainerKind = TEXT("array");
+    Each.LoopArray.Type.ElementType = MakeShared<FBPSemanticType>(Each.LoopElementType);
+    Each.LoopBodyStatements.Add(Range);
+    Each.CompletedStatements.Add(Completed);
+    FBPSemanticVariable Numbers;
+    Numbers.Name = TEXT("Numbers");
+    Numbers.Guid = FGuid::NewGuid();
+    Numbers.Type = Each.LoopArray.Type;
+    Numbers.PinCategory = TEXT("int");
+    IR.Variables.Add(Numbers);
+    FBPSemanticBasicBlock Block;
+    Block.SourceEntryNodeId = FGuid::NewGuid();
+    Block.Statements.Add(Range);
+    Block.Statements.Add(Each);
+    FBPSemanticFunction Function;
+    Function.Name = TEXT("RunLoops");
+    Function.ReturnType.Kind = EBPSemanticTypeKind::Void;
+    Function.Visibility = EBPSemanticFunctionVisibility::Public;
+    Function.Blocks.Add(Block);
+    IR.Functions.Add(Function);
+    FString Serialized;
+    if (TestTrue(TEXT("ループ契約をシリアライズ"),
+            FBPSemanticJsonSerializer::Serialize(IR, TEXT("5.7.4"), Serialized)) == false) { return false; }
+    TSharedPtr<FJsonObject> Root;
+    if (TestTrue(TEXT("ループJSONを再解析"), FJsonSerializer::Deserialize(
+            TJsonReaderFactory<>::Create(Serialized), Root)) == false || Root.IsValid() == false) { return false; }
+    const TArray<TSharedPtr<FJsonValue>>& Statements = Root->GetArrayField(TEXT("functions"))[0]->AsObject()
+        ->GetArrayField(TEXT("blocks"))[0]->AsObject()->GetArrayField(TEXT("statements"));
+    if (TestEqual(TEXT("範囲／配列ループを保持"), Statements.Num(), 2) == false) { return false; }
+    const TSharedPtr<FJsonObject> RangeJson = Statements[0]->AsObject();
+    TestEqual(TEXT("ForLoop種別"), RangeJson->GetStringField(TEXT("kind")), FString(TEXT("for_loop")));
+    TestEqual(TEXT("開始Index"), RangeJson->GetObjectField(TEXT("loop_first_index"))
+        ->GetStringField(TEXT("literal_value")), FString(TEXT("0")));
+    TestEqual(TEXT("終了Index"), RangeJson->GetObjectField(TEXT("loop_last_index"))
+        ->GetStringField(TEXT("literal_value")), FString(TEXT("2")));
+    const TSharedPtr<FJsonObject> BreakJson = RangeJson->GetArrayField(TEXT("loop_body_statements"))[0]
+        ->AsObject()->GetArrayField(TEXT("then_statements"))[0]->AsObject();
+    TestEqual(TEXT("Branch内Break"), BreakJson->GetStringField(TEXT("kind")), FString(TEXT("break")));
+    TestEqual(TEXT("Breakの由来GUID"), BreakJson->GetStringField(TEXT("source_node_id")),
+        Break.SourceNodeId.ToString(EGuidFormats::DigitsWithHyphens));
+    TestEqual(TEXT("Completedの共通Call"), RangeJson->GetArrayField(TEXT("completed_statements"))[0]
+        ->AsObject()->GetObjectField(TEXT("expression"))->GetStringField(TEXT("function_name")),
+        FString(TEXT("SetSubtitlesEnabled")));
+    const TSharedPtr<FJsonObject> EachJson = Statements[1]->AsObject();
+    TestEqual(TEXT("ForEach種別"), EachJson->GetStringField(TEXT("kind")), FString(TEXT("for_each_loop")));
+    TestEqual(TEXT("要素変数"), EachJson->GetStringField(TEXT("loop_element_variable")), FString(TEXT("Element")));
+    TestEqual(TEXT("要素型"), EachJson->GetObjectField(TEXT("loop_element_type"))->GetStringField(TEXT("kind")),
+        FString(TEXT("int32")));
+    TestEqual(TEXT("配列の型ツリー"), EachJson->GetObjectField(TEXT("loop_array"))->GetObjectField(TEXT("type"))
+        ->GetObjectField(TEXT("element_type_info"))->GetStringField(TEXT("kind")), FString(TEXT("int32")));
+    TestEqual(TEXT("ネストLoop"), EachJson->GetArrayField(TEXT("loop_body_statements"))[0]
+        ->AsObject()->GetStringField(TEXT("kind")), FString(TEXT("for_loop")));
+    FString ExportPath;
+    FString ExportError;
+    if (TestTrue(TEXT("Python検証用の実Serializer出力を保存"),
+            FBPSemanticJsonExporter::Export(IR, TEXT("5.7.4"), ExportPath, ExportError)) == false)
+    {
+        AddError(ExportError);
+        return false;
+    }
+    AddInfo(FString::Printf(TEXT("SEMANTIC_ROUNDTRIP_ARTIFACT=%s"), *ExportPath));
     return true;
 }
 
