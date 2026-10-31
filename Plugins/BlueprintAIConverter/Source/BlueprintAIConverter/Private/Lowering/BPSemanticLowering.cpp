@@ -1,4 +1,5 @@
 #include "BPSemanticLowering.h"
+#include "BPWidgetTreeLowering.h"
 #include "BPParentClassResolver.h"
 #include "BPPrintStringAnalyzer.h"
 #include "BPBooleanPinDefaultEmitter.h"
@@ -20,6 +21,30 @@
 
 namespace
 {
+bool ResolveLoweringParent(const UBlueprint* Blueprint, const FString& Path,
+    FBPResolvedParentClass& Parent, TArray<FString>& Diagnostics)
+{
+    FBPSemanticWidgetTree Tree;
+    return FBPWidgetTreeLowering::Extract(Blueprint, Tree, Diagnostics) &&
+        FBPParentClassResolver::ResolveSemanticParent(Path, Parent, Diagnostics,
+            Tree.Kind != EBPSemanticWidgetTreeKind::None);
+}
+
+bool AttachWidgetTree(const UBlueprint* Blueprint, FBPSemanticIR& IR)
+{
+    TArray<FString> Diagnostics;
+    if (FBPWidgetTreeLowering::Extract(Blueprint, IR.WidgetTree, Diagnostics)) { return true; }
+    IR.Functions.Reset();
+    IR.Variables.Reset();
+    for (const FString& Message : Diagnostics)
+    {
+        FBPSemanticDiagnostic Diagnostic;
+        Diagnostic.Message = Message;
+        IR.Diagnostics.Add(MoveTemp(Diagnostic));
+    }
+    return false;
+}
+
 FBPSemanticExpression Literal(EBPSemanticTypeKind Type, const FString& Value, const FBPIRNode& Node, FName PinName)
 {
     FBPSemanticExpression Result;
@@ -56,7 +81,7 @@ bool LowerPrintStringImpl(const FBPGraphIR& GraphIR, const bool bAllowBlueprintV
 
     FBPResolvedParentClass ParentClass;
     TArray<FString> ParentDiagnostics;
-    if (FBPParentClassResolver::ResolveParent(
+    if (FBPParentClassResolver::ResolveSemanticParent(
         GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
     {
         for (const FString& Message : ParentDiagnostics)
@@ -505,7 +530,7 @@ bool LowerSingleEntryCallsImpl(const UBlueprint* Blueprint,
     }
     FBPResolvedParentClass Parent;
     TArray<FString> ParentDiagnostics;
-    if (FBPParentClassResolver::ResolveParent(GraphIR.ParentClassPath, Parent, ParentDiagnostics) == false)
+    if (ResolveLoweringParent(Blueprint, GraphIR.ParentClassPath, Parent, ParentDiagnostics) == false)
     {
         for (const FString& Message : ParentDiagnostics) { AddDiagnostic(OutIR, FString(), FGuid(), Message); }
         return false;
@@ -1072,7 +1097,7 @@ bool LowerBranchImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
 
     FBPResolvedParentClass ParentClass;
     TArray<FString> ParentDiagnostics;
-    if (FBPParentClassResolver::ResolveParent(
+    if (ResolveLoweringParent(Blueprint,
         GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
     {
         for (const FString& Message : ParentDiagnostics)
@@ -2165,7 +2190,7 @@ bool LowerForEachLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR
     }
     FBPResolvedParentClass Parent;
     TArray<FString> ParentErrors;
-    if (FBPParentClassResolver::ResolveParent(
+    if (ResolveLoweringParent(Blueprint,
         GraphIR.ParentClassPath, Parent, ParentErrors) == false)
     {
         for (const FString& Error : ParentErrors)
@@ -2836,7 +2861,7 @@ bool LowerForLoopImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR, FB
 
     FBPResolvedParentClass ParentClass;
     TArray<FString> ParentDiagnostics;
-    if (FBPParentClassResolver::ResolveParent(
+    if (ResolveLoweringParent(Blueprint,
         GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
     {
         for (const FString& Message : ParentDiagnostics)
@@ -5287,7 +5312,7 @@ bool LowerSequenceImpl(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
 
     FBPResolvedParentClass ParentClass;
     TArray<FString> ParentDiagnostics;
-    if (FBPParentClassResolver::ResolveParent(
+    if (ResolveLoweringParent(Blueprint,
         GraphIR.ParentClassPath, ParentClass, ParentDiagnostics) == false)
     {
         for (const FString& Message : ParentDiagnostics)
@@ -5760,6 +5785,44 @@ bool PromoteTopLevelLoopToCfg(FBPSemanticIR& IR)
 bool FBPSemanticLowering::Lower(const UBlueprint* Blueprint,
     const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
+    FBPSemanticWidgetTree Tree;
+    TArray<FString> Diagnostics;
+    if (FBPWidgetTreeLowering::Extract(Blueprint, Tree, Diagnostics) == false)
+    {
+        OutIR = FBPSemanticIR();
+        OutIR.AssetPath = GraphIR.AssetPath;
+        OutIR.ParentClassPath = GraphIR.ParentClassPath;
+        for (const FString& Message : Diagnostics) { AddDiagnostic(OutIR, FString(), FGuid(), Message); }
+        return false;
+    }
+    if (Tree.Kind != EBPSemanticWidgetTreeKind::None &&
+        Blueprint->NewVariables.Num() != GraphIR.BlueprintVariableCount)
+    {
+        OutIR = FBPSemanticIR();
+        OutIR.AssetPath = GraphIR.AssetPath;
+        OutIR.ParentClassPath = GraphIR.ParentClassPath;
+        AddDiagnostic(OutIR, FString(), FGuid(), TEXT("Blueprint variables changed after Graph IR was built"));
+        return false;
+    }
+    if (Tree.Kind != EBPSemanticWidgetTreeKind::None && GraphIR.Diagnostics.IsEmpty() &&
+        GraphIR.ParentClassPath == GetPathNameSafe(Blueprint->ParentClass) &&
+        GraphIR.Graphs.ContainsByPredicate([](const FBPIRGraph& Graph)
+            { return Graph.ExecEdges.IsEmpty() == false || Graph.DataEdges.IsEmpty() == false; }) == false)
+    {
+        OutIR = FBPSemanticIR();
+        OutIR.AssetPath = GraphIR.AssetPath;
+        OutIR.ParentClassPath = GraphIR.ParentClassPath;
+        FBPSemanticVariableExtractor::Append(Blueprint, OutIR);
+        if (OutIR.HasErrors()) { OutIR.Variables.Reset(); return false; }
+    }
+    else if (LowerCore(Blueprint, GraphIR, OutIR) == false) { return false; }
+    OutIR.WidgetTree = MoveTemp(Tree);
+    return true;
+}
+
+bool FBPSemanticLowering::LowerCore(const UBlueprint* Blueprint,
+    const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
+{
     OutIR = FBPSemanticIR();
     OutIR.AssetPath = GraphIR.AssetPath;
     OutIR.ParentClassPath = GraphIR.ParentClassPath;
@@ -6032,13 +6095,13 @@ bool FBPSemanticLowering::LowerActorLocation(const UBlueprint* Blueprint,
 bool FBPSemanticLowering::LowerBranch(const UBlueprint* Blueprint,
     const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
-    return LowerBranchImpl(Blueprint, GraphIR, OutIR);
+    return LowerBranchImpl(Blueprint, GraphIR, OutIR) && AttachWidgetTree(Blueprint, OutIR);
 }
 
 bool FBPSemanticLowering::LowerSequence(const UBlueprint* Blueprint,
     const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
 {
-    return LowerSequenceImpl(Blueprint, GraphIR, OutIR);
+    return LowerSequenceImpl(Blueprint, GraphIR, OutIR) && AttachWidgetTree(Blueprint, OutIR);
 }
 
 bool FBPSemanticLowering::LowerForLoop(const FBPGraphIR& GraphIR, FBPSemanticIR& OutIR)
@@ -6053,5 +6116,5 @@ bool FBPSemanticLowering::LowerForLoop(const UBlueprint* Blueprint,
     {
         return false;
     }
-    return PromoteTopLevelLoopToCfg(OutIR) && OutIR.HasErrors() == false;
+    return PromoteTopLevelLoopToCfg(OutIR) && OutIR.HasErrors() == false && AttachWidgetTree(Blueprint, OutIR);
 }

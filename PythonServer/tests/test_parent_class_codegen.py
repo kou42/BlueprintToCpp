@@ -13,6 +13,7 @@ from test_variable_codegen import snapshot as variable_snapshot
 @pytest.mark.parametrize("parent_path, class_name, parent_cpp, header", [
     ("/Script/Engine.Actor", "ATestActor", "AActor", "GameFramework/Actor.h"),
     ("/Script/Engine.Pawn", "ATestPawn", "APawn", "GameFramework/Pawn.h"),
+    ("/Script/Engine.Character", "ATestCharacter", "ACharacter", "GameFramework/Character.h"),
     ("/Script/Engine.ActorComponent", "UTestComponent", "UActorComponent", "Components/ActorComponent.h"),
     ("/Script/Engine.SceneComponent", "UTestScene", "USceneComponent", "Components/SceneComponent.h"),
 ])
@@ -51,3 +52,23 @@ def test_unverified_parent_rejected():
     raw["parent_class"] = "/Script/UMG.UserWidget"
     with pytest.raises(UnsupportedNodeError, match="unsupported parent class"):
         generate_cpp(parse_snapshot(raw), "UTestWidget")
+
+
+@pytest.mark.parametrize("parent_path, requirement", [
+    ("/Script/UMG.UserWidget", "widget-tree, binding and animation"),
+    ("/Script/Engine.AnimInstance", "anim graph, state-machine and generated-class"),
+    ("/Script/CoreUObject.Object", "use Unreal Semantic conversion"),
+    ("/Script/Engine.DataAsset", "use Unreal Semantic conversion"),
+    ("/Script/Engine.SaveGame", "use Unreal Semantic conversion"),
+    ("/Script/MyPlugin.NativeObject", "use Unreal Semantic conversion"),
+])
+@pytest.mark.parametrize("generator, fixture", [
+    (generate_cpp, begin_play_snapshot),
+    (generate_branch_cpp, branch_fixture),
+    (generate_variable_cpp, variable_snapshot),
+])
+def test_offline_generators_explain_parent_capabilities(parent_path, requirement, generator, fixture):
+    raw = fixture()
+    raw["parent_class"] = parent_path
+    with pytest.raises(UnsupportedNodeError, match=requirement):
+        generator(parse_snapshot(raw), "UTestObject")

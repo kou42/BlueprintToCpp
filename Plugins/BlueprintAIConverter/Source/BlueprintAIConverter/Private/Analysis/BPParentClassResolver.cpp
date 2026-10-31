@@ -112,6 +112,45 @@ bool FBPParentClassResolver::ResolveParent(const FString& ParentClassPath,
     return true;
 }
 
+bool FBPParentClassResolver::ResolveSemanticParent(const FString& ParentClassPath,
+    FBPResolvedParentClass& OutParent, TArray<FString>& OutDiagnostics,
+    const bool bHasAuditedWidgetTree)
+{
+    if (ResolveParent(ParentClassPath, OutParent, OutDiagnostics) == false)
+    {
+        return false;
+    }
+    // Inspect the actual ancestry, including native subclasses. Path checks avoid
+    // introducing UMG/AnimGraph editor dependencies solely to reject these assets.
+    const UClass* Parent = FindObject<UClass>(nullptr, *OutParent.ClassPath);
+    for (const UClass* Ancestor = Parent; Ancestor != nullptr;
+        Ancestor = Ancestor->GetSuperClass())
+    {
+        const FString Path = Ancestor->GetPathName();
+        FString Requirement;
+        if (Path == TEXT("/Script/UMG.UserWidget"))
+        {
+            if (bHasAuditedWidgetTree && Parent == Ancestor)
+            {
+                return true;
+            }
+            Requirement = TEXT("Widget Blueprint requires widget-tree, binding and animation conversion");
+        }
+        else if (Path == TEXT("/Script/Engine.AnimInstance"))
+        {
+            Requirement = TEXT("Animation Blueprint requires anim graph, state-machine and generated-class conversion");
+        }
+        if (Requirement.IsEmpty() == false)
+        {
+            OutDiagnostics.Add(FString::Printf(TEXT("%s; semantic conversion is not yet supported for %s"),
+                *Requirement, *ParentClassPath));
+            OutParent = FBPResolvedParentClass();
+            return false;
+        }
+    }
+    return true;
+}
+
 bool FBPParentClassResolver::ResolveActorParent(const FString& ParentClassPath,
     FBPResolvedParentClass& OutParent, TArray<FString>& OutDiagnostics)
 {

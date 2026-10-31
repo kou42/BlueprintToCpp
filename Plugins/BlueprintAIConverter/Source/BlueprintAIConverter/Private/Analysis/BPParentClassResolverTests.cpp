@@ -5,6 +5,10 @@
 #include "BPEmitterTestActor.h"
 #include "BPParentClassResolver.h"
 #include "Components/ActorComponent.h"
+#include "Components/SceneComponent.h"
+#include "Animation/AnimSingleNodeInstance.h"
+#include "Engine/DataAsset.h"
+#include "GameFramework/SaveGame.h"
 #include "Engine/Blueprint.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -71,6 +75,48 @@ bool FBPParentClassResolverRejectTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("未変換のBlueprint生成親を拒否"), FBPParentClassResolver::ResolveActorParent(
         Blueprint->GeneratedClass->GetPathName(), Parent, Diagnostics));
     TestTrue(TEXT("拒否理由を返す"), Diagnostics.IsEmpty() == false);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBPParentClassResolverSemanticPolicyTest,
+    "BlueprintAIConverter.CodeGenerator.ParentClass.SemanticPolicy",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBPParentClassResolverSemanticPolicyTest::RunTest(const FString& Parameters)
+{
+    for (UClass* Class : { USceneComponent::StaticClass(), UDataAsset::StaticClass(),
+        USaveGame::StaticClass() })
+    {
+        FBPResolvedParentClass Parent;
+        TArray<FString> Diagnostics;
+        TestTrue(*Class->GetPathName(), FBPParentClassResolver::ResolveSemanticParent(
+            Class->GetPathName(), Parent, Diagnostics));
+        TestEqual(TEXT("Canonical native path"), Parent.ClassPath, Class->GetPathName());
+        TestEqual(TEXT("BeginPlay is component-only"), Parent.bSupportsBeginPlay,
+            Class->IsChildOf(UActorComponent::StaticClass()));
+        TestFalse(TEXT("UObject parents are not actors"), Parent.bIsActor);
+    }
+
+    for (const FString& Path : { FString(TEXT("/Script/Engine.AnimInstance")),
+        UAnimSingleNodeInstance::StaticClass()->GetPathName(),
+        FString(TEXT("/Script/UMG.UserWidget")) })
+    {
+        FBPResolvedParentClass Parent;
+        TArray<FString> Diagnostics;
+        // Load the optional UMG class dynamically; no compile-time UMG dependency.
+        TestTrue(TEXT("Specialized parent still supports skeleton resolution"),
+            FBPParentClassResolver::ResolveParent(Path, Parent, Diagnostics));
+        Diagnostics.Reset();
+        TestFalse(TEXT("Specialized semantic conversion is explicit unsupported"),
+            FBPParentClassResolver::ResolveSemanticParent(Path, Parent, Diagnostics));
+        TestTrue(TEXT("Failure clears resolved parent"), Parent.ClassPath.IsEmpty());
+        TestTrue(TEXT("Diagnostic explains generated data requirements"),
+            Diagnostics.ContainsByPredicate([](const FString& Message)
+            {
+                return Message.Contains(TEXT("requires")) &&
+                    Message.Contains(TEXT("not yet supported"));
+            }));
+    }
     return true;
 }
 

@@ -301,11 +301,68 @@ struct FBPSemanticClassInfo
     TArray<FBPSemanticReflectedFunction> DeclaredFunctionSignatures;
 };
 
+enum class EBPSemanticWidgetTreeKind : uint8 { None, Empty, TextBlock, Panel };
+
+struct FBPSemanticWidgetText
+{
+    FString Text;
+    bool bTextCultureInvariant = false;
+    bool bTextLocalizationIdentityAvailable = false;
+    FString TextNamespace;
+    FString TextKey;
+    FString TextSource;
+};
+
+enum class EBPSemanticWidgetNodeKind : uint8 { TextBlock, VerticalBox, HorizontalBox, Overlay, CanvasPanel };
+
+struct FBPSemanticCanvasSlot
+{
+    float OffsetLeft = 0;
+    float OffsetTop = 0;
+    float OffsetRight = 0;
+    float OffsetBottom = 0;
+    double AnchorMinimumX = 0;
+    double AnchorMinimumY = 0;
+    double AnchorMaximumX = 0;
+    double AnchorMaximumY = 0;
+    double AlignmentX = 0;
+    double AlignmentY = 0;
+    bool bAutoSize = false;
+    int32 ZOrder = 0;
+};
+
+struct FBPSemanticWidgetNode : FBPSemanticWidgetText
+{
+    EBPSemanticWidgetNodeKind Kind = EBPSemanticWidgetNodeKind::TextBlock;
+    FName Name;
+    // Parents precede children. Array order preserves sibling/slot order.
+    int32 ParentIndex = INDEX_NONE;
+    float PaddingLeft = 0;
+    float PaddingTop = 0;
+    float PaddingRight = 0;
+    float PaddingBottom = 0;
+    FString HorizontalAlignment = TEXT("fill");
+    FString VerticalAlignment = TEXT("fill");
+    bool bSizeFill = false;
+    float SizeValue = 1;
+    // Present only for a child whose parent is CanvasPanel.
+    TOptional<FBPSemanticCanvasSlot> CanvasSlot;
+};
+
+struct FBPSemanticWidgetTree : FBPSemanticWidgetText
+{
+    // The legacy Empty/TextBlock payload is preserved; Panel uses Nodes.
+    EBPSemanticWidgetTreeKind Kind = EBPSemanticWidgetTreeKind::None;
+    FName RootName;
+    TArray<FBPSemanticWidgetNode> Nodes;
+};
+
 struct FBPSemanticIR
 {
     FString AssetPath;
     FString ParentClassPath;
     FBPSemanticClassInfo ClassInfo;
+    FBPSemanticWidgetTree WidgetTree;
     TArray<FBPSemanticFunction> Functions;
     TArray<FBPSemanticVariable> Variables;
     TArray<FBPSemanticGraphTrace> GraphTraces;

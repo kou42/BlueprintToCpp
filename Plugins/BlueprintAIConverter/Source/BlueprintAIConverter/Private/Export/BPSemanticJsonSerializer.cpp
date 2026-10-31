@@ -4,6 +4,7 @@
 #include "Dom/JsonValue.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include <initializer_list>
 
 namespace
 {
@@ -97,6 +98,23 @@ TSharedPtr<FJsonValue> OptionalString(const FString& Value)
         return MakeShared<FJsonValueNull>();
     }
     return MakeShared<FJsonValueString>(Value);
+}
+
+void WidgetTextToJson(const FBPSemanticWidgetText& Text, const TSharedRef<FJsonObject>& Json)
+{
+    Json->SetStringField(TEXT("text"), Text.Text);
+    Json->SetBoolField(TEXT("text_culture_invariant"), Text.bTextCultureInvariant);
+    Json->SetBoolField(TEXT("text_localization_identity_available"), Text.bTextLocalizationIdentityAvailable);
+    Json->SetStringField(TEXT("text_namespace"), Text.TextNamespace);
+    Json->SetStringField(TEXT("text_key"), Text.TextKey);
+    Json->SetStringField(TEXT("text_source"), Text.TextSource);
+}
+
+TArray<TSharedPtr<FJsonValue>> WidgetNumbersToJson(std::initializer_list<double> Values)
+{
+    TArray<TSharedPtr<FJsonValue>> Result;
+    for (double Value : Values) { Result.Add(MakeShared<FJsonValueNumber>(Value)); }
+    return Result;
 }
 
 TSharedRef<FJsonObject> TypeToJson(const FBPSemanticType& Type)
@@ -218,6 +236,59 @@ TSharedRef<FJsonObject> FBPSemanticJsonSerializer::ToJson(const FBPSemanticIR& I
     Source->SetStringField(TEXT("parent_class_path"), IR.ParentClassPath);
     Source->SetNumberField(TEXT("snapshot_schema_version"), 1);
     Root->SetObjectField(TEXT("source"), Source);
+
+    if (IR.WidgetTree.Kind != EBPSemanticWidgetTreeKind::None)
+    {
+        const FBPSemanticWidgetTree& Tree = IR.WidgetTree;
+        TSharedRef<FJsonObject> Widget = MakeShared<FJsonObject>();
+        Widget->SetStringField(TEXT("kind"), Tree.Kind == EBPSemanticWidgetTreeKind::Empty
+            ? TEXT("empty") : Tree.Kind == EBPSemanticWidgetTreeKind::TextBlock ? TEXT("text_block") :
+                Tree.Kind == EBPSemanticWidgetTreeKind::Panel ? TEXT("panel") : TEXT("invalid"));
+        Widget->SetField(TEXT("root_name"), OptionalName(Tree.RootName));
+        WidgetTextToJson(Tree, Widget);
+        if (Tree.Kind == EBPSemanticWidgetTreeKind::Panel || Tree.Nodes.IsEmpty() == false)
+        {
+            TArray<TSharedPtr<FJsonValue>> Nodes;
+            for (const FBPSemanticWidgetNode& Node : Tree.Nodes)
+            {
+                TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+                Entry->SetStringField(TEXT("kind"), Node.Kind == EBPSemanticWidgetNodeKind::TextBlock ? TEXT("text_block") :
+                    Node.Kind == EBPSemanticWidgetNodeKind::VerticalBox ? TEXT("vertical_box") :
+                    Node.Kind == EBPSemanticWidgetNodeKind::HorizontalBox ? TEXT("horizontal_box") :
+                    Node.Kind == EBPSemanticWidgetNodeKind::Overlay ? TEXT("overlay") :
+                    Node.Kind == EBPSemanticWidgetNodeKind::CanvasPanel ? TEXT("canvas_panel") : TEXT("invalid"));
+                Entry->SetField(TEXT("name"), OptionalName(Node.Name));
+                Entry->SetNumberField(TEXT("parent_index"), Node.ParentIndex);
+                WidgetTextToJson(Node, Entry);
+                TArray<TSharedPtr<FJsonValue>> Padding;
+                for (float Value : { Node.PaddingLeft, Node.PaddingTop, Node.PaddingRight, Node.PaddingBottom })
+                {
+                    Padding.Add(MakeShared<FJsonValueNumber>(Value));
+                }
+                Entry->SetArrayField(TEXT("padding"), Padding);
+                Entry->SetStringField(TEXT("horizontal_alignment"), Node.HorizontalAlignment);
+                Entry->SetStringField(TEXT("vertical_alignment"), Node.VerticalAlignment);
+                Entry->SetStringField(TEXT("size_rule"), Node.bSizeFill ? TEXT("fill") : TEXT("auto"));
+                Entry->SetNumberField(TEXT("size_value"), Node.SizeValue);
+                if (Node.CanvasSlot.IsSet())
+                {
+                    const FBPSemanticCanvasSlot& Canvas = Node.CanvasSlot.GetValue();
+                    TSharedRef<FJsonObject> Layout = MakeShared<FJsonObject>();
+                    Layout->SetArrayField(TEXT("offsets"), WidgetNumbersToJson(
+                        {Canvas.OffsetLeft, Canvas.OffsetTop, Canvas.OffsetRight, Canvas.OffsetBottom}));
+                    Layout->SetArrayField(TEXT("anchors_minimum"), WidgetNumbersToJson({Canvas.AnchorMinimumX, Canvas.AnchorMinimumY}));
+                    Layout->SetArrayField(TEXT("anchors_maximum"), WidgetNumbersToJson({Canvas.AnchorMaximumX, Canvas.AnchorMaximumY}));
+                    Layout->SetArrayField(TEXT("alignment"), WidgetNumbersToJson({Canvas.AlignmentX, Canvas.AlignmentY}));
+                    Layout->SetBoolField(TEXT("auto_size"), Canvas.bAutoSize);
+                    Layout->SetNumberField(TEXT("z_order"), Canvas.ZOrder);
+                    Entry->SetObjectField(TEXT("canvas_slot"), Layout);
+                }
+                Nodes.Add(MakeShared<FJsonValueObject>(Entry));
+            }
+            Widget->SetArrayField(TEXT("nodes"), Nodes);
+        }
+        Root->SetObjectField(TEXT("widget_tree"), Widget);
+    }
 
     // クラスの出自を明示し、BlueprintとネイティブUCLASSを混同しない。
     // 未解析のクラスはunknownとし、既存JSON利用者との互換性を維持する。

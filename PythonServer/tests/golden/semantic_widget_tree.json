@@ -1,0 +1,27 @@
+{
+  "schema_version": 2,
+  "format": "blueprint_semantic_ir",
+  "producer": {
+    "name": "BlueprintAIConverter",
+    "engine_version": "5.7"
+  },
+  "source": {
+    "asset_path": "/Game/UI/WBP_Message.WBP_Message",
+    "parent_class_path": "/Script/UMG.UserWidget",
+    "snapshot_schema_version": 1
+  },
+  "semantic_status": "partial",
+  "widget_tree": {
+    "kind": "text_block",
+    "root_name": "Message",
+    "text": "Hello \"Widget\"\n日本語",
+    "text_culture_invariant": true,
+    "text_localization_identity_available": false,
+    "text_namespace": "",
+    "text_key": "",
+    "text_source": ""
+  },
+  "variables": [],
+  "functions": [],
+  "diagnostics": []
+}

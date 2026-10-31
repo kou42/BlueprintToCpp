@@ -17,7 +17,9 @@ class ParentClass:
 
 
 # Unreal の反射情報にアクセスできないため、確認済みのネイティブ親のみ許可する。
-# 新しい親クラスは BeginPlay と公開ヘッダーを確認してから追加する。
+# This registry is only for the legacy snapshot -> BeginPlay C++ generators.
+# Semantic JSON validation/roundtrip does not use it: native UObject parents
+# exported by Unreal retain their paths without claiming offline C++ support.
 _SUPPORTED_PARENTS = {
     "/Script/Engine.Actor": ParentClass("AActor", "GameFramework/Actor.h", "A"),
     "/Script/Engine.Pawn": ParentClass("APawn", "GameFramework/Pawn.h", "A"),
@@ -30,8 +32,14 @@ _SUPPORTED_PARENTS = {
 def resolve_parent(parent_path: str, class_name: str) -> ParentClass:
     parent = _SUPPORTED_PARENTS.get(parent_path)
     if parent is None:
+        if parent_path == "/Script/UMG.UserWidget":
+            reason = "Widget Blueprint requires widget-tree, binding and animation conversion"
+        elif parent_path == "/Script/Engine.AnimInstance":
+            reason = "Animation Blueprint requires anim graph, state-machine and generated-class conversion"
+        else:
+            reason = "offline BeginPlay/header metadata unavailable; use Unreal Semantic conversion for native UObject functions"
         raise UnsupportedNodeError(
-            f"unsupported parent class {parent_path!r}: BeginPlay/header metadata unavailable")
+            f"unsupported parent class {parent_path!r}: {reason}")
     # 循環importを避けるため、エラー型は検証時に取得する。
     from .code_generator import GenerationError
     if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", class_name):

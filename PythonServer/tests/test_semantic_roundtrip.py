@@ -11,6 +11,35 @@ from app.semantic_roundtrip import main, validate_file
 GOLDEN = Path(__file__).parent / "golden" / "semantic_j2_roundtrip.json"
 
 
+@pytest.mark.parametrize("parent_path, component", [
+    ("/Script/Engine.ActorComponent", True),
+    ("/Script/Engine.SceneComponent", True),
+    ("/Script/Engine.DataAsset", False),
+    ("/Script/Engine.SaveGame", False),
+    ("/Script/MyPlugin.NativeObject", False),
+])
+def test_native_parent_functions_survive_without_offline_allowlist(tmp_path, parent_path, component):
+    """JSON transport preserves native parents; it does not generate or validate UCLASSes."""
+    data = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    data["source"]["parent_class_path"] = parent_path
+    template = data["functions"][0]
+    functions = []
+    for name in (["BeginPlay"] if component else []) + ["RunFirst", "RunSecond"]:
+        function = copy.deepcopy(template)
+        function.update(name=name, is_event_graph=name == "BeginPlay",
+                        is_override=name == "BeginPlay", visibility="public" if name != "BeginPlay" else "protected")
+        functions.append(function)
+    data["functions"] = functions
+    parsed = parse_semantic_json(json.loads(json.dumps(data)))
+    assert parsed["source"]["parent_class_path"] == parent_path
+    assert parsed["functions"] == functions
+    target = tmp_path / "native_parent.semantic.json"
+    target.write_text(json.dumps(parsed), encoding="utf-8")
+    report = validate_file(target, check_provider=True)
+    assert report["functions"] == (3 if component else 2)
+    assert report["provider_status"] == "mocked"
+
+
 def test_golden_json_passes_validator_and_mock_provider():
     result = validate_file(GOLDEN, check_provider=True)
     assert result["semantic_status"] == "partial"
