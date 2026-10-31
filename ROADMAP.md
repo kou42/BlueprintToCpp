@@ -127,8 +127,83 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 - [ ] ActorComponent／SceneComponentのライフサイクルと通常関数の組み合わせを検証する。
 - [ ] UObject派生の各種ネイティブクラスへ拡張する。
 - [ ] Widget／Animation Blueprintなど特殊な生成クラスは固有の検証要件を調査して段階的に追加する。
-- [ ] Python側の固定親クラス許可リストとUnreal側Reflection解決の差を整理する。
-- [ ] 旧 `FBPActorCodeGenerator` のParity用途を確認し、置き換え完了後に削除を検討する。
+- [x] Python側の固定親クラス許可リストとUnreal側Reflection解決の差を整理する。
+- [x] 旧 `FBPActorCodeGenerator` のParity用途を確認し、置き換え完了後に削除を検討する。
+
+#### P3 CanvasPanel／Overlayの実変換・第3段階（2026-10-31、Python検証済み・UE検証待ち）
+
+**実装した範囲:** native `UCanvasPanel`／`UOverlay`をWidget Treeへ追加し、TextBlock・縦横Boxとの任意の入れ子を生成する。Canvasの固定／伸縮アンカーとOverlayの子順序を保持し、通常関数との共存・空Panelも扱う。監査対象は引き続きnative `UUserWidget`直接親の非変数Widgetであり、未対応の編集値を既定値へ置き換えない。
+
+- IRへ`CanvasPanel / Overlay` node種別と任意`FBPSemanticCanvasSlot`を追加。Canvas slotはoffsets（left／top／right／bottom）、anchors minimum／maximum、alignment、AutoSize、int32 ZOrderを保持する。FMarginのoffsetはfloat、FVector2Dのアンカー／alignmentはdoubleとして保持し、C++生成も17桁でdoubleを復元する。Overlayは既存のpadding／水平・垂直alignmentを使用し、配列の子順を重なり順とする。
+- Lowererは親Panelとslotクラスの一致を照合し、CanvasのLayoutData／bAutoSize／ZOrder、Overlayのpadding／alignmentだけを変換対象としてReflection監査する。NaN／Infinityを拒否し、Canvasではbox用のpadding／alignment／sizeを混入させない。未対応class、変数Widget、未対応property変更の既存拒否も維持する。
+- Generatorは`AddChildToCanvas`／`AddChildToOverlay`とslot setterを使う。Canvasのoffsets／anchors／alignment／AutoSize／ZOrderを明示出力し、ZOrder同値時もsourceの子順を保つ。Canvas payloadはCanvas親の子にのみ必須とし、root／他Panelに存在するpayloadや、Canvas／Overlayにbox用のsizeが指定された入力を拒否する。既存のbox用・Text用Emitterを共有する。
+- JSON v2はnode kindの受理範囲と任意`nodes[].canvas_slot`を追加。Canvasの子はobjectが必須、他の親の子とrootではfieldの存在を拒否する（nullも不受理）。objectは`offsets`4値、`anchors_minimum / anchors_maximum / alignment`各2値、bool `auto_size`、int32 `z_order`を必須とする。offsetは有限float、アンカー／alignmentは有限doubleを検証する。旧v2のEmpty／TextBlock／box payloadの書き換えは不要で、schema_versionは2を維持する。
+- `semantic_widget_canvas.json`とPython回帰を追加。固定／伸縮アンカー、AutoSize、負ZOrder・int32境界、double精度、全4種Panelの親子組み合わせ、通常関数とのJSON往復・公開CLI・Mock Providerを確認した。欠落field、不正shape、bool／floatによるZOrder偽装、非有限・範囲外数値、親に合わないslot情報・box sizeの拒否も確認した。
+- 実Blueprint fixtureを`BlueprintAIConverter.SemanticIR.Lowering.CanvasOverlay.CanvasFixed / CanvasStretch / Overlay / MixedPanels / MixedPanelsFunctions / EmptyCanvas / EmptyOverlay`の7ケースとして追加。Canvas→Overlay→VerticalBox→HorizontalBox→TextBlockの混在、Overlay sibling順、翻訳キー、通常関数2つ、IR／生成C++／再解析JSONとslot不正時の生成物非公開を検証する。既存のWidgetTree 9ケースと合わせて16ケース。これらのUE fixtureは未ビルド・未実行。
+- **検証:** 関連Python **421件成功**（Widget関連191件を含む）、`git diff --check`と新規source／goldenの空白確認が成功。UE環境がないためUHT／UBT、Automation Test、実Editor export→Python E2E、生成C++のコンパイル・実表示は未実施。
+- **残る実装:** その他のPanel／slot、変数Widget、Binding、Widget Animation、String Table、native派生Widget親、特殊Widget lifecycle、Animation BlueprintのAnim Graph／state machine／固有生成データ。P3全体の完了チェックは継続する。
+
+```sh
+python -m app.semantic_editor_e2e --editor /path/to/UnrealEditor-Cmd --project /path/to/Project.uproject --automation-test BlueprintAIConverter.SemanticIR.Lowering.CanvasOverlay.MixedPanelsFunctions
+```
+
+#### P3 Box Panelとslotレイアウトの実変換・第2段階（2026-10-31、Python検証済み・UE検証待ち、当時の記録）
+
+**実装した範囲:** `UVerticalBox`／`UHorizontalBox`と`UTextBlock`を任意に入れ子にしたWidget Treeを、子Widgetの順序とslot設定を保持してC++へ生成する。空のBoxにも対応する。第1段階の空Tree／単一TextBlockと通常関数の生成経路は維持する。
+
+- `FBPSemanticWidgetTree::Panel`と`FBPSemanticWidgetNode`を追加。親を先に置くnode配列へWidget種別・名前・親index・Textの翻訳情報・slotのPadding（左／上／右／下）・水平／垂直alignment・Auto／Fillのsize ruleとweightを明示する。配列中の同じ親を持つnodeの順序を子の順序とする。source Widget Treeは実際のchild index順に深さ優先で取り込む。
+- Lowererは各Widget／slotのReflection propertyをCDOと比較し、変換対象外の編集値を拒否する。BoxのSlotsとWidgetのSlotは構造として監査し、子の実親とslotクラスの一致も確認する。共有・循環・重複名・変数Widget・未対応クラスを拒否し、rootを含む256 node、rootから64 edgeの深さを上限とする。全nodeの監査完了前にはpayloadを公開しない。
+- Generatorは`ConstructWidget`でnodeを生成し、親の型に応じた`AddChildToVerticalBox`／`AddChildToHorizontalBox`で接続する。Padding／alignment／sizeをsetterで復元し、最終的にrootを公開する。Text式の生成と翻訳キー検証は単一TextBlockと共通化した。生成時にも不明なkind、前方参照・不正な親、TextBlockへの子接続、重複名、深さ／件数超過、NaN／Infinity・負のweight、不正alignment、root上のslot情報、Panelに隠れたTextを拒否する。
+- JSON v2の任意`widget_tree`へ`kind: panel`と`nodes`配列を追加。旧Empty／TextBlockはnodesを省略し、従来のv2入力も受理する。Pythonもnode種別・parent index・順序・FNameと同様の大小文字非依存の重複・有限float範囲・slot値・深さ／件数上限を検証する。旧modeに非空nodesを隠した入力は拒否する。paddingは負値も許可するが、size weightは非負に限定する。schema_versionは既存表現への追加として2を維持する。
+- `semantic_widget_panel.json`をgoldenとして追加。縦／横rootと通常関数0／1／2件、入れ子、翻訳キー、負Paddingを含むAuto／Fill slotのJSON往復→公開CLI→Mock Providerを確認した。欠落field、壊れた参照、重複・不正名、型不正、不正数値、rootへのslot情報、隠れたpayload、深さ64／65・node数256／257の境界を追加回帰で確認した。
+- 実Blueprint fixtureを`BlueprintAIConverter.SemanticIR.Lowering.WidgetTree.VerticalBox / HorizontalBox / NestedBoxes / NestedBoxesFunctions / EmptyBox`へ拡充。実Editor APIでレイアウトとslot値を構築・コンパイルし、IR、生成C++、再解析したJSONの順序・親・weight、再シリアライズの決定性、未対応Buttonの拒否などを確認する。従来の4ケースと合わせて9ケースとなる。これらは追加済みだが本環境では未ビルド・未実行。
+- **検証:** 関連Python **347件成功**、`git diff --check`成功。UE環境がないためUHT／UBT、Automation Test、実Editor export→Python E2E、生成したレイアウトの実表示・再構築は未実施。
+- **残る実装:** Canvas／Overlay等の他Panelとそのslot、変数Widget、Binding、Widget Animation、String Table、native派生Widget親、特殊Widget lifecycle、Animation BlueprintのAnim Graph／state machine／固有生成データ。第1段階の以下の記録は当時の範囲であり、Panel／Box slotの未対応事項はこの第2段階で更新した。P3全体の完了チェックは継続する。
+
+UEで次を実行し、`--automation-test`末尾を上記5ケースへ切り替えて実Editor成果物まで検証できる。
+
+```sh
+python -m app.semantic_editor_e2e --editor /path/to/UnrealEditor-Cmd --project /path/to/Project.uproject --automation-test BlueprintAIConverter.SemanticIR.Lowering.WidgetTree.NestedBoxesFunctions
+```
+
+#### P3 Widget Treeの実変換・第1段階（2026-10-31、Python検証済み・UE検証待ち、当時の記録）
+
+**実装した範囲:** native `UUserWidget`を直接の親とする実`UWidgetBlueprint`について、空のWidget Tree、または単一の非変数`UTextBlock` rootをSemantic IR→C++へ変換する。一律拒否から、監査済みpayloadを持つ対象だけを受理する方式へ進めた。Widget Treeと通常関数を同じUCLASSに生成し、実行グラフのない表示専用Widgetも生成できる。
+
+- `FBPWidgetTreeLowering::Extract`でsource Widget Treeを監査する。Bindings／Animations／Blueprint extension、未対応root・slot・子Widget、変数Widget、native派生親、変更された未対応のUserWidget class default／TextBlock runtime propertyを診断付きで拒否する。CDOとのReflection比較により、Text以外の編集値を黙って既定値へ置き換えない。String TableのFTextも現段階では拒否する。
+- `FBPSemanticWidgetTree`に`None / Empty / TextBlock`、root名、表示文字列、culture-invariant指定、翻訳のnamespace／key／sourceを保持する。生成した`RebuildWidget()`は`UWidgetTree::ConstructWidget<UTextBlock>`と`SetText`でrootを構築し、`Super::RebuildWidget()`へ渡す。既存rootがある再構築時にWidgetを重複生成しない。翻訳キー付き文字列は`NSLOCTEXT`、culture-invariant文字列は`FText::AsCultureInvariant`へ出力する。
+- Generatorは通常関数の出力経路を維持し、生成物を一時ファイル構造へ完成させてから公開する。payloadの親・kind・root名・翻訳情報の不整合、生成する`RebuildWidget`／使用する`WidgetTree`との名前衝突を拒否する。監査payloadのないUserWidgetと、すべてのAnimInstance親は引き続き拒否する。
+- JSON v2へ任意の`widget_tree`を追加。非Widgetの旧v2出力は従来どおりこのフィールドを省略する。存在する場合はPythonもkind、root、親、文字列／bool、翻訳キー整合、空Treeへの隠れたTextBlock dataを検証する。既存入力の書き換えは不要。golden `semantic_widget_tree.json`と公開CLI→Mock Providerの往復ケースを追加した。JSONの受理はUEでの生成物動作確認とは区別する。
+- `BlueprintAIConverter.SemanticIR.Lowering.WidgetTree.Empty / TextBlock / LocalizedTextBlock / TextBlockFunctions`を追加。実Widget Blueprintを構築・コンパイルし、通常関数2つとの共存、Text／翻訳キーのC++生成、Semantic JSON export、Binding／Animation／Visibility編集値／親／root名／翻訳情報／生成名の拒否を検証するfixtureである。E2Eランナーの`--automation-test`へこれらの完全名を渡せる。
+- プラグインに`UMG`／`UMGEditor`依存を追加。生成されたWidget C++を組み込むゲーム側モジュールも`UMG`を依存へ追加すること。公開ヘッダーの親型にUMGを使用するため、公開範囲に応じてPublicDependencyModuleNamesへ登録する。`RebuildWidget`が使うSlate型についても対象モジュールの依存を確認する。
+- **未実装:** Panel／複数Widget・slotの配置、変数Widget、Binding、Widget Animation、String Table、native派生Widget親、特殊Widget lifecycleのLowering、Animation BlueprintのAnim Graph／state machine／生成クラスデータ。P3全体と特殊Blueprintのチェックは継続する。
+- **検証:** 関連Pythonテスト276件と`git diff --check`成功。UE環境がないため、UMGを追加したUHT／UBTビルド、実Widget fixtureのAutomation Test、実Editor export→Python E2E、生成したC++のコンパイル／表示動作は未実施。UE検証が完了するまで「対応済み」とは判定しない。
+
+#### P3 クラス別の変換境界と縦断テスト（2026-10-31、Python検証済み・UE検証待ち）
+
+**前段の調査・実装記録。** この段階では特殊Blueprintを一律拒否した。その後のWidget実変換範囲と現在の未対応事項は直前の「Widget Treeの実変換・第1段階」を参照。拒否Policy追加を特殊クラスへの対応完了とは数えない。
+
+| 対象 | Unreal Semantic経路 | Python経路／今回の確認 |
+| --- | --- | --- |
+| Actor／Pawn／Character | Reflectionで親・ヘッダー・A prefixを解決。BeginPlayはActor Policy | 旧snapshot生成も対応。Characterの親クラス回帰を追加 |
+| ActorComponent／SceneComponent | ReflectionでU prefixとComponent BeginPlayを解決。実BlueprintにBeginPlay＋通常関数2つを作成するfixtureを追加 | 旧snapshot生成はBeginPlayのみ。複数関数はSemantic JSONの往復・Mock Providerで確認 |
+| UObject／DataAsset／SaveGame／その他native UObject派生 | 公開ヘッダーを解決できるnative親の通常関数を扱う。DataAsset／SaveGameの実Blueprint通常関数2つのfixtureを追加。BeginPlayの誤適用を拒否 | 固定許可リストへの追加はしない。旧生成器はBeginPlay専用なので診断からUnreal Semantic経路へ案内。JSONは親パスを保持し、架空のplugin nativeパスも許可リストに依存せず往復する（実在・生成可否の保証ではない） |
+| UserWidgetとそのnative派生 | Semantic変換を明示拒否。Widget Tree、binding、animation、UWidgetBlueprintGeneratedClass固有データの再現が必要 | 旧生成器も固有の未対応理由を返す。次段階はUMG依存と実Widget Blueprint fixtureを導入し、通常関数のみを扱う場合の欠落データ監査を設計する |
+| AnimInstanceとそのnative派生 | Semantic変換を明示拒否。Anim Graph、state machine、UAnimBlueprintGeneratedClass固有データの再現が必要 | 旧生成器も固有の未対応理由を返す。次段階はAnimGraph依存と実Animation Blueprint fixtureを導入し、グラフ／生成クラスデータを失わないIRを設計する |
+
+- `ResolveSemanticParent`を追加し、全Semantic Lowererの親解決とGenerator入口へ適用。実際の祖先パスを走査し、UserWidget／AnimInstanceをnative派生も含めて拒否する。拒否理由には必要な固有変換を記載し、解決済み親情報・生成物を公開しない。クラス名による例外ではなく、特殊生成クラスのデータ再現が未実装であることに基づくPolicyであり、それらのIR・Emitter・実アセット回帰が揃った段階で解除する。
+- `ResolveParent`は汎用の骨格生成向けとして維持。Skeletonの生成可能性とBlueprint全体のSemantic変換可否を区別する。UMGを拒否するためだけのコンパイル時依存は追加せず、Reflectionの祖先パスで判定する。
+- `BlueprintAIConverter.SemanticIR.Lowering.NativeParentClasses.ActorComponent`／`SceneComponent`／`DataAsset`／`SaveGame`を追加。実Editor APIで構築・コンパイルしたBlueprintをGraph IR→Lowering→C++→Semantic JSON exportへ渡す。Componentではselfの`SetComponentTickEnabled`、それ以外ではstaticの`SetSubtitlesEnabled`を使用し、PrintString専用の成功に依存しない。親のinclude／継承、通常関数、ComponentだけのSuper::BeginPlay、非ComponentへのBeginPlay誤適用拒否、特殊親の拒否と生成物消去を検証する。
+- `BlueprintAIConverter.CodeGenerator.ParentClass.SemanticPolicy`でSceneComponent／DataAsset／SaveGameの能力フラグ、特殊親の骨格解決とSemantic拒否、AnimSingleNodeInstanceによるnative派生の拒否も検証する。これらのC++ fixtureは本環境では未ビルド・未実行。
+- Pythonの`parent_class.py`は旧snapshot→BeginPlay生成器3種類のための固定情報であり、Semantic JSON schema／roundtripには適用しない。未知の親からC++名やヘッダーを推測しない。Python側で許可リストを無制限に拡張する代わりに、3生成器の未対応理由とSemantic JSONの親情報保持を回帰確認した。JSON schema／Semantic IRの変更はない。
+- 旧`FBPActorCodeGenerator`の呼び出しは旧Generator／安全性／Semantic Generator／Parityのテストのみ。Editor製品導線は既にSemantic経路を使う。`FBPSemanticParityChecker`はファイル名とheader／source全文の比較によりエスケープ・色・Duration・APIマクロの差を検出するため、現時点では独立した比較基準として保持する。削除は同等のgolden／回帰fixtureの移管とUE全件成功を条件とし、最新変更のUE検証前には削除しない。
+- 検証: Pythonの親クラス／旧3生成器／Semantic JSON・Branch・Loop・roundtrip・署名／宣言監査・Editor E2Eランナー・生成物検証・AI Provider関連 **230件成功**。`git diff --check`成功。UE Editor／Engine／uprojectが本環境にないため、UHT／UBT・Automation Test・実Editor export→Python E2Eは未実施。
+
+**P3の次の検証:** UE 5.7でビルドし、`BlueprintAIConverter`全Automation Testを実行する。続いて`PythonServer`から以下を各クラスで実行する（`ActorComponent`を`SceneComponent`／`DataAsset`／`SaveGame`へ変更）。実UE検証が通るまで先頭2項目は未チェックとする。特殊Blueprintは上表の段階的追加を継続する。
+
+```sh
+python -m app.semantic_editor_e2e --editor /path/to/UnrealEditor-Cmd --project /path/to/Project.uproject --automation-test BlueprintAIConverter.SemanticIR.Lowering.NativeParentClasses.ActorComponent
+```
 
 ## P0進捗サマリー（2026-10-24）
 
@@ -174,6 +249,7 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 
 ### 次の実装・検証順序
 
+0. P3の`NativeParentClasses`4ケース、`ParentClass.SemanticPolicy`、`WidgetTree`9ケース、`CanvasOverlay`7ケースをUEビルド／Automation／実Editor E2Eで検証する。Widgetは変数Widget／Binding等へ拡張し、Animation BlueprintはAnim Graph／state machineのIRと実fixtureから段階的に対応する。
 1. P2の関数公開範囲、out／参照引数の拒否Policy、native Blueprint event override署名照合のUE検証を行う。Interface継承生成と残るoverride形式を段階的に拡張する。
 2. 拡充した`MultipleFunctionGraphs`で、通常関数2つ＋Custom Eventを持つ実UObject BlueprintのUCLASS生成と実Editor export→Python E2EをUE環境で実行する。
 3. 通常関数ForLoopの単一Loop／Body Call制約を整理し、多重ループ・Completed後続の共有Result到達を検証して拡張する。ForEachの一般Call対応、ネストBranchの接続条件式・戻り値対応も段階的に進める。
@@ -353,8 +429,20 @@ Blueprintの処理を特定のActorやPrintStringに依存せず、検証可能�
 | `BPSemanticCodeGenerator.cpp::Generate` | 複数関数と明示CFGに対応済みだが、受理するCFG形状を構造化Branch／Loopへ限定 | 共通CFG走査と診断を拡張し、対応ノードを増やす際もBlock順から意味を推測しない |
 | `BPSemanticCodeGenerator.cpp::BuildFunctionShape` | out値／可変参照／参照戻り値を未対応Policyで拒否し、native Blueprint event override元をReflection照合（UE検証待ち）。公開範囲をReflection／IR／C++／JSONへ保持（UE検証待ち）。Interface継承は未完了 | 公開範囲・署名PolicyのUE検証。出力代入・寿命検証を実装して拒否Policyを段階的に解除し、Interface継承と対応override形式を拡張 |
 | `BPSemanticJsonSerializer.cpp`／`PythonServer/app/semantic_json.py` | schema_version 2。Branch／Loop／Breakと再帰Statement、コンテナ型ツリー・enum／byte／delegate種別は同期済み。通常関数Branch／ネストBranch／通常関数ForLoop／Actor ForEach／Break付きForEach／入れ子ForLoopの実export fixtureを追加（Python検証済み・実UE待ち） | 新IR表現ごとに両側を更新しgolden／roundtripで確認。準備済みの実Editor E2Eを実行し、共通Entry移行時も同じ対象で回帰確認する |
+| `BPParentClassResolver.cpp::ResolveSemanticParent`／`BPWidgetTreeLowering` | 監査payloadを持つ直接のUserWidget親にEmpty／TextBlock／縦横Box／CanvasPanel／Overlayの入れ子とslot変換を実装（UE検証待ち）。それ以外のUserWidget／AnimInstanceは拒否。汎用骨格解決は維持 | 他Panel／変数Widget／binding／animation、Anim Graph／state machine／固有生成クラス情報を保つIRと実アセット回帰が揃った対象から拡張 |
+| `FBPActorCodeGenerator`／`FBPSemanticParityChecker` | 製品導線から分離済み。移行期の独立した全文比較と安全性回帰の基準として保持 | 同等goldenへの回帰移管、UE全件成功の確認後に削除 |
 
 ## 最新の検証結果
+
+- 2026-10-31（P3 PR作成時の統合確認）: `de42ed5`（PR #115）までのmainへ統合し、追加済みのenum／byte／delegate型とLoop export回帰を保持。Widget／親クラス／旧Generator・生成物検証・AI Provider・Semantic JSON／型／Branch／Loop／roundtrip／署名・宣言監査・Editor E2E関連のPython **482件成功**。`git diff --check`成功。UHT／UBT・Automation Test・実Editor export E2E・生成C++の表示確認はUE環境がないため未実施。
+
+- 2026-10-31（P3 Canvas／Overlay実装、UE検証待ち）: CanvasPanel／Overlayの入れ子とslot、double精度のアンカー／alignment、AutoSize／ZOrderをSemantic IR→C++→JSONへ追加。実Blueprint fixtureを7ケース追加し、Pythonのmixed layout／golden／CLI／Mock Provider／拒否回帰を追加。関連Python421件と`git diff --check`成功。UEビルド・Automation・実Editor E2E・実表示は未実施。
+
+- 2026-10-31（P3 Box Panel実装、UE検証待ち）: VerticalBox／HorizontalBoxの入れ子・子順序・Padding／alignment／Auto・Fill sizeをSemantic IR→C++→JSONへ追加。実Blueprint fixtureを5ケース追加し、Python golden／往復／CLI／Mock Providerと拒否・境界回帰を追加。関連Python347件と`git diff --check`成功。UEビルド・Automation・実Editor E2E・実表示は未実施。
+
+- 2026-10-31（P3 Widget実装、UE検証待ち）: 空／単一TextBlockの実Widget BlueprintをSemantic IR→C++再構築→JSONへ対応し、通常関数との共存と翻訳キーを保持。Widget Tree payloadのPython schema／golden／CLI／Mock Provider回帰を追加。関連Python276件と`git diff --check`成功。UMG依存追加後のUEビルド・Automation・実Editor E2E・生成C++の表示動作は未実施。
+
+- 2026-10-31（P3、UE検証待ち）: Component lifecycle＋通常関数とDataAsset／SaveGame通常関数の実Blueprint export fixture、特殊BlueprintのSemantic拒否Policy、Python／Unrealの対応境界と旧Parity経路の整理を追加。関連Python230件と`git diff --check`成功。UHT／UBT・Automation Test・実Editor E2Eは未実施。
 
 - 2026-10-31（PR作成時の統合確認）: `6f89a9d`（PR #114）までのmainへ統合。既存のLoop／Break・型ツリー検証、空container種別の互換性、共通Entry対応を保持し、追加のLoop export E2Eテストを`test_semantic_loop_export_json.py`へ分離した。内側Completedを親Bodyの後続へ置く最新IRに入れ子fixtureを同期。関連Pythonテスト202件と`git diff --check`成功。UHT／UBT・Automation Test・実Editor export E2Eは未実施。
 

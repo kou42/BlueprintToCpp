@@ -1,0 +1,113 @@
+{
+  "schema_version": 2,
+  "format": "blueprint_semantic_ir",
+  "producer": {
+    "name": "BlueprintAIConverter",
+    "engine_version": "5.7"
+  },
+  "source": {
+    "asset_path": "/Game/UI/WBP_Layout.WBP_Layout",
+    "parent_class_path": "/Script/UMG.UserWidget",
+    "snapshot_schema_version": 1
+  },
+  "semantic_status": "partial",
+  "widget_tree": {
+    "kind": "panel",
+    "root_name": "Layout",
+    "text": "",
+    "text_culture_invariant": false,
+    "text_localization_identity_available": false,
+    "text_namespace": "",
+    "text_key": "",
+    "text_source": "",
+    "nodes": [
+      {
+        "kind": "vertical_box",
+        "name": "Layout",
+        "parent_index": -1,
+        "text": "",
+        "text_culture_invariant": false,
+        "text_localization_identity_available": false,
+        "text_namespace": "",
+        "text_key": "",
+        "text_source": "",
+        "padding": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "horizontal_alignment": "fill",
+        "vertical_alignment": "fill",
+        "size_rule": "auto",
+        "size_value": 1
+      },
+      {
+        "kind": "text_block",
+        "name": "Message",
+        "parent_index": 0,
+        "text": "Header \"Widget\"\n日本語",
+        "text_culture_invariant": true,
+        "text_localization_identity_available": false,
+        "text_namespace": "",
+        "text_key": "",
+        "text_source": "",
+        "padding": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "horizontal_alignment": "center",
+        "vertical_alignment": "bottom",
+        "size_rule": "fill",
+        "size_value": 2.5
+      },
+      {
+        "kind": "horizontal_box",
+        "name": "Row",
+        "parent_index": 0,
+        "text": "",
+        "text_culture_invariant": false,
+        "text_localization_identity_available": false,
+        "text_namespace": "",
+        "text_key": "",
+        "text_source": "",
+        "padding": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "horizontal_alignment": "fill",
+        "vertical_alignment": "fill",
+        "size_rule": "auto",
+        "size_value": 1
+      },
+      {
+        "kind": "text_block",
+        "name": "Secondary",
+        "parent_index": 2,
+        "text": "Second label",
+        "text_culture_invariant": false,
+        "text_localization_identity_available": true,
+        "text_namespace": "WidgetConversion",
+        "text_key": "Secondary",
+        "text_source": "Second label",
+        "padding": [
+          -1,
+          0,
+          8,
+          2
+        ],
+        "horizontal_alignment": "left",
+        "vertical_alignment": "center",
+        "size_rule": "auto",
+        "size_value": 1
+      }
+    ]
+  },
+  "variables": [],
+  "functions": [],
+  "diagnostics": []
+}

@@ -1,0 +1,157 @@
+{
+  "schema_version": 2,
+  "format": "blueprint_semantic_ir",
+  "producer": {
+    "name": "BlueprintAIConverter",
+    "engine_version": "5.7"
+  },
+  "source": {
+    "asset_path": "/Game/UI/WBP_Canvas.WBP_Canvas",
+    "parent_class_path": "/Script/UMG.UserWidget",
+    "snapshot_schema_version": 1
+  },
+  "semantic_status": "partial",
+  "widget_tree": {
+    "kind": "panel",
+    "root_name": "Layout",
+    "text": "",
+    "text_culture_invariant": false,
+    "text_localization_identity_available": false,
+    "text_namespace": "",
+    "text_key": "",
+    "text_source": "",
+    "nodes": [
+      {
+        "kind": "canvas_panel",
+        "name": "Layout",
+        "parent_index": -1,
+        "text": "",
+        "text_culture_invariant": false,
+        "text_localization_identity_available": false,
+        "text_namespace": "",
+        "text_key": "",
+        "text_source": "",
+        "padding": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "horizontal_alignment": "fill",
+        "vertical_alignment": "fill",
+        "size_rule": "auto",
+        "size_value": 1
+      },
+      {
+        "kind": "text_block",
+        "name": "Message",
+        "parent_index": 0,
+        "text": "Header \"Widget\"\n日本語",
+        "text_culture_invariant": true,
+        "text_localization_identity_available": false,
+        "text_namespace": "",
+        "text_key": "",
+        "text_source": "",
+        "padding": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "horizontal_alignment": "fill",
+        "vertical_alignment": "fill",
+        "size_rule": "auto",
+        "size_value": 1,
+        "canvas_slot": {
+          "offsets": [
+            11,
+            -12,
+            33,
+            44
+          ],
+          "anchors_minimum": [
+            0.1,
+            0.2
+          ],
+          "anchors_maximum": [
+            0.9,
+            0.8
+          ],
+          "alignment": [
+            0.1234567890123456,
+            0.5
+          ],
+          "auto_size": false,
+          "z_order": -7
+        }
+      },
+      {
+        "kind": "overlay",
+        "name": "Row",
+        "parent_index": 0,
+        "text": "",
+        "text_culture_invariant": false,
+        "text_localization_identity_available": false,
+        "text_namespace": "",
+        "text_key": "",
+        "text_source": "",
+        "padding": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "horizontal_alignment": "fill",
+        "vertical_alignment": "fill",
+        "size_rule": "auto",
+        "size_value": 1,
+        "canvas_slot": {
+          "offsets": [
+            0,
+            0,
+            400,
+            300
+          ],
+          "anchors_minimum": [
+            0,
+            0
+          ],
+          "anchors_maximum": [
+            0,
+            0
+          ],
+          "alignment": [
+            0,
+            0
+          ],
+          "auto_size": true,
+          "z_order": 5
+        }
+      },
+      {
+        "kind": "text_block",
+        "name": "Secondary",
+        "parent_index": 2,
+        "text": "Second label",
+        "text_culture_invariant": false,
+        "text_localization_identity_available": true,
+        "text_namespace": "WidgetConversion",
+        "text_key": "Secondary",
+        "text_source": "Second label",
+        "padding": [
+          -1,
+          0,
+          8,
+          2
+        ],
+        "horizontal_alignment": "left",
+        "vertical_alignment": "center",
+        "size_rule": "auto",
+        "size_value": 1
+      }
+    ]
+  },
+  "variables": [],
+  "functions": [],
+  "diagnostics": []
+}

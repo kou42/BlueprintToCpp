@@ -22,6 +22,13 @@ public:
     static bool ResolveParent(const FString& ParentClassPath,
         FBPResolvedParentClass& OutParent, TArray<FString>& OutDiagnostics);
 
+    // Widget conversion requires an audited supported payload and direct native
+    // UUserWidget parent. Animation generated-class data is still unsupported.
+    // Skeleton generation may use ResolveParent independently.
+    static bool ResolveSemanticParent(const FString& ParentClassPath,
+        FBPResolvedParentClass& OutParent, TArray<FString>& OutDiagnostics,
+        bool bHasAuditedWidgetTree = false);
+
     // Actor固有APIを扱う既存経路向けの厳格なラッパー。
     static bool ResolveActorParent(const FString& ParentClassPath,
         FBPResolvedParentClass& OutParent, TArray<FString>& OutDiagnostics);

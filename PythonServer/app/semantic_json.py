@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from typing import Any
+import re
+import math
 from uuid import UUID
 
 
@@ -155,6 +157,127 @@ def _statement(raw: Any, path: str, depth: int = 0) -> None:
             _statement(child, f"{path}.{field}[{index}]", depth + 1)
 
 
+WIDGET_TEXT_FIELDS = ("text", "text_culture_invariant", "text_localization_identity_available",
+                      "text_namespace", "text_key", "text_source")
+
+
+def _widget_text(obj: dict, path: str) -> None:
+    _required(obj, WIDGET_TEXT_FIELDS, path)
+    for field in ("text", "text_namespace", "text_key", "text_source"):
+        _string(obj[field], path + "." + field)
+    invariant = _bool(obj["text_culture_invariant"], path + ".text_culture_invariant")
+    localized = _bool(obj["text_localization_identity_available"],
+                      path + ".text_localization_identity_available")
+    if invariant and localized:
+        raise SemanticJsonError(f"{path}: conflicting text identity")
+    if localized and not obj["text_key"]:
+        raise SemanticJsonError(f"{path}.text_key: localized text requires a key")
+    if not localized and any(obj[field] for field in ("text_namespace", "text_key", "text_source")):
+        raise SemanticJsonError(f"{path}: undeclared text localization identity")
+    if obj["text"] and not (invariant or localized):
+        raise SemanticJsonError(f"{path}: nonempty text requires invariant text or localization identity")
+
+
+def _widget_identifier(value: Any, path: str) -> str:
+    name = _string(value, path)
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name) or name.casefold() == "none":
+        raise SemanticJsonError(f"{path}: expected non-None C++ identifier")
+    return name
+
+
+def _widget_float(value: Any, path: str) -> None:
+    if type(value) not in (int, float) or abs(value) > 3.4028234663852886e38 or not math.isfinite(value):
+        raise SemanticJsonError(f"{path}: expected finite float-range number")
+
+
+def _widget_canvas_slot(raw: Any, path: str) -> None:
+    slot = _object(raw, path)
+    _required(slot, ("offsets", "anchors_minimum", "anchors_maximum", "alignment", "auto_size", "z_order"), path)
+    for field, count in (("offsets", 4), ("anchors_minimum", 2), ("anchors_maximum", 2), ("alignment", 2)):
+        values = _array(slot[field], path + "." + field)
+        if len(values) != count:
+            raise SemanticJsonError(f"{path}.{field}: expected {count} values")
+        for value in values:
+            if field == "offsets":
+                _widget_float(value, path + "." + field)
+            elif type(value) not in (int, float) or abs(value) > 1.7976931348623157e308 or not math.isfinite(value):
+                raise SemanticJsonError(f"{path}.{field}: expected finite double-range number")
+    _bool(slot["auto_size"], path + ".auto_size")
+    if type(slot["z_order"]) is not int or not -(2**31) <= slot["z_order"] < 2**31:
+        raise SemanticJsonError(f"{path}.z_order: expected int32")
+
+
+def _widget_tree(raw: Any, parent_path: str) -> None:
+    obj = _object(raw, "widget_tree")
+    _required(obj, ("kind", "root_name") + WIDGET_TEXT_FIELDS, "widget_tree")
+    kind = _enum(obj["kind"], frozenset(("empty", "text_block", "panel")), "widget_tree.kind")
+    if parent_path != "/Script/UMG.UserWidget":
+        raise SemanticJsonError("widget_tree: requires direct UserWidget parent")
+    _widget_text(obj, "widget_tree")
+    nodes = _array(obj.get("nodes", []), "widget_tree.nodes")
+    if kind != "panel" and nodes:
+        raise SemanticJsonError("widget_tree: legacy payload cannot hide panel nodes")
+    if kind == "empty":
+        if obj["root_name"] is not None or any(obj[field] for field in WIDGET_TEXT_FIELDS):
+            raise SemanticJsonError("widget_tree: empty tree contains TextBlock data")
+        return
+    _widget_identifier(obj["root_name"], "widget_tree.root_name")
+    if kind == "text_block":
+        return
+    if any(obj[field] for field in WIDGET_TEXT_FIELDS) or not 1 <= len(nodes) <= 256:
+        raise SemanticJsonError("widget_tree: invalid panel node count or hidden root text")
+    names = set()
+    depths = []
+    for index, raw_node in enumerate(nodes):
+        path = f"widget_tree.nodes[{index}]"
+        node = _object(raw_node, path)
+        _required(node, ("kind", "name", "parent_index", "padding", "horizontal_alignment",
+                         "vertical_alignment", "size_rule", "size_value") + WIDGET_TEXT_FIELDS, path)
+        node_kind = _enum(node["kind"], frozenset(("text_block", "vertical_box", "horizontal_box", "overlay", "canvas_panel")), path + ".kind")
+        name = _widget_identifier(node["name"], path + ".name").casefold()
+        if name in names:
+            raise SemanticJsonError(f"{path}: duplicate widget name")
+        names.add(name)
+        parent = node["parent_index"]
+        if type(parent) is not int or (index == 0 and parent != -1) or (index > 0 and not 0 <= parent < index):
+            raise SemanticJsonError(f"{path}: parent must precede child, root parent must be -1")
+        if index == 0 and (node_kind == "text_block" or node["name"].casefold() != obj["root_name"].casefold()):
+            raise SemanticJsonError(f"{path}: root must be a matching panel")
+        if index > 0 and nodes[parent]["kind"] == "text_block":
+            raise SemanticJsonError(f"{path}: TextBlock cannot have children")
+        depth = 0 if index == 0 else depths[parent] + 1
+        if depth > 64:
+            raise SemanticJsonError(f"{path}: widget nesting exceeds 64")
+        depths.append(depth)
+        _widget_text(node, path)
+        if node_kind != "text_block" and any(node[field] for field in WIDGET_TEXT_FIELDS):
+            raise SemanticJsonError(f"{path}: panel cannot contain TextBlock data")
+        padding = _array(node["padding"], path + ".padding")
+        if len(padding) != 4:
+            raise SemanticJsonError(f"{path}.padding: expected left/top/right/bottom")
+        for component in padding:
+            _widget_float(component, path + ".padding")
+        _enum(node["horizontal_alignment"], frozenset(("fill", "left", "center", "right")), path + ".horizontal_alignment")
+        _enum(node["vertical_alignment"], frozenset(("fill", "top", "center", "bottom")), path + ".vertical_alignment")
+        _enum(node["size_rule"], frozenset(("auto", "fill")), path + ".size_rule")
+        _widget_float(node["size_value"], path + ".size_value")
+        if node["size_value"] < 0:
+            raise SemanticJsonError(f"{path}.size_value: expected nonnegative value")
+        if index == 0 and (any(padding) or node["horizontal_alignment"] != "fill" or
+                           node["vertical_alignment"] != "fill" or node["size_rule"] != "auto" or node["size_value"] != 1):
+            raise SemanticJsonError(f"{path}: root cannot have slot data")
+        parent_kind = None if index == 0 else nodes[parent]["kind"]
+        if parent_kind == "canvas_panel":
+            _required(node, ("canvas_slot",), path)
+            _widget_canvas_slot(node["canvas_slot"], path + ".canvas_slot")
+            if any(padding) or node["horizontal_alignment"] != "fill" or node["vertical_alignment"] != "fill":
+                raise SemanticJsonError(f"{path}: Canvas slot cannot contain box/overlay layout")
+        elif "canvas_slot" in node:
+            raise SemanticJsonError(f"{path}: Canvas slot requires CanvasPanel parent")
+        if parent_kind in ("canvas_panel", "overlay") and (node["size_rule"] != "auto" or node["size_value"] != 1):
+            raise SemanticJsonError(f"{path}: slot size is only supported for box parents")
+
+
 def parse_semantic_json(raw: Any) -> dict:
     """v2の形状を検証して返す。意味的一致やC++生成可能性は保証しない。"""
     root = _object(raw, "semantic")
@@ -172,6 +295,8 @@ def parse_semantic_json(raw: Any) -> dict:
     _required(source, ("asset_path", "parent_class_path", "snapshot_schema_version"), "source")
     _string(source["asset_path"], "source.asset_path")
     _string(source["parent_class_path"], "source.parent_class_path")
+    if "widget_tree" in root:
+        _widget_tree(root["widget_tree"], source["parent_class_path"])
     if type(source["snapshot_schema_version"]) is not int or source["snapshot_schema_version"] != 1:
         raise SemanticJsonError("source.snapshot_schema_version: expected 1")
     # 旧v2 JSONにはvariablesが存在しないため、省略を許容する。

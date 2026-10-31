@@ -44,4 +44,7 @@ public:
     // メンバー変数を参照するループでは、Blueprintから反射済みの変数定義を取得する。
     static bool LowerForLoop(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
         FBPSemanticIR& OutIR);
+private:
+    static bool LowerCore(const UBlueprint* Blueprint, const FBPGraphIR& GraphIR,
+        FBPSemanticIR& OutIR);
 };

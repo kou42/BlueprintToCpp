@@ -19,4 +19,8 @@ public:
         const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles,
         TArray<FString>& OutDiagnostics,
         EBPVariableFallbackMode VariableFallbackMode = EBPVariableFallbackMode::Strict);
+private:
+    static bool GenerateCore(const FBPSemanticIR& IR, const FString& ClassName,
+        const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles,
+        TArray<FString>& OutDiagnostics, EBPVariableFallbackMode VariableFallbackMode);
 };

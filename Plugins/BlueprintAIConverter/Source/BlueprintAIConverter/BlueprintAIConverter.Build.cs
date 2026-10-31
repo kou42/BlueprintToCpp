@@ -21,7 +21,7 @@ public class BlueprintAIConverter : ModuleRules
             System.IO.Path.Combine(ModuleDirectory, "Private", "Editor"));
 
         PrivateDependencyModuleNames.AddRange(new string[] {
-            "Core", "CoreUObject", "Engine", "UnrealEd", "BlueprintGraph",
+            "Core", "CoreUObject", "Engine", "UnrealEd", "BlueprintGraph", "UMG", "UMGEditor",
             "Json", "JsonUtilities", "ContentBrowser", "ToolMenus", "Slate", "SlateCore", "DesktopPlatform",
             // ClipboardCopy は ApplicationCore に実装されるため明示的にリンクする。
             "ApplicationCore"

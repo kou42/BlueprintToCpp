@@ -2799,7 +2799,7 @@ bool EmitActorLocationStatement(const FBPSemanticExpression& Call,
 }
 }
 
-bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& ClassName,
+bool FBPSemanticCodeGenerator::GenerateCore(const FBPSemanticIR& IR, const FString& ClassName,
     const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles, TArray<FString>& OutDiagnostics,
     const EBPVariableFallbackMode VariableFallbackMode)
 {
@@ -2820,8 +2820,9 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
         return false;
     }
     FBPResolvedParentClass ParentClass;
-    if (FBPParentClassResolver::ResolveParent(
-        IR.ParentClassPath, ParentClass, OutDiagnostics) == false)
+    if (FBPParentClassResolver::ResolveSemanticParent(
+        IR.ParentClassPath, ParentClass, OutDiagnostics,
+        IR.WidgetTree.Kind != EBPSemanticWidgetTreeKind::None) == false)
     {
         return false;
     }
@@ -2837,6 +2838,29 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     const FString BaseName = ClassName.Mid(ParentClass.GeneratedClassPrefix.Len());
     if (IR.Functions.IsEmpty())
     {
+        if (IR.WidgetTree.Kind != EBPSemanticWidgetTreeKind::None)
+        {
+            FString Declarations;
+            FString Constructor;
+            if (EmitVariables(IR.Variables, ClassName, Declarations, Constructor,
+                OutDiagnostics, VariableFallbackMode) == false) { return false; }
+            const FString Api = ModuleApiMacro.IsEmpty() ? FString() : ModuleApiMacro + TEXT(" ");
+            OutFiles.HeaderFileName = BaseName + TEXT(".h");
+            OutFiles.SourceFileName = BaseName + TEXT(".cpp");
+            OutFiles.HeaderContent = FString::Printf(
+                TEXT("#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"%s\"\n#include \"%s.generated.h\"\n\nUCLASS()\nclass %s%s : public %s\n{\n    GENERATED_BODY()\n\n%s"),
+                *ParentClass.HeaderPath, *BaseName, *Api, *ClassName, *ParentClass.CppClassName, *Declarations);
+            OutFiles.SourceContent = FString::Printf(TEXT("#include \"%s.h\"\n"), *BaseName);
+            if (Constructor.IsEmpty() == false)
+            {
+                OutFiles.HeaderContent += FString::Printf(TEXT("public:\n    %s();\n"), *ClassName);
+                OutFiles.SourceContent += FString::Printf(
+                    TEXT("#include \"UObject/UnrealType.h\"\n\n%s::%s()\n{\n%s}\n"),
+                    *ClassName, *ClassName, *Constructor);
+            }
+            OutFiles.HeaderContent += TEXT("};\n");
+            return true;
+        }
         OutDiagnostics.Add(TEXT("Semantic code generation requires at least one function"));
         return false;
     }
@@ -3382,4 +3406,254 @@ bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& 
     }
     OutDiagnostics.Add(TEXT("Unsupported semantic statement kind"));
     return false;
+}
+
+namespace
+{
+bool IsEmptyWidgetText(const FBPSemanticWidgetText& Text)
+{
+    return Text.Text.IsEmpty() && Text.bTextCultureInvariant == false &&
+        Text.bTextLocalizationIdentityAvailable == false && Text.TextNamespace.IsEmpty() &&
+        Text.TextKey.IsEmpty() && Text.TextSource.IsEmpty();
+}
+
+bool EmitWidgetText(const FBPSemanticWidgetText& Text, FString& Out, TArray<FString>& Diagnostics)
+{
+    if ((Text.bTextCultureInvariant && Text.bTextLocalizationIdentityAvailable) ||
+        (Text.bTextLocalizationIdentityAvailable && Text.TextKey.IsEmpty()) ||
+        (Text.bTextLocalizationIdentityAvailable == false &&
+            (Text.TextNamespace.IsEmpty() == false || Text.TextKey.IsEmpty() == false || Text.TextSource.IsEmpty() == false)))
+    {
+        Diagnostics.Add(TEXT("Inconsistent TextBlock localization identity"));
+        return false;
+    }
+    FString Escaped;
+    if (EscapeString(Text.Text, Escaped, Diagnostics) == false) { return false; }
+    if (Text.bTextCultureInvariant)
+    {
+        Out = FString::Printf(TEXT("FText::AsCultureInvariant(TEXT(\"%s\"))"), *Escaped);
+    }
+    else if (Text.bTextLocalizationIdentityAvailable)
+    {
+        FString Namespace, Key, Source;
+        if (EscapeString(Text.TextNamespace, Namespace, Diagnostics) == false ||
+            EscapeString(Text.TextKey, Key, Diagnostics) == false ||
+            EscapeString(Text.TextSource, Source, Diagnostics) == false) { return false; }
+        Out = FString::Printf(TEXT("NSLOCTEXT(\"%s\", \"%s\", \"%s\")"), *Namespace, *Key, *Source);
+    }
+    else if (Text.Text.IsEmpty()) { Out = TEXT("FText::GetEmpty()"); }
+    else { Diagnostics.Add(TEXT("TextBlock localization identity is unavailable")); return false; }
+    return true;
+}
+
+FString WidgetCppType(EBPSemanticWidgetNodeKind Kind)
+{
+    switch (Kind)
+    {
+    case EBPSemanticWidgetNodeKind::TextBlock: return TEXT("UTextBlock");
+    case EBPSemanticWidgetNodeKind::VerticalBox: return TEXT("UVerticalBox");
+    case EBPSemanticWidgetNodeKind::HorizontalBox: return TEXT("UHorizontalBox");
+    case EBPSemanticWidgetNodeKind::Overlay: return TEXT("UOverlay");
+    case EBPSemanticWidgetNodeKind::CanvasPanel: return TEXT("UCanvasPanel");
+    default: return FString();
+    }
+}
+
+bool EmitPanelTree(const FBPSemanticWidgetTree& Tree, FString& Out, TArray<FString>& Diagnostics)
+{
+    if (Tree.Nodes.IsEmpty() || Tree.Nodes.Num() > 256 || Tree.RootName != Tree.Nodes[0].Name || IsEmptyWidgetText(Tree) == false)
+    {
+        Diagnostics.Add(TEXT("Invalid panel root, node count or hidden root text"));
+        return false;
+    }
+    const TMap<FString, FString> Horizontal = {{TEXT("fill"), TEXT("HAlign_Fill")}, {TEXT("left"), TEXT("HAlign_Left")},
+        {TEXT("center"), TEXT("HAlign_Center")}, {TEXT("right"), TEXT("HAlign_Right")}};
+    const TMap<FString, FString> Vertical = {{TEXT("fill"), TEXT("VAlign_Fill")}, {TEXT("top"), TEXT("VAlign_Top")},
+        {TEXT("center"), TEXT("VAlign_Center")}, {TEXT("bottom"), TEXT("VAlign_Bottom")}};
+    const auto Float = [](float Value) { return FString::Printf(TEXT("static_cast<float>(%.9g)"), static_cast<double>(Value)); };
+    const auto Double = [](double Value) { return FString::Printf(TEXT("%.17g"), Value); };
+    TSet<FName> Names;
+    TArray<int32> Depths;
+    FString Code;
+    for (int32 Index = 0; Index < Tree.Nodes.Num(); ++Index)
+    {
+        const FBPSemanticWidgetNode& Node = Tree.Nodes[Index];
+        const bool bRoot = Index == 0;
+        const bool bText = Node.Kind == EBPSemanticWidgetNodeKind::TextBlock;
+        const FString Type = WidgetCppType(Node.Kind);
+        if (Node.Name.IsNone() || IsIdentifier(Node.Name.ToString()) == false || Names.Contains(Node.Name) ||
+            Type.IsEmpty() ||
+            (bRoot ? Node.ParentIndex != INDEX_NONE || bText : Node.ParentIndex < 0 || Node.ParentIndex >= Index))
+        {
+            Diagnostics.Add(TEXT("Invalid panel node name, kind, duplicate or parent order"));
+            return false;
+        }
+        Names.Add(Node.Name);
+        const int32 Depth = bRoot ? 0 : Depths[Node.ParentIndex] + 1;
+        if (Depth > 64 || (bRoot == false && Tree.Nodes[Node.ParentIndex].Kind == EBPSemanticWidgetNodeKind::TextBlock))
+        {
+            Diagnostics.Add(TEXT("Widget Tree depth exceeded or child attached to TextBlock"));
+            return false;
+        }
+        Depths.Add(Depth);
+        const bool bCanvasParent = bRoot == false && Tree.Nodes[Node.ParentIndex].Kind == EBPSemanticWidgetNodeKind::CanvasPanel;
+        const bool bOverlayParent = bRoot == false && Tree.Nodes[Node.ParentIndex].Kind == EBPSemanticWidgetNodeKind::Overlay;
+        if (Horizontal.Contains(Node.HorizontalAlignment) == false || Vertical.Contains(Node.VerticalAlignment) == false ||
+            FMath::IsFinite(Node.SizeValue) == false || Node.SizeValue < 0 ||
+            FMath::IsFinite(Node.PaddingLeft) == false || FMath::IsFinite(Node.PaddingTop) == false ||
+            FMath::IsFinite(Node.PaddingRight) == false || FMath::IsFinite(Node.PaddingBottom) == false ||
+            ((bRoot || bCanvasParent) && (Node.PaddingLeft != 0 || Node.PaddingTop != 0 || Node.PaddingRight != 0 || Node.PaddingBottom != 0 ||
+                Node.HorizontalAlignment != TEXT("fill") || Node.VerticalAlignment != TEXT("fill"))) ||
+            ((bRoot || bCanvasParent || bOverlayParent) && (Node.bSizeFill || Node.SizeValue != 1)) ||
+            Node.CanvasSlot.IsSet() != bCanvasParent)
+        {
+            Diagnostics.Add(TEXT("Invalid panel slot values or slot data incompatible with parent"));
+            return false;
+        }
+        if (Node.CanvasSlot.IsSet())
+        {
+            const FBPSemanticCanvasSlot& Canvas = Node.CanvasSlot.GetValue();
+            if (FMath::IsFinite(Canvas.OffsetLeft) == false || FMath::IsFinite(Canvas.OffsetTop) == false ||
+                FMath::IsFinite(Canvas.OffsetRight) == false || FMath::IsFinite(Canvas.OffsetBottom) == false ||
+                FMath::IsFinite(Canvas.AnchorMinimumX) == false || FMath::IsFinite(Canvas.AnchorMinimumY) == false ||
+                FMath::IsFinite(Canvas.AnchorMaximumX) == false || FMath::IsFinite(Canvas.AnchorMaximumY) == false ||
+                FMath::IsFinite(Canvas.AlignmentX) == false || FMath::IsFinite(Canvas.AlignmentY) == false)
+            {
+                Diagnostics.Add(TEXT("Nonfinite Canvas slot layout"));
+                return false;
+            }
+        }
+        Code += FString::Printf(TEXT("        %s* GeneratedWidget%d = WidgetTree->ConstructWidget<%s>(%s::StaticClass(), TEXT(\"%s\"));\n"),
+            *Type, Index, *Type, *Type, *Node.Name.ToString());
+        if (bText)
+        {
+            FString Text;
+            if (EmitWidgetText(Node, Text, Diagnostics) == false) { return false; }
+            Code += FString::Printf(TEXT("        GeneratedWidget%d->SetText(%s);\n"), Index, *Text);
+        }
+        else if (IsEmptyWidgetText(Node) == false)
+        {
+            Diagnostics.Add(TEXT("Panel node cannot contain TextBlock text"));
+            return false;
+        }
+        if (bRoot == false)
+        {
+            const FString ParentType = WidgetCppType(Tree.Nodes[Node.ParentIndex].Kind).Mid(1);
+            const FString AddChildSuffix = bCanvasParent ? TEXT("Canvas") : ParentType;
+            Code += FString::Printf(TEXT("        U%sSlot* GeneratedSlot%d = GeneratedWidget%d->AddChildTo%s(GeneratedWidget%d);\n"),
+                *ParentType, Index, Node.ParentIndex, *AddChildSuffix, Index);
+            if (bCanvasParent)
+            {
+                const FBPSemanticCanvasSlot& Canvas = Node.CanvasSlot.GetValue();
+                Code += FString::Printf(TEXT("        GeneratedSlot%d->SetOffsets(FMargin(%s, %s, %s, %s));\n"),
+                    Index, *Float(Canvas.OffsetLeft), *Float(Canvas.OffsetTop), *Float(Canvas.OffsetRight), *Float(Canvas.OffsetBottom));
+                Code += FString::Printf(TEXT("        FAnchors GeneratedAnchors%d;\n        GeneratedAnchors%d.Minimum = FVector2D(%s, %s);\n        GeneratedAnchors%d.Maximum = FVector2D(%s, %s);\n        GeneratedSlot%d->SetAnchors(GeneratedAnchors%d);\n"),
+                    Index, Index, *Double(Canvas.AnchorMinimumX), *Double(Canvas.AnchorMinimumY), Index,
+                    *Double(Canvas.AnchorMaximumX), *Double(Canvas.AnchorMaximumY), Index, Index);
+                Code += FString::Printf(TEXT("        GeneratedSlot%d->SetAlignment(FVector2D(%s, %s));\n        GeneratedSlot%d->SetAutoSize(%s);\n        GeneratedSlot%d->SetZOrder(%d);\n"),
+                    Index, *Double(Canvas.AlignmentX), *Double(Canvas.AlignmentY), Index, Canvas.bAutoSize ? TEXT("true") : TEXT("false"), Index, Canvas.ZOrder);
+            }
+            else
+            {
+                Code += FString::Printf(TEXT("        GeneratedSlot%d->SetPadding(FMargin(%s, %s, %s, %s));\n"),
+                    Index, *Float(Node.PaddingLeft), *Float(Node.PaddingTop), *Float(Node.PaddingRight), *Float(Node.PaddingBottom));
+                Code += FString::Printf(TEXT("        GeneratedSlot%d->SetHorizontalAlignment(%s);\n        GeneratedSlot%d->SetVerticalAlignment(%s);\n"),
+                    Index, *Horizontal[Node.HorizontalAlignment], Index, *Vertical[Node.VerticalAlignment]);
+                if (bOverlayParent == false)
+                {
+                    Code += FString::Printf(TEXT("        FSlateChildSize GeneratedSize%d(ESlateSizeRule::%s);\n        GeneratedSize%d.Value = %s;\n        GeneratedSlot%d->SetSize(GeneratedSize%d);\n"),
+                        Index, Node.bSizeFill ? TEXT("Fill") : TEXT("Automatic"), Index, *Float(Node.SizeValue), Index, Index);
+                }
+            }
+        }
+    }
+    Code += TEXT("        WidgetTree->RootWidget = GeneratedWidget0;\n");
+    Out = MoveTemp(Code);
+    return true;
+}
+}
+
+bool FBPSemanticCodeGenerator::Generate(const FBPSemanticIR& IR, const FString& ClassName,
+    const FString& ModuleApiMacro, FBPGeneratedActorFiles& OutFiles,
+    TArray<FString>& OutDiagnostics, const EBPVariableFallbackMode VariableFallbackMode)
+{
+    OutFiles = FBPGeneratedActorFiles();
+    OutDiagnostics.Reset();
+    const FBPSemanticWidgetTree& Tree = IR.WidgetTree;
+    FString WidgetDefinition;
+    if (Tree.Kind != EBPSemanticWidgetTreeKind::None)
+    {
+        if (IR.ParentClassPath != TEXT("/Script/UMG.UserWidget") ||
+            (Tree.Kind != EBPSemanticWidgetTreeKind::Empty && Tree.Kind != EBPSemanticWidgetTreeKind::TextBlock && Tree.Kind != EBPSemanticWidgetTreeKind::Panel) ||
+            IR.Functions.ContainsByPredicate([](const FBPSemanticFunction& Function)
+                { return Function.Name == TEXT("RebuildWidget") || Function.Name == TEXT("WidgetTree"); }) ||
+            IR.Variables.ContainsByPredicate([](const FBPSemanticVariable& Variable)
+                { return Variable.Name == TEXT("RebuildWidget") || Variable.Name == TEXT("WidgetTree"); }))
+        {
+            OutDiagnostics.Add(TEXT("Invalid Widget Tree parent, kind or RebuildWidget name collision"));
+            return false;
+        }
+        if (Tree.Kind != EBPSemanticWidgetTreeKind::Panel && Tree.Nodes.IsEmpty() == false)
+        {
+            OutDiagnostics.Add(TEXT("Legacy Widget Tree payload cannot hide panel nodes"));
+            return false;
+        }
+        FString TextExpression;
+        FString PanelCode;
+        if (Tree.Kind == EBPSemanticWidgetTreeKind::Panel)
+        {
+            if (EmitPanelTree(Tree, PanelCode, OutDiagnostics) == false) { return false; }
+        }
+        else if (Tree.Kind == EBPSemanticWidgetTreeKind::TextBlock)
+        {
+            if (Tree.RootName.IsNone() || IsIdentifier(Tree.RootName.ToString()) == false ||
+                EmitWidgetText(Tree, TextExpression, OutDiagnostics) == false)
+            {
+                OutDiagnostics.Add(TEXT("Invalid TextBlock name or text"));
+                return false;
+            }
+        }
+        else if (Tree.RootName.IsNone() == false || IsEmptyWidgetText(Tree) == false)
+        {
+            OutDiagnostics.Add(TEXT("Empty Widget Tree cannot contain TextBlock data"));
+            return false;
+        }
+        WidgetDefinition = FString::Printf(
+            TEXT("\nTSharedRef<SWidget> %s::RebuildWidget()\n{\n")
+            TEXT("    if (WidgetTree == nullptr)\n    {\n        WidgetTree = NewObject<UWidgetTree>(this, TEXT(\"WidgetTree\"));\n    }\n"), *ClassName);
+        if (Tree.Kind == EBPSemanticWidgetTreeKind::TextBlock)
+        {
+            WidgetDefinition += FString::Printf(
+                TEXT("    if (WidgetTree->RootWidget == nullptr)\n    {\n")
+                TEXT("        UTextBlock* GeneratedRoot = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT(\"%s\"));\n")
+                TEXT("        GeneratedRoot->SetText(%s);\n        WidgetTree->RootWidget = GeneratedRoot;\n    }\n"),
+                *Tree.RootName.ToString(), *TextExpression);
+        }
+        if (Tree.Kind == EBPSemanticWidgetTreeKind::Panel)
+        {
+            WidgetDefinition += TEXT("    if (WidgetTree->RootWidget == nullptr)\n    {\n") + PanelCode + TEXT("    }\n");
+        }
+        WidgetDefinition += TEXT("    return Super::RebuildWidget();\n}\n");
+    }
+    FBPGeneratedActorFiles Files;
+    if (GenerateCore(IR, ClassName, ModuleApiMacro, Files, OutDiagnostics, VariableFallbackMode) == false) { return false; }
+    if (WidgetDefinition.IsEmpty() == false)
+    {
+        const int32 End = Files.HeaderContent.Find(TEXT("};"), ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+        if (End == INDEX_NONE)
+        {
+            OutDiagnostics.Add(TEXT("Generated Widget class declaration is incomplete"));
+            return false;
+        }
+        Files.HeaderContent.InsertAt(End, TEXT("protected:\n    virtual TSharedRef<SWidget> RebuildWidget() override;\n"));
+        Files.SourceContent.InsertAt(Files.SourceContent.Find(TEXT("\n")) + 1,
+            TEXT("#include \"Blueprint/WidgetTree.h\"\n#include \"Components/TextBlock.h\"\n")
+            TEXT("#include \"Components/VerticalBox.h\"\n#include \"Components/HorizontalBox.h\"\n")
+            TEXT("#include \"Components/VerticalBoxSlot.h\"\n#include \"Components/HorizontalBoxSlot.h\"\n")
+            TEXT("#include \"Components/Overlay.h\"\n#include \"Components/OverlaySlot.h\"\n")
+            TEXT("#include \"Components/CanvasPanel.h\"\n#include \"Components/CanvasPanelSlot.h\"\n"));
+        Files.SourceContent += WidgetDefinition;
+    }
+    OutFiles = MoveTemp(Files);
+    return true;
 }
